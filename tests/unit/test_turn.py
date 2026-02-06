@@ -2,10 +2,10 @@ import asyncio
 
 import pytest
 
-from app.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
-from app.hooks import TurnHook
-from app.tool import tool, ToolType
-from app.turn import StopReason, Turn
+from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
+from pygents.hooks import TurnHook
+from pygents.tool import tool, ToolType
+from pygents.turn import StopReason, Turn
 
 
 @tool(type=ToolType.ACTION)

@@ -1,5 +1,5 @@
 def main():
-    print("Hello from agents-prototype!")
+    print("Hello from pygents!")
 
 
 if __name__ == "__main__":

@@ -4,8 +4,8 @@ import inspect
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, Coroutine, NamedTuple, Protocol, TypeVar, cast
 
-from app.hooks import ToolHook
-from app.registry import ToolRegistry
+from pygents.hooks import ToolHook
+from pygents.registry import ToolRegistry
 
 T = TypeVar("T", bound=Any)
 
@@ -34,14 +34,6 @@ class Tool(Protocol):
     lock: asyncio.Lock | None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
-
-
-class CompletionCheckTool(Protocol):
-    metadata: ToolMetadata
-    fn: Callable[..., Coroutine[Any, Any, bool]]
-    lock: asyncio.Lock | None
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Coroutine[Any, Any, bool]: ...
 
 
 def tool(

@@ -1,3 +1,7 @@
+## Documentation
+
+Full docs are built with MkDocs: `uv run mkdocs serve` (or `mkdocs build`). The docs are structured from functional overview and quick start through concepts (tools, turns, agents), guides (hooks), and reference (design tables, design decisions, errors).
+
 ## Design decisions
 
 **Tools are always async.** The `@tool` decorator accepts only coroutine functions or async generator functions; sync `def` is rejected at decoration time. Single-value tools use `returning()`; streaming tools (async generators) use `yielding()`. Using the wrong run method (e.g. `returning()` on an async gen tool) raises `WrongRunMethodError`.
@@ -14,7 +18,7 @@
 
 **Tool arguments by reference are evaluated at runtime.** When constructing a Turn, any argument value that is a no-arg function (e.g. a lambda or a callable with no required parameters) is not resolved at Turn creation. It is evaluated at the moment the tool is invoked (in `returning()` or `yielding()`), and the result is passed to the tool. Non-callable values are passed through unchanged. This allows dynamic values (e.g. reading from memory or environment) to be resolved when the Turn runs.
 
-**COMPLETION_CHECK tools must return bool.** A tool declared with `type=ToolType.COMPLETION_CHECK` must be a coroutine (not an async generator) with return annotation `-> bool`. The decorator enforces this at registration time. When the agent checks whether to stop the run loop, it validates that the turn's output is actually a bool and raises `CompletionCheckReturnError` otherwise. The `CompletionCheckTool` protocol in `app.tool` describes the type contract for static checkers.
+**COMPLETION_CHECK tools must return bool.** A tool declared with `type=ToolType.COMPLETION_CHECK` must be a coroutine (not an async generator) with return annotation `-> bool`. The decorator enforces this at registration time. When the agent checks whether to stop the run loop, it validates that the turn's output is actually a bool and raises `CompletionCheckReturnError` otherwise.
 
 **Turn metadata and serialization.** A Turn accepts an optional `metadata` dict for arbitrary key-value data; it is mutable (including while the turn is running). Turns can be serialized to a dict with `to_dict()` and restored with `Turn.from_dict(data)`. The serialized form includes `uuid`, `tool_name`, `kwargs`, `metadata`, `timeout`, `start_time`, `end_time`, `stop_reason`, and `output`; datetimes are ISO strings. On restore, the tool is resolved from the registry by `tool_name`. Hooks are not serialized.
 
@@ -22,7 +26,7 @@
 
 ## Hooks
 
-Hooks are async callbacks you can register to observe or intercept at three levels. All hooks are awaited; exceptions in a hook propagate. Hook names are enums: `TurnHook`, `AgentHook`, `ToolHook` (from `app.hooks`).
+Hooks are async callbacks you can register to observe or intercept at three levels. All hooks are awaited; exceptions in a hook propagate. Hook names are enums: `TurnHook`, `AgentHook`, `ToolHook` (from `pygents.hooks`).
 
 | Level | Enum | When |
 |-------|------|------|

@@ -4,11 +4,11 @@ from __future__ import annotations
 from abc import ABC
 from typing import TYPE_CHECKING
 
-from app.errors import UnregisteredAgentError, UnregisteredToolError
+from pygents.errors import UnregisteredAgentError, UnregisteredToolError
 
 if TYPE_CHECKING:
-    from app.agent import Agent
-    from app.tool import Tool
+    from pygents.agent import Agent
+    from pygents.tool import Tool
 
 
 class ToolRegistry(ABC):

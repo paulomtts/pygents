@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from app.registry import ToolRegistry
-from app.tool import ToolMetadata, tool, ToolType
+from pygents.registry import ToolRegistry
+from pygents.tool import ToolMetadata, tool, ToolType
 
 
 def test_decorated_function_preserves_behavior():

@@ -6,10 +6,10 @@ from enum import Enum
 from typing import Any, AsyncIterator, Callable, TypeVar
 from uuid import uuid4
 
-from app.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
-from app.hooks import ToolHook, TurnHook, run_hooks
-from app.registry import ToolRegistry
-from app.tool import Tool
+from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
+from pygents.hooks import ToolHook, TurnHook, run_hooks
+from pygents.registry import ToolRegistry
+from pygents.tool import Tool
 
 R = TypeVar("R")
 T = TypeVar("T")

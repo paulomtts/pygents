@@ -2,17 +2,17 @@ import asyncio
 
 import pytest
 
-from app.errors import (
+from pygents.errors import (
     CompletionCheckReturnError,
     SafeExecutionError,
     TurnTimeoutError,
     UnregisteredAgentError,
     UnregisteredToolError,
 )
-from app.registry import AgentRegistry
-from app.tool import tool, ToolType
-from app.turn import Turn
-from app.agent import Agent
+from pygents.registry import AgentRegistry
+from pygents.tool import tool, ToolType
+from pygents.turn import Turn
+from pygents.agent import Agent
 
 
 @tool(type=ToolType.ACTION)

@@ -3,7 +3,7 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agents-prototype"
+name = "pygents"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -11,6 +11,7 @@ requires-python = ">=3.13"
 dependencies = [
     "bump2version>=1.0.1",
     "mkdocs>=1.6.1",
+    "mkdocs-material>=9.5.0",
     "pytest>=8.0.0",
     "ruff>=0.15.0",
 ]
@@ -20,5 +21,5 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["app*"]
+include = ["pygents*"]
 exclude = ["tests*"]

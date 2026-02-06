@@ -1,9 +1,9 @@
 import pytest
 
-from app.agent import Agent
-from app.errors import UnregisteredAgentError, UnregisteredToolError
-from app.registry import AgentRegistry, ToolRegistry
-from app.tool import tool, ToolType
+from pygents.agent import Agent
+from pygents.errors import UnregisteredAgentError, UnregisteredToolError
+from pygents.registry import AgentRegistry, ToolRegistry
+from pygents.tool import tool, ToolType
 
 
 def test_get_returns_registered_tool():

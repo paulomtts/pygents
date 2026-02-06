@@ -2,15 +2,15 @@ import asyncio
 import inspect
 from typing import Any, AsyncIterator, Callable, TypeVar
 
-from app.errors import (
+from pygents.errors import (
     CompletionCheckReturnError,
     SafeExecutionError,
     TurnTimeoutError,
 )
-from app.hooks import AgentHook, run_hooks
-from app.registry import AgentRegistry, ToolRegistry
-from app.tool import Tool, ToolType
-from app.turn import Turn
+from pygents.hooks import AgentHook, run_hooks
+from pygents.registry import AgentRegistry, ToolRegistry
+from pygents.tool import Tool, ToolType
+from pygents.turn import Turn
 
 R = TypeVar("R")
 
