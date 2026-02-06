@@ -34,6 +34,37 @@ async def main():
 asyncio.run(main())
 ```
 
+## Tool-driven flow control
+
+The key pattern in pygents is that **tools can return `Turn` objects**. When a tool returns a `Turn`, the agent automatically enqueues it for execution. This lets tools decide what happens next — not external orchestration code.
+
+```python
+@tool()
+async def decide_next_step(context: str) -> str | Turn:
+    if needs_more_info(context):
+        return Turn("gather_info", kwargs={"context": context})
+    return "Done processing"
+```
+
+This is powerful because:
+
+- **Tools control flow** — the logic lives where the domain knowledge is
+- **Chaining is implicit** — no explicit queue management needed
+- **Conditional branching** — tools can choose different paths based on results
+
+## Dynamic arguments
+
+Callable kwargs are evaluated when the tool runs, not when the turn is created:
+
+```python
+config = {"retries": 3}
+
+turn = Turn("fetch", kwargs={
+    "url": "https://example.com",
+    "retries": lambda: config["retries"],  # read at runtime
+})
+```
+
 ## Streaming
 
 Tools can be async generators. The agent yields each value as it's produced:
@@ -61,19 +92,6 @@ bob = Agent("bob", "Works", [work_tool])
 
 # alice sends a turn to bob's queue
 await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
-```
-
-## Dynamic arguments
-
-Callable kwargs are evaluated when the tool runs, not when the turn is created:
-
-```python
-config = {"retries": 3}
-
-turn = Turn("fetch", kwargs={
-    "url": "https://example.com",
-    "retries": lambda: config["retries"],  # read at runtime
-})
 ```
 
 ## Capabilities
