@@ -53,3 +53,5 @@ nav:
     - Tools: concepts/tools.md
     - Turns: concepts/turns.md
     - Agents: concepts/agents.md
+  - Guides:
+    - AI Agent: guides/ai-agent.md
