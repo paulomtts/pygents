@@ -55,6 +55,3 @@ nav:
     - Agents: concepts/agents.md
   - Guides:
     - Hooks: guides/hooks.md
-  - Reference:
-    - Design Decisions: reference/design-decisions.md
-    - Design Tables: reference/design-tables.md

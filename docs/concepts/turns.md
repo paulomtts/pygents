@@ -37,9 +37,14 @@ The agent's `run()` picks the right method automatically.
 !!! warning "SafeExecutionError"
     Changing immutable attributes while running raises `SafeExecutionError`. Calling `returning()` or `yielding()` on an already-running turn also raises `SafeExecutionError`.
 
+!!! info "Why block reentrancy?"
+    A turn cannot run twice simultaneously. Most attributes are immutable while running. This prevents race conditions from accidental reuse — if you need to run the same work again, create a new turn.
+
 ## Timeouts
 
-Default: 60 seconds. For `returning()`, applies to the single await. For `yielding()`, applies to the entire run.
+Every turn has a timeout (default: 60 seconds). This prevents unbounded execution — a stuck network call or infinite loop won't block the agent forever.
+
+For `returning()`, the timeout applies to the single await. For `yielding()`, it applies to the entire run including all yielded values.
 
 | Outcome | `stop_reason` |
 |---------|---------------|
@@ -52,14 +57,16 @@ Default: 60 seconds. For `returning()`, applies to the single await. For `yieldi
 
 ## Dynamic kwargs
 
-Callable kwargs are evaluated at invocation time, not at turn creation:
+Callable kwargs are late-evaluated: any no-arg callable passed as a kwarg is called at tool invocation time, not at turn creation. This supports dynamic config, rotating tokens, memory reads, or any value that should be fresh when the tool actually runs.
 
 ```python
 turn = Turn("fetch", kwargs={
     "url": "https://example.com",
-    "token": lambda: get_current_token(),  # called when tool runs
+    "token": lambda: get_current_token(),  # called when tool runs, not now
 })
 ```
+
+This is especially useful when turns are queued — the lambda captures the latest state when the turn executes, not when it was created.
 
 ## Serialization
 

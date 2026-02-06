@@ -49,7 +49,9 @@ async for turn, value in agent.run():
 
 ## Streaming
 
-Single-value tools yield once. Async generator tools yield per value. The agent detects the tool type and calls `returning()` or `yielding()` automatically.
+Agents stream by default. The `run()` method is an async generator that yields `(turn, value)` pairs as results are produced — not batched at the end. This means you can process partial results, update UI, or make decisions before a long-running sequence completes.
+
+Single-value tools yield once per turn. Async generator tools yield per value. The agent detects the tool type and calls `returning()` or `yielding()` automatically. The loop exits when the queue is empty.
 
 ## Inter-agent messaging
 
