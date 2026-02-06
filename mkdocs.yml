@@ -1,5 +1,5 @@
 site_name: pygents
-site_description: Async tools, turns, and agents with streaming and completion checks.
+site_description: Async agent orchestration for Python.
 repo_url: ""
 
 theme:
@@ -48,15 +48,13 @@ plugins:
 
 nav:
   - Home: index.md
-  - Getting Started:
-    - Overview: overview.md
-    - Quick Start: quickstart.md
-  - User Guide:
+  - Concepts:
     - Tools: concepts/tools.md
     - Turns: concepts/turns.md
     - Agents: concepts/agents.md
+  - Guides:
     - Hooks: guides/hooks.md
   - Reference:
-    - Design tables: reference/design-tables.md
-    - Design decisions: reference/design-decisions.md
+    - Design Decisions: reference/design-decisions.md
+    - Design Tables: reference/design-tables.md
     - Errors: reference/errors.md

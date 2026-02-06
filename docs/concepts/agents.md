@@ -1,43 +1,76 @@
 # Agents
 
-## Role
-
-An **agent** is an orchestrator: it has a queue of turns and a set of tools. `run()` is an async generator that repeatedly pops a turn, runs it (using `returning()` or `yielding()` as appropriate), and yields `(turn, value)` for each result. The loop stops when a completion-check tool returns `True`. Agents stream by default—you consume results with `async for turn, value in agent.run(): ...`.
+An agent orchestrates execution: it owns a queue of turns and a set of tools, processes turns in order, and streams results.
 
 ## Creating an agent
 
 ```python
-from app import Agent, ToolRegistry, tool, Turn
+from pygents import Agent, tool, Turn, ToolType
 
 @tool()
-async def step_one(): ...
-@tool()
-async def step_done() -> bool: ...
+async def work(x: int) -> int:
+    return x * 2
 
-agent = Agent("worker", "Processes steps", [step_one, step_done])
+@tool(type=ToolType.COMPLETION_CHECK)
+async def done() -> bool:
+    return True
+
+agent = Agent("worker", "Doubles numbers", [work, done])
 ```
 
-The constructor checks that each tool in the list is the same instance as in `ToolRegistry`; otherwise it raises `ValueError`. The agent registers itself in `AgentRegistry`.
+Each tool must be the same instance as in `ToolRegistry` — the constructor validates this.
 
 ## Queue and run loop
 
-- **`put(turn)`** — Enqueues a turn. Fails if the turn has no tool or the tool name is not in the agent’s tool set. Runs `BEFORE_PUT` / `AFTER_PUT` hooks.
-- **`pop()`** — Blocks until a turn is available and returns it.
-- **`run()`** — Loop: `BEFORE_TURN` → pop → run turn (yielding each `(turn, value)`) → `AFTER_TURN`. Then:
-  - If the turn was a completion-check and `output is True`, exit the loop.
-  - If `output` is a `Turn` instance, enqueue it with `put(output)`.
-  - Otherwise continue to the next iteration.
+```python
+await agent.put(Turn("work", kwargs={"x": 5}))
+await agent.put(Turn("work", kwargs={"x": 10}))
+await agent.put(Turn("done"))
 
-If a turn raises `TurnTimeoutError` or any other exception, the corresponding agent hooks run and the exception is re-raised from `run()`.
+async for turn, value in agent.run():
+    print(f"{turn.tool_name}: {value}")
+    # work: 10
+    # work: 20
+    # done: True (then loop exits)
+```
 
-## Sending turns to other agents
+- `put(turn)` — enqueues a turn (validates tool is in agent's set)
+- `pop()` — blocks until a turn is available
+- `run()` — async generator: pops turns, runs them, yields `(turn, value)`
 
-`send_turn(agent_name, turn)` looks up the agent by name in `AgentRegistry` and calls `put(turn)` on it. Use this to hand off work to another agent.
+**After each turn:**
+
+| Condition | Behavior |
+|-----------|----------|
+| Completion check returned `True` | Exit loop |
+| Output is a `Turn` instance | Enqueue it, continue |
+| Otherwise | Continue to next turn |
+
+## Streaming
+
+Single-value tools yield once. Async generator tools yield per value. The agent detects the tool type and calls `returning()` or `yielding()` automatically.
+
+## Inter-agent messaging
+
+```python
+alice = Agent("alice", "Coordinator", [coordinate, done])
+bob = Agent("bob", "Worker", [work, done])
+
+# alice sends work to bob
+await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))
+```
+
+`send_turn` looks up the target agent in `AgentRegistry` and calls `put()` on it.
 
 ## Immutability while running
 
-While `run()` is active, agent attributes (other than `_is_running`) cannot be changed; `__setattr__` raises `SafeExecutionError`. Starting `run()` again while already running also raises `SafeExecutionError`.
+While `run()` is active, agent attributes cannot be changed — `__setattr__` raises `SafeExecutionError`. Calling `run()` again while already running also raises `SafeExecutionError`.
 
 ## Serialization
 
-`agent.to_dict()` returns `name`, `description`, `tool_names`, and `queue` (list of turn dicts). `Agent.from_dict(data)` rebuilds the agent from the registry by tool names, repopulates the queue with `Turn.from_dict()`, and registers the agent. Hooks are not serialized.
+```python
+data = agent.to_dict()       # name, description, tool_names, queue
+agent = Agent.from_dict(data)  # rebuilds from registry, repopulates queue
+```
+
+Hooks are not serialized.

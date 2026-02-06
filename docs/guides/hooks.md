@@ -1,49 +1,65 @@
 # Hooks
 
-Hooks are async callbacks you attach to a turn, agent, or tool. They are invoked at specific points; exceptions propagate. Register by enum key: `turn.hooks[TurnHook.BEFORE_RUN] = [my_async_fn]`, and similarly for `agent.hooks` and `tool.hooks`. Each key holds a **list** of callables; all are awaited in order.
+Hooks are async callbacks attached to turns, agents, or tools. They fire at specific points during execution. Exceptions in hooks propagate.
+
+Register by enum key — each key holds a list of callables, awaited in order.
 
 ## Turn hooks
 
-| Hook | When | Arguments |
-|------|------|-----------|
-| `TurnHook.BEFORE_RUN` | Before the tool runs (after lock acquired) | `(turn)` |
-| `TurnHook.AFTER_RUN` | After run completes successfully | `(turn)` |
-| `TurnHook.ON_TIMEOUT` | When the turn times out | `(turn)` |
-| `TurnHook.ON_ERROR` | When the tool or a hook raises (non-timeout) | `(turn, exception)` |
-| `TurnHook.ON_VALUE` | For yielding runs only; before each value is yielded | `(turn, value)` |
+| Hook | When | Args |
+|------|------|------|
+| `BEFORE_RUN` | Before tool runs (after lock acquired) | `(turn)` |
+| `AFTER_RUN` | After successful completion | `(turn)` |
+| `ON_TIMEOUT` | Turn timed out | `(turn)` |
+| `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
+| `ON_VALUE` | Before each yielded value (streaming only) | `(turn, value)` |
 
-Attach on the turn instance: `turn.hooks[TurnHook.BEFORE_RUN].append(callback)`.
+```python
+from pygents import TurnHook
+
+async def log_start(turn):
+    print(f"Starting {turn.tool_name}")
+
+turn.hooks[TurnHook.BEFORE_RUN].append(log_start)
+```
 
 ## Agent hooks
 
-| Hook | When | Arguments |
-|------|------|-----------|
-| `AgentHook.BEFORE_TURN` | Before popping the next turn | `(agent)` |
-| `AgentHook.AFTER_TURN` | After a turn is fully processed | `(agent, turn)` |
-| `AgentHook.ON_TURN_VALUE` | For each `(turn, value)` before it is yielded from `run()` | `(agent, turn, value)` |
-| `AgentHook.ON_TURN_ERROR` | When a turn raises | `(agent, turn, exception)` |
-| `AgentHook.ON_TURN_TIMEOUT` | When a turn times out | `(agent, turn)` |
-| `AgentHook.BEFORE_PUT` | Before putting a turn on the queue | `(agent, turn)` |
-| `AgentHook.AFTER_PUT` | After putting a turn on the queue | `(agent, turn)` |
+| Hook | When | Args |
+|------|------|------|
+| `BEFORE_TURN` | Before popping next turn | `(agent)` |
+| `AFTER_TURN` | After turn fully processed | `(agent, turn)` |
+| `ON_TURN_VALUE` | Before yielding each result | `(agent, turn, value)` |
+| `ON_TURN_ERROR` | Turn raised an exception | `(agent, turn, exception)` |
+| `ON_TURN_TIMEOUT` | Turn timed out | `(agent, turn)` |
+| `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
+| `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
 
-Attach on the agent: `agent.hooks[AgentHook.AFTER_TURN].append(callback)`.
+```python
+from pygents import AgentHook
+
+async def on_complete(agent, turn):
+    print(f"[{agent.name}] {turn.tool_name} → {turn.stop_reason}")
+
+agent.hooks[AgentHook.AFTER_TURN].append(on_complete)
+```
 
 ## Tool hooks
 
-| Hook | When | Arguments |
-|------|------|-----------|
-| `ToolHook.BEFORE_INVOKE` | When a turn is about to call the tool | `(turn, kwargs)` |
-| `ToolHook.AFTER_INVOKE` | After the tool returns (once per single-value; per value for yielding) | `(turn, value)` |
-
-Attach on the tool: `my_tool.hooks[ToolHook.BEFORE_INVOKE].append(callback)`. The same tool instance is used by every turn that runs it, so tool hooks apply to all invocations of that tool.
-
-## Example
+| Hook | When | Args |
+|------|------|------|
+| `BEFORE_INVOKE` | About to call the tool | `(turn, kwargs)` |
+| `AFTER_INVOKE` | After tool returns/yields a value | `(turn, value)` |
 
 ```python
-async def on_after_turn(agent, turn):
-    print(f"Turn {turn.uuid} finished: {turn.stop_reason}")
+from pygents import ToolHook
 
-agent.hooks[AgentHook.AFTER_TURN] = [on_after_turn]
+async def audit(turn, kwargs):
+    print(f"Calling {turn.tool_name} with {kwargs}")
+
+my_tool.hooks[ToolHook.BEFORE_INVOKE].append(audit)
 ```
 
-Hooks are not serialized in `to_dict()` / `from_dict()` for turns or agents.
+Tool hooks apply to **all** invocations of that tool since agents share the same tool instance.
+
+Hooks are not included in `to_dict()` / `from_dict()` serialization.

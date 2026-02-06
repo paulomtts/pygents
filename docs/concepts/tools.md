@@ -1,17 +1,13 @@
 # Tools
 
-## Role
-
-Tools describe **how** something is done. Each tool is an async function (coroutine) or async generator, registered by name. Turns reference tools by name and supply kwargs; the registry resolves the tool at turn creation.
+Tools define **how** something is done. Each tool is an async function decorated with `@tool`.
 
 ## Defining tools
 
-Use the `@tool` decorator. The function must be async (coroutine or async generator). Docstring becomes the tool description.
-
 ```python
-from app import tool, ToolType
+from pygents import tool, ToolType
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def fetch(url: str) -> str:
     """Fetch a URL."""
     ...
@@ -22,29 +18,67 @@ async def delete_resource(id: str) -> None:
     ...
 ```
 
-**Parameters:**
+**Decorator parameters:**
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `type` | `ToolType.ACTION` | One of `REASONING`, `ACTION`, `MEMORY_READ`, `MEMORY_WRITE`, `COMPLETION_CHECK`. |
-| `approval` | `False` | Metadata only; no built-in enforcement. |
-| `lock` | `False` | If `True`, concurrent runs of this tool are serialized with an asyncio lock. |
+| `type` | `ToolType.ACTION` | One of `REASONING`, `ACTION`, `MEMORY_READ`, `MEMORY_WRITE`, `COMPLETION_CHECK` |
+| `approval` | `False` | Metadata flag (no built-in enforcement) |
+| `lock` | `False` | If `True`, concurrent runs of this tool are serialized via `asyncio.Lock` |
+
+Only async functions are accepted — sync `def` raises `TypeError` at decoration time.
 
 ## Single-value vs streaming
 
-- **Coroutine:** Returns one result. The turn is run with `returning()` (or the agent does this for you).
-- **Async generator:** Yields a sequence of values. The turn must be run with `yielding()`; the agent does this when it detects an async-gen tool.
+**Coroutine** — returns one result, run with `returning()`:
 
-Using the wrong run method (e.g. `returning()` on an async-gen tool) raises `WrongRunMethodError`.
+```python
+@tool()
+async def summarize(text: str) -> str:
+    return text[:100] + "..."
+```
 
-## Completion-check tools
+**Async generator** — yields a sequence, run with `yielding()`:
 
-A tool with `type=ToolType.COMPLETION_CHECK` must be a **coroutine** (not an async generator) with return annotation `-> bool`. The decorator enforces this at registration. The agent uses it to decide when to stop the run loop: when such a turn’s output is `True`, the loop exits. If the output is not a bool, the agent raises `CompletionCheckReturnError`.
+```python
+@tool()
+async def stream_lines(path: str):
+    async with aiofiles.open(path) as f:
+        async for line in f:
+            yield line.strip()
+```
+
+The agent detects which type and calls the right method. Using the wrong one raises `WrongRunMethodError`.
+
+## Completion checks
+
+A tool with `type=ToolType.COMPLETION_CHECK` signals the agent to stop its run loop when it returns `True`. It must be a coroutine with `-> bool`:
+
+```python
+@tool(type=ToolType.COMPLETION_CHECK)
+async def is_done() -> bool:
+    return all_tasks_finished()
+```
+
+The decorator enforces both constraints at registration time. If the agent receives a non-bool output, it raises `CompletionCheckReturnError`.
 
 ## Registry
 
-Tools register automatically when decorated. `ToolRegistry.get(name)` returns the tool; duplicate names raise `ValueError`. Agents receive a list of tool instances; each must be the same object as `ToolRegistry.get(t.metadata.name)` or the agent constructor raises `ValueError`.
+Tools register automatically when decorated. Duplicate names raise `ValueError`.
 
-## Protocol and metadata
+```python
+from pygents import ToolRegistry
 
-The public protocol is `Tool`: `metadata` (`ToolMetadata`: name, description, type, approval), `fn`, and `lock`. Access metadata via `tool_inst.metadata`.
+my_tool = ToolRegistry.get("fetch")  # lookup by name
+```
+
+## Metadata
+
+Access via `tool_instance.metadata`:
+
+```python
+fetch.metadata.name         # "fetch"
+fetch.metadata.description  # docstring
+fetch.metadata.type         # ToolType.ACTION
+fetch.metadata.approval     # False
+```

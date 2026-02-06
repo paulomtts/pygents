@@ -1,21 +1,19 @@
 # Design decisions
 
-**Tools are always async.** The `@tool` decorator accepts only coroutine functions or async generator functions; sync `def` is rejected at decoration time. Single-value tools use `returning()`; streaming tools (async generators) use `yielding()`. Using the wrong run method raises `WrongRunMethodError`.
+**Tools are always async.** Sync `def` is rejected at decoration time. This keeps the execution model uniform — no mixed sync/async paths.
 
-**Turn reentrancy.** A turn cannot be run again while it is already running. A second call to `returning()` or `yielding()` on the same turn raises `SafeExecutionError`. Most turn attributes are immutable while running; only `_is_running`, `start_time`, `end_time`, `output`, `stop_reason`, and `metadata` may change during execution.
+**Turn reentrancy is blocked.** A turn cannot run twice simultaneously. Most attributes are immutable while running. This prevents race conditions from accidental reuse.
 
-**Per-tool locking, default off.** Locking is per-tool and opt-in: `@tool(lock=True)` serializes concurrent runs of that tool; the default is no lock so stateless or non-conflicting tools can run in parallel. Tools that manipulate shared resources should set `lock=True`.
+**Per-tool locking is opt-in.** `@tool(lock=True)` serializes concurrent runs. Default is no lock, so stateless tools run in parallel without contention.
 
-**Timeouts.** Each turn has a `timeout` (default 60s). If execution exceeds it, the run raises `TurnTimeoutError`, `stop_reason` is set to `StopReason.TIMEOUT`, and `end_time` is recorded. For `returning()` the timeout applies to the single await; for `yielding()` it applies to the whole run.
+**Every turn has a timeout.** Default 60s. Applies to the single await for `returning()`, or the entire run for `yielding()`. Prevents unbounded execution.
 
-**Tool registry.** Tools register by name when decorated. A turn is bound to a tool by name and kwargs at construction; the tool is resolved from the registry at init. Duplicate tool names at registration raise `ValueError`.
+**Tools register globally.** The `@tool` decorator registers by function name. Turns resolve tools from the registry at construction time. Duplicate names are rejected.
 
-**Agents stream by default.** An agent's `run()` is an async generator that yields `(turn, value)` for each result as it is produced. Single-value tools yield once; async-generator tools yield per value. Consume with `async for turn, value in agent.run(): ...`. The loop ends when a completion-check tool returns `True`.
+**Agents stream by default.** `run()` is an async generator yielding `(turn, value)` as results are produced — not batched. Completion checks end the loop.
 
-**Tool arguments by reference are evaluated at runtime.** When constructing a turn, any kwarg value that is a no-arg callable is not resolved at turn creation. It is evaluated when the tool is invoked, and the result is passed to the tool. Non-callable values are passed through unchanged. This allows dynamic values (e.g. from memory or environment) to be resolved when the turn runs.
+**Callable kwargs are late-evaluated.** Any no-arg callable passed as a kwarg is called at tool invocation time, not at turn creation. This supports dynamic config, tokens, memory reads, etc.
 
-**COMPLETION_CHECK tools must return bool.** A tool declared with `type=ToolType.COMPLETION_CHECK` must be a coroutine (not an async generator) with return annotation `-> bool`. The decorator enforces this at registration. When the agent checks whether to stop, it validates that the turn's output is a bool and raises `CompletionCheckReturnError` otherwise.
+**COMPLETION_CHECK tools must return bool.** Enforced at decoration time (return annotation) and at runtime (agent validates output). Prevents ambiguous completion signals.
 
-**Turn metadata and serialization.** A turn accepts an optional `metadata` dict; it is mutable (including while running). Turns serialize with `to_dict()` and restore with `Turn.from_dict(data)`. Serialized form includes `uuid`, `tool_name`, `kwargs`, `metadata`, `timeout`, `start_time`, `end_time`, `stop_reason`, `output`; datetimes are ISO strings. Hooks are not serialized.
-
-**Agent serialization.** Agents support `to_dict()` and `Agent.from_dict(data)`. The dict contains `name`, `description`, `tool_names`, and `queue` (list of turn dicts). On restore, tools are resolved from the registry and the queue is repopulated; the agent is registered. Hooks are not serialized.
+**Hooks are runtime-only.** Not included in serialization. They are implementation concerns, not data.
