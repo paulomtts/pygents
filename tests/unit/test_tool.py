@@ -68,6 +68,24 @@ def test_decorator_without_parentheses():
     assert asyncio.run(bare()) == 1
 
 
+def test_decorated_tool_default_no_lock():
+    @tool()
+    async def no_lock() -> None:
+        pass
+
+    assert hasattr(no_lock, "lock")
+    assert no_lock.lock is None
+
+
+def test_decorated_tool_lock_true_has_lock():
+    @tool(lock=True)
+    async def with_lock() -> None:
+        pass
+
+    assert hasattr(with_lock, "lock")
+    assert isinstance(with_lock.lock, asyncio.Lock)
+
+
 def test_tool_metadata_namedtuple_fields():
     metadata = ToolMetadata(
         name="foo",

@@ -1,6 +1,7 @@
+import asyncio
 import functools
 import inspect
-from typing import Any, Callable, NamedTuple, Protocol, TypeVar, cast
+from typing import Any, AsyncIterator, Callable, Coroutine, NamedTuple, Protocol, TypeVar, cast
 
 from app.enums import ToolType
 from app.registry import ToolRegistry
@@ -20,7 +21,8 @@ class ToolMetadata(NamedTuple):
 
 class Tool(Protocol):
     metadata: ToolMetadata
-    fn: Callable[..., Any]
+    fn: Callable[..., Coroutine[Any, Any, Any]] | Callable[..., AsyncIterator[Any]]
+    lock: asyncio.Lock | None
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -30,6 +32,7 @@ def tool(
     *,
     type: ToolType = ToolType.ACTION,
     approval: bool = False,
+    lock: bool = False,
 ) -> Callable[..., T]:
     """
     Tools contain instructions for how something should be done.
@@ -47,6 +50,7 @@ def tool(
 
         wrapper.metadata = ToolMetadata(fn.__name__, fn.__doc__, type, approval)
         wrapper.fn = fn
+        wrapper.lock = asyncio.Lock() if lock else None
         ToolRegistry.register(cast(Tool, wrapper))
         return wrapper
 

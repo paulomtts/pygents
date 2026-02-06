@@ -8,3 +8,7 @@ class WrongRunMethodError(Exception):
     """
     Raised when run() is used for a yielding tool (use run_yielding()), or run_yielding() is used for a single-value tool (use run()).
     """
+
+
+class TurnTimeoutError(TimeoutError):
+    """Raised when a Turn exceeds its timeout while running."""

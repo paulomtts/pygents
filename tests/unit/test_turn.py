@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from app.enums import StopReason, ToolType
-from app.errors import SafeExecutionError, WrongRunMethodError
+from app.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from app.tool import tool
 from app.turn import Turn
 
@@ -56,6 +56,26 @@ async def turn_run_yielding_reentrant(turn: Turn):
     yield 1
     async for _ in turn.yielding():
         pass
+
+
+@tool(type=ToolType.ACTION, lock=True)
+async def turn_run_serialized(events: list) -> None:
+    events.append("start")
+    await asyncio.sleep(0.01)
+    events.append("end")
+
+
+@tool(type=ToolType.ACTION)
+async def turn_run_slow(duration: float) -> str:
+    await asyncio.sleep(duration)
+    return "done"
+
+
+@tool(type=ToolType.ACTION)
+async def turn_run_slow_yielding(duration: float):
+    yield 1
+    await asyncio.sleep(duration)
+    yield 2
 
 
 async def _collect_async(agen):
@@ -154,3 +174,32 @@ def test_yielding_async_rejects_coroutine_tool():
     turn = Turn("turn_run_sync", {"x": 5})
     with pytest.raises(WrongRunMethodError, match="returning\\(\\)"):
         asyncio.run(_collect_async(turn.yielding()))
+
+
+def test_concurrent_same_tool_turns_serialize():
+    events = []
+    turn_a = Turn("turn_run_serialized", {"events": events})
+    turn_b = Turn("turn_run_serialized", {"events": events})
+
+    async def run_both():
+        await asyncio.gather(turn_a.returning(), turn_b.returning())
+
+    asyncio.run(run_both())
+    assert len(events) == 4
+    assert events == ["start", "end", "start", "end"]
+
+
+def test_returning_times_out_sets_stop_reason_and_end_time():
+    turn = Turn("turn_run_slow", {"duration": 2.0}, timeout=1)
+    with pytest.raises(TurnTimeoutError, match="timed out after 1s"):
+        asyncio.run(turn.returning())
+    assert turn.stop_reason == StopReason.TIMEOUT
+    assert turn.end_time is not None
+
+
+def test_yielding_times_out_sets_stop_reason_and_end_time():
+    turn = Turn("turn_run_slow_yielding", {"duration": 2.0}, timeout=1)
+    with pytest.raises(TurnTimeoutError, match="timed out after 1s"):
+        asyncio.run(_collect_async(turn.yielding()))
+    assert turn.stop_reason == StopReason.TIMEOUT
+    assert turn.end_time is not None

@@ -1,16 +1,28 @@
 import asyncio
 import inspect
+import time
 from datetime import datetime
 from typing import Any, AsyncIterator, Callable, TypeVar
 from uuid import uuid4
 
 from app.enums import StopReason, ToolType
-from app.errors import SafeExecutionError, WrongRunMethodError
+from app.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from app.registry import ToolRegistry
 from app.tool import Tool, tool
 
 R = TypeVar("R")
 T = TypeVar("T")
+
+
+class _NullLock:
+    async def __aenter__(self) -> None:
+        pass
+
+    async def __aexit__(self, *args: Any) -> None:
+        pass
+
+
+_null_lock = _NullLock()
 
 
 def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
@@ -29,9 +41,6 @@ class Turn[T]:
     A Turn represents a single conceptual unit of work. It describes what should happen - but not how it should happen.
     """
 
-    # TODO: improve this to actually track timeout & stop reasons
-    # TODO: implement lock so that tools manipulating shared state are safe
-
     uuid: str
     tool: Tool | None = (
         None  # ! Can't be serialized, but we can use tool name to find it
@@ -42,6 +51,7 @@ class Turn[T]:
     start_time: datetime | None = None
     end_time: datetime | None = None
     stop_reason: StopReason | None = None
+
     _is_running: bool = False
 
     def __setattr__(self, name: str, value: Any) -> None:
@@ -81,58 +91,99 @@ class Turn[T]:
         """
         Run the Turn and return a single result. Use yielding() for async generator tools.
         """
-        try:
-            self._is_running = True
-            self.start_time = datetime.now()
-            if inspect.isasyncgenfunction(self.tool.fn):
-                raise WrongRunMethodError(
-                    "Tool is async generator; use yielding() instead."
+        lock_ctx = self.tool.lock if self.tool.lock is not None else _null_lock
+        async with lock_ctx:
+            try:
+                self._is_running = True
+                self.start_time = datetime.now()
+                if inspect.isasyncgenfunction(self.tool.fn):
+                    raise WrongRunMethodError(
+                        "Tool is async generator; use yielding() instead."
+                    )
+                self.output = await asyncio.wait_for(
+                    self.tool(**self.kwargs), timeout=self.timeout
                 )
-            result = self.tool(**self.kwargs)
-            if not asyncio.iscoroutine(result):
-                raise WrongRunMethodError(
-                    "Tool must be a coroutine (async def); use returning() for single value."
-                )
-            self.output = await result
-            self.stop_reason = StopReason.COMPLETED
-            return self.output
-        except Exception:
-            self.stop_reason = StopReason.ERROR
-            raise
-        finally:
-            self.end_time = datetime.now()
-            self._is_running = False
+                self.stop_reason = StopReason.COMPLETED
+                return self.output
+            except (asyncio.TimeoutError, TimeoutError):
+                self.stop_reason = StopReason.TIMEOUT
+                raise TurnTimeoutError(
+                    f"Turn timed out after {self.timeout}s"
+                ) from None
+            except Exception:
+                self.stop_reason = StopReason.ERROR
+                raise
+            finally:
+                self.end_time = datetime.now()
+                self._is_running = False
 
     @safe_execution
     async def yielding(self) -> AsyncIterator[T]:
         """
         Run the Turn and yield each result as it is produced. Tools are async generators.
         """
-        try:
-            self._is_running = True
-            self.start_time = datetime.now()
-            if not inspect.isasyncgenfunction(self.tool.fn):
-                raise WrongRunMethodError(
-                    "Tool is not an async generator; use returning() for single value."
-                )
-            result = self.tool(**self.kwargs)
-            if not inspect.isasyncgen(result):
-                raise WrongRunMethodError(
-                    "Tool must be an async generator; use yielding() for streaming."
-                )
-            aggregated: list[Any] = []
-            async for value in result:
-                aggregated.append(value)
-                yield value
-            self.output = aggregated
-            self.end_time = datetime.now()
-            self.stop_reason = StopReason.COMPLETED
-        except Exception:
-            self.stop_reason = StopReason.ERROR
-            raise
-        finally:
-            self.end_time = datetime.now()
-            self._is_running = False
+        lock_ctx = self.tool.lock if self.tool.lock is not None else _null_lock
+        async with lock_ctx:
+            try:
+                self._is_running = True
+                self.start_time = datetime.now()
+                if not inspect.isasyncgenfunction(self.tool.fn):
+                    raise WrongRunMethodError(
+                        "Tool is not an async generator; use returning() for single value."
+                    )
+                queue: asyncio.Queue[Any] = asyncio.Queue()
+
+                async def produce() -> None:
+                    try:
+                        async for value in self.tool(**self.kwargs):
+                            await queue.put(value)
+                    finally:
+                        await queue.put(None)
+
+                producer = asyncio.create_task(produce())
+                deadline = time.monotonic() + self.timeout
+                aggregated: list[Any] = []
+                try:
+                    while True:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            producer.cancel()
+                            try:
+                                await producer
+                            except asyncio.CancelledError:
+                                pass
+                            self.stop_reason = StopReason.TIMEOUT
+                            raise TurnTimeoutError(
+                                f"Turn timed out after {self.timeout}s"
+                            ) from None
+                        item = await asyncio.wait_for(
+                            queue.get(), timeout=remaining
+                        )
+                        if item is None:
+                            break
+                        aggregated.append(item)
+                        yield item
+                    await producer
+                except (asyncio.TimeoutError, TimeoutError):
+                    producer.cancel()
+                    try:
+                        await producer
+                    except asyncio.CancelledError:
+                        pass
+                    self.stop_reason = StopReason.TIMEOUT
+                    raise TurnTimeoutError(
+                        f"Turn timed out after {self.timeout}s"
+                    ) from None
+                self.output = aggregated
+                self.stop_reason = StopReason.COMPLETED
+            except TurnTimeoutError:
+                raise
+            except Exception:
+                self.stop_reason = StopReason.ERROR
+                raise
+            finally:
+                self.end_time = datetime.now()
+                self._is_running = False
 
 
 @tool(type=ToolType.ACTION)
