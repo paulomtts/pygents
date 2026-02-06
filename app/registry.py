@@ -1,3 +1,4 @@
+# TODO: Postpone evaluation of annotations so `dict[str, Tool]` etc. are not evaluated at class body time, when `Tool` is only imported under TYPE_CHECKING.
 from __future__ import annotations
 
 from abc import ABC

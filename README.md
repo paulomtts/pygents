@@ -12,12 +12,35 @@
 
 **Agents stream by default.** An Agent's `run()` is an async generator that yields `(turn, value)` for each result as it is produced. Single-value tools yield once; async-generator tools yield per value. Consume with `async for turn, value in agent.run(): ...`. The loop ends when a completion-check tool returns `True`.
 
+## Hooks
+
+Hooks are async callbacks you can register to observe or intercept at three levels. All hooks are awaited; exceptions in a hook propagate. Hook names are enums: `TurnHook`, `AgentHook`, `ToolHook` (from `app.hooks`).
+
+| Level | Enum | When |
+|-------|------|------|
+| **Turn** | `TurnHook.BEFORE_RUN` | Before `returning()` or `yielding()` runs (after lock acquired). Args: `(turn)`. |
+| **Turn** | `TurnHook.AFTER_RUN` | After run completes successfully. Args: `(turn)`. |
+| **Turn** | `TurnHook.ON_TIMEOUT` | When the turn times out. Args: `(turn)`. |
+| **Turn** | `TurnHook.ON_ERROR` | When the tool raises (non-timeout). Args: `(turn, exception)`. |
+| **Turn** | `TurnHook.ON_VALUE` | For yielding tools only: before each value is yielded. Args: `(turn, value)`. |
+| **Agent** | `AgentHook.BEFORE_TURN` | Before popping a turn from the queue. Args: `(agent)`. |
+| **Agent** | `AgentHook.AFTER_TURN` | After a turn is fully processed (before next pop or exit). Args: `(agent, turn)`. |
+| **Agent** | `AgentHook.ON_TURN_VALUE` | For each streamed `(turn, value)` before it is yielded. Args: `(agent, turn, value)`. |
+| **Agent** | `AgentHook.ON_TURN_ERROR` | When a turn raises. Args: `(agent, turn, exception)`. |
+| **Agent** | `AgentHook.ON_TURN_TIMEOUT` | When a turn times out. Args: `(agent, turn)`. |
+| **Agent** | `AgentHook.BEFORE_PUT` | Before putting a turn on the queue. Args: `(agent, turn)`. |
+| **Agent** | `AgentHook.AFTER_PUT` | After putting a turn on the queue. Args: `(agent, turn)`. |
+| **Tool** | `ToolHook.BEFORE_INVOKE` | When a turn is about to call the tool (inside Turn run). Args: `(turn, kwargs)`. |
+| **Tool** | `ToolHook.AFTER_INVOKE` | After the tool returns a value (single-value: once; yielding: per value). Args: `(turn, value)`. |
+
+Register by enum: `turn.hooks[TurnHook.BEFORE_RUN] = [my_async_fn]`, `agent.hooks[AgentHook.AFTER_TURN] = [...]`, `tool.hooks[ToolHook.BEFORE_INVOKE] = [...]`.
+
 ## Roadmap
 
-1. **Hook system on all levels** — Pluggable hooks for Tool, Turn, and Agent (e.g. before/after run, on timeout, on error) so callers can observe or intercept without changing core types.
+1. **Agent registry** — Central registry for Agents by name (analogous to ToolRegistry), so Agents can be looked up and composed (e.g. “send this turn to agent X”).
 
-2. **Agent registry** — Central registry for Agents by name (analogous to ToolRegistry), so Agents can be looked up and composed (e.g. “send this turn to agent X”).
+2. **Agent send turn to other agent** — Ability for one Agent to enqueue a Turn on another Agent’s queue. May require Turns to be owned (e.g. by an Agent or session) so routing and lifecycle are well-defined.
 
-3. **Agent send turn to other agent** — Ability for one Agent to enqueue a Turn on another Agent’s queue. May require Turns to be owned (e.g. by an Agent or session) so routing and lifecycle are well-defined.
+3. **Protocols for different ToolTypes** — Formal protocols or contracts per `ToolType` (e.g. COMPLETION_CHECK returns bool, MEMORY_READ/​MEMORY_WRITE signatures, REASONING vs ACTION semantics) so tool implementations and agents can rely on consistent shapes and behavior.
 
-4. **Protocols for different ToolTypes** — Formal protocols or contracts per `ToolType` (e.g. COMPLETION_CHECK returns bool, MEMORY_READ/​MEMORY_WRITE signatures, REASONING vs ACTION semantics) so tool implementations and agents can rely on consistent shapes and behavior.
+4. **Turn and agent serialization** — Serialization of turns and agents for storing and restoring state (e.g. to disk or a store), so conversation and agent state can be persisted and resumed later.

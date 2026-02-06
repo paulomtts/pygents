@@ -2,10 +2,10 @@ import asyncio
 
 import pytest
 
-from app.enums import StopReason, ToolType
 from app.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
-from app.tool import tool
-from app.turn import Turn
+from app.hooks import TurnHook
+from app.tool import tool, ToolType
+from app.turn import StopReason, Turn
 
 
 @tool(type=ToolType.ACTION)
@@ -168,6 +168,21 @@ def test_yielding_async_reentrant_raises_safe_execution_error():
     turn.kwargs["turn"] = turn
     with pytest.raises(SafeExecutionError, match="running"):
         asyncio.run(_collect_async(turn.yielding()))
+
+
+def test_turn_before_run_hook_called():
+    events = []
+
+    async def before_run(turn):
+        events.append(("before_run", turn.uuid))
+
+    turn = Turn("turn_run_sync", {"x": 10})
+    turn.hooks[TurnHook.BEFORE_RUN] = [before_run]
+    asyncio.run(turn.returning())
+    assert len(events) == 1
+    assert events[0][0] == "before_run"
+    assert events[0][1] == turn.uuid
+    assert turn.output == 11
 
 
 def test_yielding_async_rejects_coroutine_tool():

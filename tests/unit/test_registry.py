@@ -1,8 +1,7 @@
 import pytest
 
-from app.enums import ToolType
 from app.registry import ToolRegistry
-from app.tool import tool
+from app.tool import tool, ToolType
 
 
 def test_get_returns_registered_tool():

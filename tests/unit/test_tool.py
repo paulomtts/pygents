@@ -1,8 +1,7 @@
 import asyncio
 
-from app.enums import ToolType
 from app.registry import ToolRegistry
-from app.tool import ToolMetadata, tool
+from app.tool import ToolMetadata, tool, ToolType
 
 
 def test_decorated_function_preserves_behavior():
@@ -84,6 +83,15 @@ def test_decorated_tool_lock_true_has_lock():
 
     assert hasattr(with_lock, "lock")
     assert isinstance(with_lock.lock, asyncio.Lock)
+
+
+def test_decorated_tool_has_hooks_dict():
+    @tool()
+    async def with_hooks() -> None:
+        pass
+
+    assert hasattr(with_hooks, "hooks")
+    assert with_hooks.hooks == {}
 
 
 def test_tool_metadata_namedtuple_fields():

@@ -2,9 +2,9 @@ import asyncio
 import inspect
 from typing import Any, AsyncIterator
 
-from app.enums import ToolType
 from app.errors import TurnTimeoutError
-from app.tool import Tool
+from app.hooks import AgentHook, run_hooks
+from app.tool import Tool, ToolType
 from app.turn import Turn
 
 
@@ -23,6 +23,10 @@ class Agent:
         self.tools = tools
         self._tool_names = {t.metadata.name for t in tools}
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
+        self.hooks: dict[AgentHook, list] = {}
+
+    async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
+        await run_hooks(self.hooks.get(name, []), *args, **kwargs)
 
     async def pop(self) -> Turn:
         """
@@ -30,7 +34,7 @@ class Agent:
         """
         return await self._queue.get()
 
-    def put(self, turn: Turn) -> None:
+    async def put(self, turn: Turn) -> None:
         """
         Put a Turn on the queue.
         """
@@ -40,7 +44,9 @@ class Agent:
             raise ValueError(
                 f"Agent {self.name!r} does not accept tool {turn.tool.metadata.name!r}"
             )
+        await self._run_hooks(AgentHook.BEFORE_PUT, self, turn)
         self._queue.put_nowait(turn)
+        await self._run_hooks(AgentHook.AFTER_PUT, self, turn)
 
     async def _run_turn(self, turn: Turn) -> Any:
         if inspect.isasyncgenfunction(turn.tool.fn):
@@ -54,18 +60,28 @@ class Agent:
         Propagates TurnTimeoutError and any exception raised by a tool.
         """
         while True:
+            await self._run_hooks(AgentHook.BEFORE_TURN, self)
             turn = await self.pop()
             try:
                 if inspect.isasyncgenfunction(turn.tool.fn):
                     async for value in turn.yielding():
+                        await self._run_hooks(
+                            AgentHook.ON_TURN_VALUE, self, turn, value
+                        )
                         yield (turn, value)
                 else:
                     output = await turn.returning()
+                    await self._run_hooks(
+                        AgentHook.ON_TURN_VALUE, self, turn, output
+                    )
                     yield (turn, output)
             except TurnTimeoutError:
+                await self._run_hooks(AgentHook.ON_TURN_TIMEOUT, self, turn)
                 raise
-            except Exception:
+            except Exception as e:
+                await self._run_hooks(AgentHook.ON_TURN_ERROR, self, turn, e)
                 raise
+            await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
 
             if (
                 turn.tool.metadata.type == ToolType.COMPLETION_CHECK
@@ -74,4 +90,4 @@ class Agent:
                 break
 
             if isinstance(turn.output, Turn):
-                self.put(turn.output)
+                await self.put(turn.output)

@@ -1,12 +1,21 @@
 import asyncio
 import functools
 import inspect
+from enum import Enum
 from typing import Any, AsyncIterator, Callable, Coroutine, NamedTuple, Protocol, TypeVar, cast
 
-from app.enums import ToolType
+from app.hooks import ToolHook
 from app.registry import ToolRegistry
 
 T = TypeVar("T", bound=Any)
+
+
+class ToolType(str, Enum):
+    REASONING = "reasoning"
+    ACTION = "action"
+    MEMORY_READ = "memory_read"
+    MEMORY_WRITE = "memory_write"
+    COMPLETION_CHECK = "completion_check"
 
 
 class ToolMetadata(NamedTuple):
@@ -51,6 +60,7 @@ def tool(
         wrapper.metadata = ToolMetadata(fn.__name__, fn.__doc__, type, approval)
         wrapper.fn = fn
         wrapper.lock = asyncio.Lock() if lock else None
+        wrapper.hooks: dict[ToolHook, list] = {}
         ToolRegistry.register(cast(Tool, wrapper))
         return wrapper
 

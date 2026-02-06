@@ -2,9 +2,8 @@ import asyncio
 
 import pytest
 
-from app.enums import ToolType
 from app.errors import TurnTimeoutError
-from app.tool import tool
+from app.tool import tool, ToolType
 from app.turn import Turn
 from app.agent import Agent
 
@@ -38,15 +37,15 @@ def test_put_rejects_turn_with_unknown_tool():
     fake_tool = type("FakeTool", (), {"metadata": type("M", (), {"name": "other_tool"})()})()
     object.__setattr__(turn, "tool", fake_tool)
     with pytest.raises(ValueError, match="does not accept tool"):
-        agent.put(turn)
+        asyncio.run(agent.put(turn))
 
 
 def test_put_then_pop_returns_same_turn():
     agent = Agent("a", "desc", [add_agent])
     turn = Turn("add_agent", {"a": 1, "b": 2})
-    agent.put(turn)
 
     async def pop_and_run():
+        await agent.put(turn)
         t = await agent.pop()
         return await agent._run_turn(t)
 
@@ -57,9 +56,9 @@ def test_put_then_pop_returns_same_turn():
 
 def test_run_processes_turn_and_stops_when_completion_check_returns_true():
     agent = Agent("a", "desc", [is_done_agent])
-    agent.put(Turn("is_done_agent", {}))
 
     async def consume():
+        await agent.put(Turn("is_done_agent", {}))
         async for _ in agent.run():
             pass
 
@@ -69,10 +68,10 @@ def test_run_processes_turn_and_stops_when_completion_check_returns_true():
 
 def test_run_streams_turn_results():
     agent = Agent("a", "desc", [add_agent, is_done_agent])
-    agent.put(Turn("add_agent", {"a": 1, "b": 2}))
-    agent.put(Turn("is_done_agent", {}))
 
     async def collect():
+        await agent.put(Turn("add_agent", {"a": 1, "b": 2}))
+        await agent.put(Turn("is_done_agent", {}))
         items = []
         async for t, v in agent.run():
             items.append((t, v))
@@ -88,10 +87,10 @@ def test_run_streams_turn_results():
 
 def test_run_streams_yielding_turn_multiple_values():
     agent = Agent("a", "desc", [stream_agent, is_done_agent])
-    agent.put(Turn("stream_agent", {}))
-    agent.put(Turn("is_done_agent", {}))
 
     async def collect():
+        await agent.put(Turn("stream_agent", {}))
+        await agent.put(Turn("is_done_agent", {}))
         items = []
         async for t, v in agent.run():
             items.append((t, v))
@@ -105,9 +104,9 @@ def test_run_streams_yielding_turn_multiple_values():
 
 def test_run_propagates_turn_timeout_error():
     agent = Agent("a", "desc", [slow_tool_agent])
-    agent.put(Turn("slow_tool_agent", {"duration": 2.0}, timeout=1))
 
     async def consume():
+        await agent.put(Turn("slow_tool_agent", {"duration": 2.0}, timeout=1))
         async for _ in agent.run():
             pass
 
