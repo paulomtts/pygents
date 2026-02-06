@@ -20,3 +20,7 @@ class UnregisteredToolError(KeyError):
 
 class UnregisteredAgentError(KeyError):
     """Raised when an agent name is not found in AgentRegistry."""
+
+
+class UnregisteredHookError(KeyError):
+    """Raised when a hook name is not found in HookRegistry."""

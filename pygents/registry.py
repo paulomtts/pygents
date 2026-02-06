@@ -4,10 +4,11 @@ from __future__ import annotations
 from abc import ABC
 from typing import TYPE_CHECKING
 
-from pygents.errors import UnregisteredAgentError, UnregisteredToolError
+from pygents.errors import UnregisteredAgentError, UnregisteredHookError, UnregisteredToolError
 
 if TYPE_CHECKING:
     from pygents.agent import Agent
+    from pygents.hooks import Hook
     from pygents.tool import Tool
 
 
@@ -85,3 +86,51 @@ class AgentRegistry(ABC):
         if agent is None:
             raise UnregisteredAgentError(f"Agent {name!r} not found")
         return agent
+
+
+class HookRegistry(ABC):
+    """
+    Registry class for Hooks. It is not meant to be instantiated or used directly.
+    """
+
+    _registry: dict[str, Hook] = {}
+
+    @classmethod
+    def clear(cls) -> None:
+        cls._registry = {}
+
+    @classmethod
+    def register(cls, hook: Hook, name: str | None = None) -> None:
+        """
+        Register a Hook.
+
+        Args:
+            hook: The Hook to register.
+            name: The name to register the hook under. Uses hook.__name__ if not provided.
+
+        Raises:
+            ValueError if the Hook is already registered.
+        """
+        hook_name = name or hook.__name__
+        if hook_name in cls._registry:
+            raise ValueError(f"Hook {hook_name!r} already registered")
+        cls._registry[hook_name] = hook
+
+    @classmethod
+    def get(cls, name: str) -> Hook:
+        """
+        Get a Hook by name.
+
+        Args:
+            name: The name of the Hook.
+
+        Returns:
+            The Hook.
+
+        Raises:
+            UnregisteredHookError if the Hook is not found.
+        """
+        hook = cls._registry.get(name)
+        if hook is None:
+            raise UnregisteredHookError(f"Hook {name!r} not found")
+        return hook

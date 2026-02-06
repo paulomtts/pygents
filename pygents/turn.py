@@ -7,8 +7,8 @@ from typing import Any, AsyncIterator, Callable, TypeVar
 from uuid import uuid4
 
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
-from pygents.hooks import ToolHook, TurnHook, run_hooks
-from pygents.registry import ToolRegistry
+from pygents.hooks import Hook, TurnHook, run_hooks
+from pygents.registry import HookRegistry, ToolRegistry
 from pygents.tool import Tool
 
 R = TypeVar("R")
@@ -109,9 +109,12 @@ class Turn[T]:
     async def _run_hooks(self, name: TurnHook, *args: Any, **kwargs: Any) -> None:
         await run_hooks(self.hooks.get(name, []), *args, **kwargs)
 
-    async def _run_tool_hooks(self, name: ToolHook, *args: Any, **kwargs: Any) -> None:
-        tool_hooks = getattr(self.tool, "hooks", None) or {}
-        await run_hooks(tool_hooks.get(name, []), *args, **kwargs)
+    def add_hook(self, hook_type: TurnHook, hook: Hook, name: str | None = None) -> None:
+        """
+        Add a hook for the given hook type and register it in HookRegistry.
+        """
+        HookRegistry.register(hook, name)
+        self.hooks.setdefault(hook_type, []).append(hook)
 
     @safe_execution
     async def returning(self) -> T:
@@ -129,11 +132,9 @@ class Turn[T]:
                         "Tool is async generator; use yielding() instead."
                     )
                 runtime_kwargs = self._eval_kwargs(self.kwargs)
-                await self._run_tool_hooks(ToolHook.BEFORE_INVOKE, self, runtime_kwargs)
                 self.output = await asyncio.wait_for(
                     self.tool(**runtime_kwargs), timeout=self.timeout
                 )
-                await self._run_tool_hooks(ToolHook.AFTER_INVOKE, self, self.output)
                 self.stop_reason = StopReason.COMPLETED
                 await self._run_hooks(TurnHook.AFTER_RUN, self)
                 return self.output
@@ -167,7 +168,6 @@ class Turn[T]:
                         "Tool is not an async generator; use returning() for single value."
                     )
                 runtime_kwargs = self._eval_kwargs(self.kwargs)
-                await self._run_tool_hooks(ToolHook.BEFORE_INVOKE, self, runtime_kwargs)
                 queue: asyncio.Queue[Any] = asyncio.Queue()
 
                 async def produce() -> None:
@@ -198,7 +198,6 @@ class Turn[T]:
                         if item is None:
                             break
                         aggregated.append(item)
-                        await self._run_tool_hooks(ToolHook.AFTER_INVOKE, self, item)
                         await self._run_hooks(TurnHook.ON_VALUE, self, item)
                         yield item
                     await producer
@@ -237,6 +236,7 @@ class Turn[T]:
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "stop_reason": self.stop_reason.value if self.stop_reason else None,
             "output": self.output,
+            "hooks": {k.value: [h.__name__ for h in v] for k, v in self.hooks.items()},
         }
 
     @classmethod
@@ -256,4 +256,7 @@ class Turn[T]:
         )
         if "output" in data:
             turn.output = data["output"]
+        for hook_type_str, hook_names in data.get("hooks", {}).items():
+            hook_type = TurnHook(hook_type_str)
+            turn.hooks[hook_type] = [HookRegistry.get(name) for name in hook_names]
         return turn

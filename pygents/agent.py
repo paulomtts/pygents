@@ -6,8 +6,8 @@ from pygents.errors import (
     SafeExecutionError,
     TurnTimeoutError,
 )
-from pygents.hooks import AgentHook, run_hooks
-from pygents.registry import AgentRegistry, ToolRegistry
+from pygents.hooks import AgentHook, Hook, run_hooks
+from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool
 from pygents.turn import Turn
 
@@ -69,6 +69,13 @@ class Agent:
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
         await run_hooks(self.hooks.get(name, []), *args, **kwargs)
+
+    def add_hook(self, hook_type: AgentHook, hook: Hook, name: str | None = None) -> None:
+        """
+        Add a hook for the given hook type and register it in HookRegistry.
+        """
+        HookRegistry.register(hook, name)
+        self.hooks.setdefault(hook_type, []).append(hook)
 
     async def pop(self) -> Turn:
         """
@@ -146,6 +153,7 @@ class Agent:
             "description": self.description,
             "tool_names": [t.metadata.name for t in self.tools],
             "queue": [t.to_dict() for t in self._queue_snapshot()],
+            "hooks": {k.value: [h.__name__ for h in v] for k, v in self.hooks.items()},
         }
 
     @classmethod
@@ -154,4 +162,7 @@ class Agent:
         agent = cls(data["name"], data["description"], tools)
         for turn_data in data.get("queue", []):
             agent._queue.put_nowait(Turn.from_dict(turn_data))
+        for hook_type_str, hook_names in data.get("hooks", {}).items():
+            hook_type = AgentHook(hook_type_str)
+            agent.hooks[hook_type] = [HookRegistry.get(name) for name in hook_names]
         return agent
