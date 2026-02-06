@@ -21,8 +21,6 @@ async def write_file(path: str, content: str) -> None:
 !!! warning "TypeError"
     Only async functions are accepted — sync `def` raises `TypeError` at decoration time.
 
-!!! info "Why async only?"
-    Tools are always async to keep the execution model uniform. There are no mixed sync/async paths — every tool awaits the same way, which simplifies the agent's run loop and hook system.
 
 **Decorator parameters:**
 
@@ -72,6 +70,34 @@ my_tool = ToolRegistry.get("fetch")  # lookup by name
 
 !!! warning "UnregisteredToolError"
     `ToolRegistry.get(name)` raises `UnregisteredToolError` if no tool is registered with that name.
+
+## Hooks
+
+Tool hooks fire during invocation. Pass them when decorating:
+
+| Hook | When | Args |
+|------|------|------|
+| `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` |
+| `AFTER_INVOKE` | After tool returns/yields a value | `(value)` |
+
+```python
+from pygents import tool, ToolHook
+
+async def audit(*args, **kwargs):
+    print(f"Called with {kwargs}")
+
+async def log_result(value):
+    print(f"Result: {value}")
+
+@tool(hooks={
+    ToolHook.BEFORE_INVOKE: [audit],
+    ToolHook.AFTER_INVOKE: [log_result]
+})
+async def my_tool(x: int) -> int:
+    return x * 2
+```
+
+Tool hooks are registered in `HookRegistry` automatically and apply to **all** invocations of that tool. Exceptions in hooks propagate.
 
 ## Metadata
 

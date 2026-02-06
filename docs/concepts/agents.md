@@ -75,6 +75,34 @@ While `run()` is active, agent attributes cannot be changed. Calling `run()` aga
 !!! warning "SafeExecutionError"
     Changing agent attributes or calling `run()` while the agent is already running raises `SafeExecutionError`.
 
+## Hooks
+
+Agent hooks fire at specific points during the run loop. Exceptions in hooks propagate.
+
+| Hook | When | Args |
+|------|------|------|
+| `BEFORE_TURN` | Before popping next turn | `(agent)` |
+| `AFTER_TURN` | After turn fully processed | `(agent, turn)` |
+| `ON_TURN_VALUE` | Before yielding each result | `(agent, turn, value)` |
+| `ON_TURN_ERROR` | Turn raised an exception | `(agent, turn, exception)` |
+| `ON_TURN_TIMEOUT` | Turn timed out | `(agent, turn)` |
+| `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
+| `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
+
+```python
+from pygents import AgentHook
+
+async def on_complete(agent, turn):
+    print(f"[{agent.name}] {turn.tool_name} → {turn.stop_reason}")
+
+agent.add_hook(AgentHook.AFTER_TURN, on_complete)  # registers in HookRegistry and appends
+```
+
+The `add_hook()` method registers the hook in `HookRegistry` automatically. You can also append directly to `agent.hooks[AgentHook.AFTER_TURN]` if the hook is already registered.
+
+!!! warning "ValueError"
+    Registering a hook with a name that already exists in `HookRegistry` raises `ValueError`.
+
 ## Serialization
 
 ```python

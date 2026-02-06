@@ -53,5 +53,3 @@ nav:
     - Tools: concepts/tools.md
     - Turns: concepts/turns.md
     - Agents: concepts/agents.md
-  - Guides:
-    - Hooks: guides/hooks.md

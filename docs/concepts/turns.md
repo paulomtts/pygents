@@ -68,6 +68,32 @@ turn = Turn("fetch", kwargs={
 
 This is especially useful when turns are queued — the lambda captures the latest state when the turn executes, not when it was created.
 
+## Hooks
+
+Turn hooks fire at specific points during execution. Exceptions in hooks propagate.
+
+| Hook | When | Args |
+|------|------|------|
+| `BEFORE_RUN` | Before tool runs (after lock acquired) | `(turn)` |
+| `AFTER_RUN` | After successful completion | `(turn)` |
+| `ON_TIMEOUT` | Turn timed out | `(turn)` |
+| `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
+| `ON_VALUE` | Before each yielded value (streaming only) | `(turn, value)` |
+
+```python
+from pygents import TurnHook
+
+async def log_start(turn):
+    print(f"Starting {turn.tool_name}")
+
+turn.add_hook(TurnHook.BEFORE_RUN, log_start)  # registers in HookRegistry and appends
+```
+
+The `add_hook()` method registers the hook in `HookRegistry` automatically. You can also append directly to `turn.hooks[TurnHook.BEFORE_RUN]` if the hook is already registered.
+
+!!! warning "ValueError"
+    Registering a hook with a name that already exists in `HookRegistry` raises `ValueError`.
+
 ## Serialization
 
 ```python
