@@ -22,6 +22,9 @@ async for line in turn.yielding():
 
 The agent's `run()` picks the right method automatically.
 
+!!! warning "WrongRunMethodError"
+    Using `returning()` on an async generator tool or `yielding()` on a coroutine tool raises `WrongRunMethodError`.
+
 ## Attributes
 
 | Attribute | Set | Mutable while running? |
@@ -31,17 +34,21 @@ The agent's `run()` picks the right method automatically.
 | `metadata` | init (optional dict) | Yes |
 | `output`, `start_time`, `end_time`, `stop_reason` | during/after run | Yes (by framework) |
 
-Changing immutable attributes while running raises `SafeExecutionError`. Calling `returning()` or `yielding()` on an already-running turn also raises `SafeExecutionError`.
+!!! warning "SafeExecutionError"
+    Changing immutable attributes while running raises `SafeExecutionError`. Calling `returning()` or `yielding()` on an already-running turn also raises `SafeExecutionError`.
 
 ## Timeouts
 
 Default: 60 seconds. For `returning()`, applies to the single await. For `yielding()`, applies to the entire run.
 
-| Outcome | `stop_reason` | Exception |
-|---------|---------------|-----------|
-| Success | `COMPLETED` | — |
-| Timeout | `TIMEOUT` | `TurnTimeoutError` |
-| Error | `ERROR` | re-raised |
+| Outcome | `stop_reason` |
+|---------|---------------|
+| Success | `COMPLETED` |
+| Timeout | `TIMEOUT` |
+| Error | `ERROR` |
+
+!!! warning "TurnTimeoutError"
+    When a turn exceeds its timeout, `TurnTimeoutError` is raised and `stop_reason` is set to `TIMEOUT`.
 
 ## Dynamic kwargs
 
@@ -57,8 +64,11 @@ turn = Turn("fetch", kwargs={
 ## Serialization
 
 ```python
-data = turn.to_dict()    # dict with uuid, tool_name, kwargs, metadata, ...
-turn = Turn.from_dict(data)  # restores from dict, resolves tool from registry
+data = turn.to_dict()    # dict with uuid, tool_name, kwargs, metadata, hooks, ...
+turn = Turn.from_dict(data)  # restores from dict, resolves tool and hooks from registries
 ```
 
-Datetimes are ISO strings. Hooks are not serialized.
+Datetimes are ISO strings. Hooks are serialized by name and resolved from `HookRegistry` on deserialization.
+
+!!! warning "UnregisteredHookError"
+    `Turn.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.

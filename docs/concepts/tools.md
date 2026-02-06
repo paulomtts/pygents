@@ -24,7 +24,8 @@ async def write_file(path: str, content: str) -> None:
 |-----------|---------|---------|
 | `lock` | `False` | If `True`, concurrent runs of this tool are serialized via `asyncio.Lock` |
 
-Only async functions are accepted — sync `def` raises `TypeError` at decoration time.
+!!! warning "TypeError"
+    Only async functions are accepted — sync `def` raises `TypeError` at decoration time.
 
 ## Single-value vs streaming
 
@@ -46,17 +47,26 @@ async def stream_lines(path: str):
             yield line.strip()
 ```
 
-The agent detects which type and calls the right method. Using the wrong one raises `WrongRunMethodError`.
+The agent detects which type and calls the right method automatically.
+
+!!! warning "WrongRunMethodError"
+    Using `returning()` on an async generator or `yielding()` on a coroutine raises `WrongRunMethodError`.
 
 ## Registry
 
-Tools register automatically when decorated. Duplicate names raise `ValueError`.
+Tools register automatically when decorated.
 
 ```python
 from pygents import ToolRegistry
 
 my_tool = ToolRegistry.get("fetch")  # lookup by name
 ```
+
+!!! warning "ValueError"
+    Decorating a tool with a name that already exists in the registry raises `ValueError`.
+
+!!! warning "UnregisteredToolError"
+    `ToolRegistry.get(name)` raises `UnregisteredToolError` if no tool is registered with that name.
 
 ## Metadata
 

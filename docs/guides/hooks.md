@@ -4,6 +4,33 @@ Hooks are async callbacks attached to turns, agents, or tools. They fire at spec
 
 Register by enum key — each key holds a list of callables, awaited in order.
 
+## HookRegistry
+
+For serialization support, hooks must be registered in `HookRegistry`:
+
+```python
+from pygents import HookRegistry
+
+async def my_hook(turn):
+    print(f"Running {turn.tool_name}")
+
+HookRegistry.register(my_hook)  # uses my_hook.__name__
+HookRegistry.register(my_hook, name="custom_name")  # or custom name
+```
+
+The `add_hook()` method on `Turn` and `Agent` registers hooks automatically:
+
+```python
+turn.add_hook(TurnHook.BEFORE_RUN, my_hook)  # registers and appends
+agent.add_hook(AgentHook.AFTER_TURN, my_hook)
+```
+
+!!! warning "ValueError"
+    Registering a hook with a name that already exists raises `ValueError`.
+
+!!! warning "UnregisteredHookError"
+    `HookRegistry.get(name)` raises `UnregisteredHookError` if no hook is registered with that name. This also occurs during deserialization if a hook name is missing.
+
 ## Turn hooks
 
 | Hook | When | Args |
@@ -48,18 +75,30 @@ agent.hooks[AgentHook.AFTER_TURN].append(on_complete)
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_INVOKE` | About to call the tool | `(turn, kwargs)` |
-| `AFTER_INVOKE` | After tool returns/yields a value | `(turn, value)` |
+| `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` |
+| `AFTER_INVOKE` | After tool returns/yields a value | `(value)` |
+
+Pass hooks when decorating:
 
 ```python
-from pygents import ToolHook
+from pygents import tool, ToolHook
 
-async def audit(turn, kwargs):
-    print(f"Calling {turn.tool_name} with {kwargs}")
+async def audit(*args, **kwargs):
+    print(f"Called with {kwargs}")
 
-my_tool.hooks[ToolHook.BEFORE_INVOKE].append(audit)
+async def log_result(value):
+    print(f"Result: {value}")
+
+@tool(hooks={
+    ToolHook.BEFORE_INVOKE: [audit],
+    ToolHook.AFTER_INVOKE: [log_result]
+})
+async def my_tool(x: int) -> int:
+    return x * 2
 ```
 
-Tool hooks apply to **all** invocations of that tool since agents share the same tool instance.
+Tool hooks are registered in `HookRegistry` automatically and apply to **all** invocations of that tool.
 
-Hooks are not included in `to_dict()` / `from_dict()` serialization.
+## Serialization
+
+Hooks are serialized by name in `to_dict()` and resolved from `HookRegistry` in `from_dict()`. This enables full state restoration across process restarts.
