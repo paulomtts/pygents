@@ -1,6 +1,7 @@
 site_name: pygents
 site_description: Async agent orchestration for Python.
-repo_url: ""
+repo_url: https://github.com/paulomtts/pygents
+repo_name: paulomtts/pygents
 
 theme:
   name: material
