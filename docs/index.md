@@ -106,4 +106,4 @@ await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 | Hooks | Async callbacks at turn, agent, and tool level |
 | Serialization | `to_dict()` / `from_dict()` for turns and agents |
 
-Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), or [Hooks](guides/hooks.md).
+Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), or [Agents](concepts/agents.md).
