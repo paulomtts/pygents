@@ -1,3 +1,5 @@
+import asyncio
+
 from app.enums import ToolType
 from app.registry import ToolRegistry
 from app.tool import ToolMetadata, tool
@@ -5,15 +7,15 @@ from app.tool import ToolMetadata, tool
 
 def test_decorated_function_preserves_behavior():
     @tool()
-    def double(x: int) -> int:
+    async def double(x: int) -> int:
         return x * 2
 
-    assert double(3) == 6
+    assert asyncio.run(double(3)) == 6
 
 
 def test_metadata_default_type_and_approval():
     @tool()
-    def noop() -> None:
+    async def noop() -> None:
         pass
 
     assert noop.metadata.name == "noop"
@@ -24,7 +26,7 @@ def test_metadata_default_type_and_approval():
 
 def test_metadata_custom_type_and_approval():
     @tool(type=ToolType.REASONING, approval=True)
-    def think() -> None:
+    async def think() -> None:
         pass
 
     assert think.metadata.name == "think"
@@ -35,7 +37,7 @@ def test_metadata_custom_type_and_approval():
 
 def test_metadata_dict_returns_asdict():
     @tool(type=ToolType.MEMORY_READ)
-    def read() -> None:
+    async def read() -> None:
         pass
 
     result = read.metadata.dict()
@@ -49,21 +51,21 @@ def test_metadata_dict_returns_asdict():
 
 def test_decorated_function_registered():
     @tool()
-    def unique_test_fn() -> str:
+    async def unique_test_fn() -> str:
         return "ok"
 
     registered = ToolRegistry.get("unique_test_fn")
     assert registered is unique_test_fn
-    assert registered() == "ok"
+    assert asyncio.run(registered()) == "ok"
 
 
 def test_decorator_without_parentheses():
     @tool
-    def bare() -> int:
+    async def bare() -> int:
         return 1
 
     assert bare.metadata.type == ToolType.ACTION
-    assert bare() == 1
+    assert asyncio.run(bare()) == 1
 
 
 def test_tool_metadata_namedtuple_fields():
