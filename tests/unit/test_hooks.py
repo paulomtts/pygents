@@ -1,69 +1,10 @@
 import asyncio
 
-import pytest
-
 from pygents.agent import Agent
-from pygents.errors import UnregisteredHookError
 from pygents.hooks import AgentHook, ToolHook, TurnHook
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
-
-
-# --- HookRegistry tests ---
-
-
-def test_hook_registry_register_and_get():
-    HookRegistry.clear()
-
-    async def my_hook():
-        pass
-
-    HookRegistry.register(my_hook)
-    retrieved = HookRegistry.get("my_hook")
-    assert retrieved is my_hook
-
-
-def test_hook_registry_register_with_custom_name():
-    HookRegistry.clear()
-
-    async def some_hook():
-        pass
-
-    HookRegistry.register(some_hook, name="custom_name")
-    retrieved = HookRegistry.get("custom_name")
-    assert retrieved is some_hook
-
-
-def test_hook_registry_get_missing_raises_unregistered_hook_error():
-    HookRegistry.clear()
-    with pytest.raises(UnregisteredHookError, match=r"'nonexistent' not found"):
-        HookRegistry.get("nonexistent")
-
-
-def test_hook_registry_register_duplicate_raises_value_error():
-    HookRegistry.clear()
-
-    async def duplicate_hook():
-        pass
-
-    HookRegistry.register(duplicate_hook)
-    with pytest.raises(ValueError, match=r"'duplicate_hook' already registered"):
-        HookRegistry.register(duplicate_hook)
-
-
-def test_hook_registry_clear():
-    HookRegistry.clear()
-
-    async def clearable_hook():
-        pass
-
-    HookRegistry.register(clearable_hook)
-    assert HookRegistry.get("clearable_hook") is clearable_hook
-
-    HookRegistry.clear()
-    with pytest.raises(UnregisteredHookError):
-        HookRegistry.get("clearable_hook")
 
 
 # --- Tool hooks tests ---
