@@ -20,7 +20,3 @@ class UnregisteredToolError(KeyError):
 
 class UnregisteredAgentError(KeyError):
     """Raised when an agent name is not found in AgentRegistry."""
-
-
-class CompletionCheckReturnError(TypeError):
-    """Raised when a COMPLETION_CHECK tool returns a value that is not bool."""

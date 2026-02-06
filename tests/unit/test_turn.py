@@ -4,80 +4,80 @@ import pytest
 
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from pygents.hooks import TurnHook
-from pygents.tool import tool, ToolType
+from pygents.tool import tool
 from pygents.turn import StopReason, Turn
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_sync(x: int) -> int:
     return x + 1
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_async(x: int) -> int:
     return x + 2
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_async_gen():
     yield 1
     yield 2
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_async_gen_20():
     yield 10
     yield 20
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_async_gen_with_arg(x: int):
     yield x
     yield x + 1
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_raises():
     raise ValueError("tool failed")
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_returns_list() -> list[int]:
     return [1, 2, 3]
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_reentrant(turn: Turn):
     return await turn.returning()
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_yielding_raises():
     yield 1
     raise ValueError("yielding tool failed")
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_yielding_reentrant(turn: Turn):
     yield 1
     async for _ in turn.yielding():
         pass
 
 
-@tool(type=ToolType.ACTION, lock=True)
+@tool(lock=True)
 async def turn_run_serialized(events: list) -> None:
     events.append("start")
     await asyncio.sleep(0.01)
     events.append("end")
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_slow(duration: float) -> str:
     await asyncio.sleep(duration)
     return "done"
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def turn_run_slow_yielding(duration: float):
     yield 1
     await asyncio.sleep(duration)

@@ -3,11 +3,11 @@ import pytest
 from pygents.agent import Agent
 from pygents.errors import UnregisteredAgentError, UnregisteredToolError
 from pygents.registry import AgentRegistry, ToolRegistry
-from pygents.tool import tool, ToolType
+from pygents.tool import tool
 
 
 def test_get_returns_registered_tool():
-    @tool(type=ToolType.ACTION)
+    @tool()
     async def add_test(a: int, b: int) -> int:
         return a + b
 
@@ -29,7 +29,7 @@ def test_register_duplicate_name_raises_value_error():
         ToolRegistry.register(duplicate_name)
 
 
-@tool(type=ToolType.ACTION)
+@tool()
 async def _registry_test_tool(x: int) -> int:
     return x
 

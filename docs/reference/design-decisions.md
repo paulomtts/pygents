@@ -10,10 +10,8 @@
 
 **Tools register globally.** The `@tool` decorator registers by function name. Turns resolve tools from the registry at construction time. Duplicate names are rejected.
 
-**Agents stream by default.** `run()` is an async generator yielding `(turn, value)` as results are produced — not batched. Completion checks end the loop.
+**Agents stream by default.** `run()` is an async generator yielding `(turn, value)` as results are produced — not batched. The loop exits when the queue is empty.
 
 **Callable kwargs are late-evaluated.** Any no-arg callable passed as a kwarg is called at tool invocation time, not at turn creation. This supports dynamic config, tokens, memory reads, etc.
-
-**COMPLETION_CHECK tools must return bool.** Enforced at decoration time (return annotation) and at runtime (agent validates output). Prevents ambiguous completion signals.
 
 **Hooks are runtime-only.** Not included in serialization. They are implementation concerns, not data.

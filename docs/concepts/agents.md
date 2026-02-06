@@ -5,17 +5,13 @@ An agent orchestrates execution: it owns a queue of turns and a set of tools, pr
 ## Creating an agent
 
 ```python
-from pygents import Agent, tool, Turn, ToolType
+from pygents import Agent, tool, Turn
 
 @tool()
 async def work(x: int) -> int:
     return x * 2
 
-@tool(type=ToolType.COMPLETION_CHECK)
-async def done() -> bool:
-    return True
-
-agent = Agent("worker", "Doubles numbers", [work, done])
+agent = Agent("worker", "Doubles numbers", [work])
 ```
 
 Each tool must be the same instance as in `ToolRegistry` — the constructor validates this.
@@ -25,24 +21,23 @@ Each tool must be the same instance as in `ToolRegistry` — the constructor val
 ```python
 await agent.put(Turn("work", kwargs={"x": 5}))
 await agent.put(Turn("work", kwargs={"x": 10}))
-await agent.put(Turn("done"))
 
 async for turn, value in agent.run():
     print(f"{turn.tool_name}: {value}")
     # work: 10
     # work: 20
-    # done: True (then loop exits)
+    # (then loop exits when queue is empty)
 ```
 
 - `put(turn)` — enqueues a turn (validates tool is in agent's set)
 - `pop()` — blocks until a turn is available
-- `run()` — async generator: pops turns, runs them, yields `(turn, value)`
+- `run()` — async generator: pops turns, runs them, yields `(turn, value)`, exits when queue is empty
 
 **After each turn:**
 
 | Condition | Behavior |
 |-----------|----------|
-| Completion check returned `True` | Exit loop |
+| Queue is empty | Exit loop |
 | Output is a `Turn` instance | Enqueue it, continue |
 | Otherwise | Continue to next turn |
 
@@ -53,8 +48,8 @@ Single-value tools yield once. Async generator tools yield per value. The agent 
 ## Inter-agent messaging
 
 ```python
-alice = Agent("alice", "Coordinator", [coordinate, done])
-bob = Agent("bob", "Worker", [work, done])
+alice = Agent("alice", "Coordinator", [coordinate])
+bob = Agent("bob", "Worker", [work])
 
 # alice sends work to bob
 await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))

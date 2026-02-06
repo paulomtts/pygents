@@ -9,6 +9,5 @@ All are in `pygents.errors` and re-exported from `pygents`.
 | `TurnTimeoutError` | TimeoutError | Turn execution exceeded its `timeout`. |
 | `UnregisteredToolError` | KeyError | `ToolRegistry.get(name)` with no tool for that name. |
 | `UnregisteredAgentError` | KeyError | `AgentRegistry.get(name)` with no agent for that name. |
-| `CompletionCheckReturnError` | TypeError | A COMPLETION_CHECK tool's output was not a bool when the agent checked it. |
 
 `ValueError` is used for: duplicate tool or agent name at registration; agent built with a tool instance that is not the same as the one in the registry; `put(turn)` when the turn has no tool or the tool is not in the agent's set.

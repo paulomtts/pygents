@@ -3,13 +3,12 @@ import inspect
 from typing import Any, AsyncIterator, Callable, TypeVar
 
 from pygents.errors import (
-    CompletionCheckReturnError,
     SafeExecutionError,
     TurnTimeoutError,
 )
 from pygents.hooks import AgentHook, run_hooks
 from pygents.registry import AgentRegistry, ToolRegistry
-from pygents.tool import Tool, ToolType
+from pygents.tool import Tool
 from pygents.turn import Turn
 
 R = TypeVar("R")
@@ -55,7 +54,7 @@ class Agent:
         self.description = description
         self.tools = tools
         self._tool_names = {t.metadata.name for t in tools}
-        self._queue = asyncio.Queue()
+        self._queue: asyncio.Queue[Turn] = asyncio.Queue()
         self.hooks = {}
         self._is_running = False
         AgentRegistry.register(self)
@@ -98,15 +97,6 @@ class Agent:
         target = AgentRegistry.get(agent_name)
         await target.put(turn)
 
-    def _is_completion_check_true(self, turn: Turn) -> bool:
-        if turn.tool.metadata.type != ToolType.COMPLETION_CHECK:
-            return False
-        if not isinstance(turn.output, bool):
-            raise CompletionCheckReturnError(
-                f"COMPLETION_CHECK tool {turn.tool.metadata.name!r} must return bool, got {type(turn.output).__name__}"
-            )
-        return turn.output
-
     async def _run_turn(self, turn: Turn) -> Any:
         if inspect.isasyncgenfunction(turn.tool.fn):
             return [x async for x in turn.yielding()]
@@ -115,15 +105,15 @@ class Agent:
     @safe_execution
     async def run(self) -> AsyncIterator[tuple[Turn, Any]]:
         """
-        Run the event loop until a completion-check tool returns True.
+        Run the event loop until the queue is empty.
         Streams results: yields (turn, value) for each value produced (one per run for single-value tools, one per yield for async-gen tools).
         Propagates TurnTimeoutError and any exception raised by a tool.
         """
         try:
             self._is_running = True
-            while True:
+            while not self._queue.empty():
                 await self._run_hooks(AgentHook.BEFORE_TURN, self)
-                turn = await self.pop()
+                turn = self._queue.get_nowait()
                 try:
                     if inspect.isasyncgenfunction(turn.tool.fn):
                         async for value in turn.yielding():
@@ -144,9 +134,6 @@ class Agent:
                     await self._run_hooks(AgentHook.ON_TURN_ERROR, self, turn, e)
                     raise
                 await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
-
-                if self._is_completion_check_true(turn):
-                    break
 
                 if isinstance(turn.output, Turn):
                     await self.put(turn.output)

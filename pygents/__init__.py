@@ -1,6 +1,5 @@
 from pygents.agent import Agent
 from pygents.errors import (
-    CompletionCheckReturnError,
     SafeExecutionError,
     TurnTimeoutError,
     UnregisteredAgentError,
@@ -9,14 +8,13 @@ from pygents.errors import (
 )
 from pygents.hooks import AgentHook, Hook, run_hooks, ToolHook, TurnHook
 from pygents.registry import AgentRegistry, ToolRegistry
-from pygents.tool import Tool, ToolMetadata, ToolType, tool
+from pygents.tool import Tool, ToolMetadata, tool
 from pygents.turn import StopReason, Turn
 
 __all__ = [
     "Agent",
     "AgentHook",
     "AgentRegistry",
-    "CompletionCheckReturnError",
     "Hook",
     "run_hooks",
     "SafeExecutionError",
@@ -25,7 +23,6 @@ __all__ = [
     "ToolMetadata",
     "ToolHook",
     "ToolRegistry",
-    "ToolType",
     "Turn",
     "TurnHook",
     "TurnTimeoutError",

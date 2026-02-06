@@ -18,20 +18,15 @@ Requires Python 3.12+.
 
 ```python
 import asyncio
-from pygents import Agent, Turn, ToolType, tool
+from pygents import Agent, Turn, tool
 
 @tool()
 async def fetch(url: str) -> str:
     return f"<content from {url}>"
 
-@tool(type=ToolType.COMPLETION_CHECK)
-async def done() -> bool:
-    return True
-
 async def main():
-    agent = Agent("fetcher", "Fetches URLs", [fetch, done])
+    agent = Agent("fetcher", "Fetches URLs", [fetch])
     await agent.put(Turn("fetch", kwargs={"url": "https://example.com"}))
-    await agent.put(Turn("done"))
 
     async for turn, value in agent.run():
         print(f"{turn.tool_name}: {value}")
@@ -49,9 +44,8 @@ async def count(n: int):
     for i in range(1, n + 1):
         yield i
 
-agent = Agent("counter", "Counts", [count, done])
+agent = Agent("counter", "Counts", [count])
 await agent.put(Turn("count", kwargs={"n": 3}))
-await agent.put(Turn("done"))
 
 async for turn, value in agent.run():
     print(value)  # 1, 2, 3
@@ -62,8 +56,8 @@ async for turn, value in agent.run():
 Agents can enqueue turns on other agents:
 
 ```python
-alice = Agent("alice", "Delegates", [delegate_tool, done])
-bob = Agent("bob", "Works", [work_tool, done])
+alice = Agent("alice", "Delegates", [delegate_tool])
+bob = Agent("bob", "Works", [work_tool])
 
 # alice sends a turn to bob's queue
 await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
@@ -87,7 +81,6 @@ turn = Turn("fetch", kwargs={
 | Feature | Description |
 |---------|-------------|
 | Streaming | Agents yield results as produced via `async for turn, value in agent.run()` |
-| Completion checks | `ToolType.COMPLETION_CHECK` tools return `bool` to signal when to stop |
 | Inter-agent messaging | `agent.send_turn(name, turn)` enqueues work on another agent |
 | Dynamic arguments | Callable kwargs evaluated at invocation time |
 | Timeouts | Per-turn timeout (default 60s), raises `TurnTimeoutError` |

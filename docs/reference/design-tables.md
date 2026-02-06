@@ -6,12 +6,11 @@ Summary of conditions and outcomes for tools, turns, and agents. See the source 
 
 **Validation at decoration**
 
-| Function is async coroutine | Function is async gen | type is COMPLETION_CHECK | COMPLETION_CHECK return bool | Result |
-|----------------------------|------------------------|---------------------------|------------------------------|--------|
-| ✓ | ✗ | ✗ | — | Valid (single-value) |
-| ✓ | ✗ | ✓ | ✓ | Valid (completion check) |
-| ✗ | ✓ | ✗ | — | Valid (streaming) |
-| ✓ | ✗ | ✓ | ✗ | TypeError |
+| Function is async coroutine | Function is async gen | Result |
+|----------------------------|------------------------|----- --|
+| ✓ | ✗ | Valid (single-value) |
+| ✗ | ✓ | Valid (streaming) |
+| ✗ | ✗ | TypeError |
 
 **Run method (Turn)**
 
@@ -59,8 +58,7 @@ Summary of conditions and outcomes for tools, turns, and agents. See the source 
 
 | After turn | Next |
 |------------|------|
-| COMPLETION_CHECK and output is True | Exit loop |
-| COMPLETION_CHECK and output is not bool | CompletionCheckReturnError |
+| Queue is empty | Exit loop |
 | output is a Turn instance | put(output), then next iteration |
 | Else | Next iteration |
 
