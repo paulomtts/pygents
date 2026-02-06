@@ -7,9 +7,9 @@ from typing import Any, AsyncIterator, Callable, TypeVar
 from uuid import uuid4
 
 from app.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
-from app.hooks import run_hooks, ToolHook, TurnHook
+from app.hooks import ToolHook, TurnHook, run_hooks
 from app.registry import ToolRegistry
-from app.tool import Tool, ToolType, tool
+from app.tool import Tool
 
 R = TypeVar("R")
 T = TypeVar("T")
@@ -50,10 +50,10 @@ class Turn[T]:
     """
 
     uuid: str
-    tool: Tool | None = (
-        None  # ! Can't be serialized, but we can use tool name to find it
-    )
+    tool_name: str
+    tool: Tool | None = None
     kwargs: dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
     output: Any | None = None
     timeout: int = 60
     start_time: datetime | None = None
@@ -62,6 +62,12 @@ class Turn[T]:
 
     _is_running: bool = False
 
+    def _eval_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        function_type = type(lambda: None)
+        return {
+            k: v() if isinstance(v, function_type) else v for k, v in kwargs.items()
+        }
+
     def __setattr__(self, name: str, value: Any) -> None:
         mutable_while_running = {
             "_is_running",
@@ -69,6 +75,7 @@ class Turn[T]:
             "end_time",
             "output",
             "stop_reason",
+            "metadata",
         }
         if name not in mutable_while_running and getattr(self, "_is_running", False):
             raise SafeExecutionError(
@@ -80,14 +87,18 @@ class Turn[T]:
         self,
         tool_name: str,
         kwargs: dict[str, Any] = {},
+        metadata: dict[str, Any] | None = None,
         timeout: int = 60,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         stop_reason: StopReason | None = None,
+        uuid: str | None = None,
     ):
-        self.uuid = str(uuid4())
+        self.uuid = uuid if uuid is not None else str(uuid4())
+        self.tool_name = tool_name
         self.tool = ToolRegistry.get(tool_name)
         self.kwargs = kwargs
+        self.metadata = metadata if metadata is not None else {}
         self.timeout = timeout
         self.start_time = start_time
         self.end_time = end_time
@@ -98,9 +109,7 @@ class Turn[T]:
     async def _run_hooks(self, name: TurnHook, *args: Any, **kwargs: Any) -> None:
         await run_hooks(self.hooks.get(name, []), *args, **kwargs)
 
-    async def _run_tool_hooks(
-        self, name: ToolHook, *args: Any, **kwargs: Any
-    ) -> None:
+    async def _run_tool_hooks(self, name: ToolHook, *args: Any, **kwargs: Any) -> None:
         tool_hooks = getattr(self.tool, "hooks", None) or {}
         await run_hooks(tool_hooks.get(name, []), *args, **kwargs)
 
@@ -119,9 +128,10 @@ class Turn[T]:
                     raise WrongRunMethodError(
                         "Tool is async generator; use yielding() instead."
                     )
-                await self._run_tool_hooks(ToolHook.BEFORE_INVOKE, self, self.kwargs)
+                runtime_kwargs = self._eval_kwargs(self.kwargs)
+                await self._run_tool_hooks(ToolHook.BEFORE_INVOKE, self, runtime_kwargs)
                 self.output = await asyncio.wait_for(
-                    self.tool(**self.kwargs), timeout=self.timeout
+                    self.tool(**runtime_kwargs), timeout=self.timeout
                 )
                 await self._run_tool_hooks(ToolHook.AFTER_INVOKE, self, self.output)
                 self.stop_reason = StopReason.COMPLETED
@@ -156,12 +166,13 @@ class Turn[T]:
                     raise WrongRunMethodError(
                         "Tool is not an async generator; use returning() for single value."
                     )
-                await self._run_tool_hooks(ToolHook.BEFORE_INVOKE, self, self.kwargs)
+                runtime_kwargs = self._eval_kwargs(self.kwargs)
+                await self._run_tool_hooks(ToolHook.BEFORE_INVOKE, self, runtime_kwargs)
                 queue: asyncio.Queue[Any] = asyncio.Queue()
 
                 async def produce() -> None:
                     try:
-                        async for value in self.tool(**self.kwargs):
+                        async for value in self.tool(**runtime_kwargs):
                             await queue.put(value)
                     finally:
                         await queue.put(None)
@@ -183,9 +194,7 @@ class Turn[T]:
                             raise TurnTimeoutError(
                                 f"Turn timed out after {self.timeout}s"
                             ) from None
-                        item = await asyncio.wait_for(
-                            queue.get(), timeout=remaining
-                        )
+                        item = await asyncio.wait_for(queue.get(), timeout=remaining)
                         if item is None:
                             break
                         aggregated.append(item)
@@ -217,11 +226,34 @@ class Turn[T]:
                 self.end_time = datetime.now()
                 self._is_running = False
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "uuid": self.uuid,
+            "tool_name": self.tool_name,
+            "kwargs": self._eval_kwargs(self.kwargs),
+            "metadata": self.metadata,
+            "timeout": self.timeout,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "stop_reason": self.stop_reason.value if self.stop_reason else None,
+            "output": self.output,
+        }
 
-@tool(type=ToolType.ACTION)
-async def add(a: int, b: int) -> int:
-    return a + b
-
-
-turn = Turn[int]("add", {"a": 1, "b": 2})
-result = asyncio.run(turn.returning())
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Turn[Any]":
+        start_time = data.get("start_time")
+        end_time = data.get("end_time")
+        stop_reason = data.get("stop_reason")
+        turn = cls(
+            tool_name=data["tool_name"],
+            kwargs=data.get("kwargs", {}),
+            metadata=data.get("metadata", {}),
+            timeout=data.get("timeout", 60),
+            start_time=datetime.fromisoformat(start_time) if start_time else None,
+            end_time=datetime.fromisoformat(end_time) if end_time else None,
+            stop_reason=StopReason(stop_reason) if stop_reason else None,
+            uuid=data.get("uuid"),
+        )
+        if "output" in data:
+            turn.output = data["output"]
+        return turn

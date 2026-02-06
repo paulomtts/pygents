@@ -2,7 +2,7 @@
 
 **Tools are always async.** The `@tool` decorator accepts only coroutine functions or async generator functions; sync `def` is rejected at decoration time. Single-value tools use `returning()`; streaming tools (async generators) use `yielding()`. Using the wrong run method (e.g. `returning()` on an async gen tool) raises `WrongRunMethodError`.
 
-**Turn reentrancy.** A Turn cannot be run again while it is already running. A second call to `returning()` or `yielding()` on the same Turn raises `SafeExecutionError`. Most Turn attributes are immutable while running; only `_is_running`, `start_time`, `end_time`, `output`, and `stop_reason` may change during execution.
+**Turn reentrancy.** A Turn cannot be run again while it is already running. A second call to `returning()` or `yielding()` on the same Turn raises `SafeExecutionError`. Most Turn attributes are immutable while running; only `_is_running`, `start_time`, `end_time`, `output`, `stop_reason`, and `metadata` may change during execution.
 
 **Per-tool locking, default off.** Turns run tools that may or may not touch shared state. Locking is per-tool and opt-in: `@tool(lock=True)` serializes concurrent runs of that tool; the default is no lock so stateless or non-conflicting tools can run in parallel. Tools that manipulate shared resources should set `lock=True`.
 
@@ -11,6 +11,14 @@
 **Tool registry.** Tools register by name when decorated. A Turn is bound to a tool by name and kwargs at construction; the tool is resolved from the registry at init. Duplicate tool names at registration raise `ValueError`.
 
 **Agents stream by default.** An Agent's `run()` is an async generator that yields `(turn, value)` for each result as it is produced. Single-value tools yield once; async-generator tools yield per value. Consume with `async for turn, value in agent.run(): ...`. The loop ends when a completion-check tool returns `True`.
+
+**Tool arguments by reference are evaluated at runtime.** When constructing a Turn, any argument value that is a no-arg function (e.g. a lambda or a callable with no required parameters) is not resolved at Turn creation. It is evaluated at the moment the tool is invoked (in `returning()` or `yielding()`), and the result is passed to the tool. Non-callable values are passed through unchanged. This allows dynamic values (e.g. reading from memory or environment) to be resolved when the Turn runs.
+
+**COMPLETION_CHECK tools must return bool.** A tool declared with `type=ToolType.COMPLETION_CHECK` must be a coroutine (not an async generator) with return annotation `-> bool`. The decorator enforces this at registration time. When the agent checks whether to stop the run loop, it validates that the turn's output is actually a bool and raises `CompletionCheckReturnError` otherwise. The `CompletionCheckTool` protocol in `app.tool` describes the type contract for static checkers.
+
+**Turn metadata and serialization.** A Turn accepts an optional `metadata` dict for arbitrary key-value data; it is mutable (including while the turn is running). Turns can be serialized to a dict with `to_dict()` and restored with `Turn.from_dict(data)`. The serialized form includes `uuid`, `tool_name`, `kwargs`, `metadata`, `timeout`, `start_time`, `end_time`, `stop_reason`, and `output`; datetimes are ISO strings. On restore, the tool is resolved from the registry by `tool_name`. Hooks are not serialized.
+
+**Agent serialization.** Agents support `to_dict()` and `Agent.from_dict(data)` for persistence. The dict contains `name`, `description`, `tool_names` (list of registered tool names), and `queue` (list of turn dicts from each queued turn). On restore, tools are resolved from the registry by name and the queue is repopulated with `Turn.from_dict()`; the agent is registered in `AgentRegistry`. Hooks are not serialized. Queue snapshot uses the public get/put API so order is preserved.
 
 ## Hooks
 
@@ -34,13 +42,3 @@ Hooks are async callbacks you can register to observe or intercept at three leve
 | **Tool** | `ToolHook.AFTER_INVOKE` | After the tool returns a value (single-value: once; yielding: per value). Args: `(turn, value)`. |
 
 Register by enum: `turn.hooks[TurnHook.BEFORE_RUN] = [my_async_fn]`, `agent.hooks[AgentHook.AFTER_TURN] = [...]`, `tool.hooks[ToolHook.BEFORE_INVOKE] = [...]`.
-
-## Roadmap
-
-1. **Agent registry** — Central registry for Agents by name (analogous to ToolRegistry), so Agents can be looked up and composed (e.g. “send this turn to agent X”).
-
-2. **Agent send turn to other agent** — Ability for one Agent to enqueue a Turn on another Agent’s queue. May require Turns to be owned (e.g. by an Agent or session) so routing and lifecycle are well-defined.
-
-3. **Protocols for different ToolTypes** — Formal protocols or contracts per `ToolType` (e.g. COMPLETION_CHECK returns bool, MEMORY_READ/​MEMORY_WRITE signatures, REASONING vs ACTION semantics) so tool implementations and agents can rely on consistent shapes and behavior.
-
-4. **Turn and agent serialization** — Serialization of turns and agents for storing and restoring state (e.g. to disk or a store), so conversation and agent state can be persisted and resumed later.

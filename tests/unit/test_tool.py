@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from app.registry import ToolRegistry
 from app.tool import ToolMetadata, tool, ToolType
 
@@ -105,3 +107,19 @@ def test_tool_metadata_namedtuple_fields():
     assert metadata.description == "A tool."
     assert metadata.type == ToolType.ACTION
     assert metadata.approval is True
+
+
+def test_completion_check_requires_return_annotation_bool():
+    async def no_return_annotation():
+        return True
+
+    with pytest.raises(TypeError, match="return type bool"):
+        tool(type=ToolType.COMPLETION_CHECK)(no_return_annotation)
+
+
+def test_completion_check_rejects_async_generator():
+    async def yielding():
+        yield True
+
+    with pytest.raises(TypeError, match="coroutine, not an async generator"):
+        tool(type=ToolType.COMPLETION_CHECK)(yielding)

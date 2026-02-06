@@ -31,6 +31,12 @@ async def turn_run_async_gen_20():
 
 
 @tool(type=ToolType.ACTION)
+async def turn_run_async_gen_with_arg(x: int):
+    yield x
+    yield x + 1
+
+
+@tool(type=ToolType.ACTION)
 async def turn_run_raises():
     raise ValueError("tool failed")
 
@@ -218,3 +224,72 @@ def test_yielding_times_out_sets_stop_reason_and_end_time():
         asyncio.run(_collect_async(turn.yielding()))
     assert turn.stop_reason == StopReason.TIMEOUT
     assert turn.end_time is not None
+
+
+def test_returning_evaluates_callable_kwargs_at_runtime():
+    turn = Turn[int]("turn_run_sync", {"x": lambda: 100})
+    result = asyncio.run(turn.returning())
+    assert result == 101
+    assert turn.output == 101
+
+
+def test_yielding_evaluates_callable_kwargs_at_runtime():
+    turn = Turn("turn_run_async_gen_with_arg", {"x": lambda: 7})
+    items = asyncio.run(_collect_async(turn.yielding()))
+    assert items == [7, 8]
+    assert turn.output == [7, 8]
+
+
+def test_turn_accepts_metadata():
+    turn = Turn("turn_run_sync", {"x": 1}, metadata={"source": "test", "id": 42})
+    assert turn.metadata == {"source": "test", "id": 42}
+    asyncio.run(turn.returning())
+    assert turn.output == 2
+
+
+def test_turn_metadata_default_empty():
+    turn = Turn("turn_run_sync", {"x": 1})
+    assert turn.metadata == {}
+
+
+def test_turn_to_dict_roundtrip():
+    turn = Turn("turn_run_sync", {"x": 10}, metadata={"key": "value"}, timeout=30)
+    asyncio.run(turn.returning())
+    data = turn.to_dict()
+    assert data["uuid"] == turn.uuid
+    assert data["tool_name"] == "turn_run_sync"
+    assert data["kwargs"] == {"x": 10}
+    assert data["metadata"] == {"key": "value"}
+    assert data["timeout"] == 30
+    assert data["output"] == 11
+    assert data["stop_reason"] == "completed"
+    assert "start_time" in data and data["start_time"] is not None
+    assert "end_time" in data and data["end_time"] is not None
+
+    restored = Turn.from_dict(data)
+    assert restored.uuid == turn.uuid
+    assert restored.tool_name == turn.tool_name
+    assert restored.kwargs == turn.kwargs
+    assert restored.metadata == turn.metadata
+    assert restored.timeout == turn.timeout
+    assert restored.output == turn.output
+    assert restored.start_time == turn.start_time
+    assert restored.end_time == turn.end_time
+    assert restored.stop_reason == turn.stop_reason
+    assert restored.tool is turn.tool
+
+
+def test_turn_from_dict_minimal():
+    data = {"tool_name": "turn_run_sync", "kwargs": {"x": 5}}
+    turn = Turn.from_dict(data)
+    assert turn.tool_name == "turn_run_sync"
+    assert turn.kwargs == {"x": 5}
+    assert turn.metadata == {}
+    assert turn.timeout == 60
+    assert turn.start_time is None
+    assert turn.end_time is None
+    assert turn.stop_reason is None
+    assert turn.output is None
+    assert turn.uuid is not None
+    result = asyncio.run(turn.returning())
+    assert result == 6

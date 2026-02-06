@@ -36,6 +36,14 @@ class Tool(Protocol):
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
+class CompletionCheckTool(Protocol):
+    metadata: ToolMetadata
+    fn: Callable[..., Coroutine[Any, Any, bool]]
+    lock: asyncio.Lock | None
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Coroutine[Any, Any, bool]: ...
+
+
 def tool(
     func: Callable[..., T] | None = None,
     *,
@@ -52,6 +60,16 @@ def tool(
             raise TypeError(
                 "Tool must be async (coroutine or async generator function)."
             )
+        if type is ToolType.COMPLETION_CHECK:
+            if inspect.isasyncgenfunction(fn):
+                raise TypeError(
+                    "COMPLETION_CHECK tool must be a coroutine, not an async generator."
+                )
+            sig = inspect.signature(fn)
+            if sig.return_annotation is inspect.Signature.empty or sig.return_annotation is not bool:
+                raise TypeError(
+                    "COMPLETION_CHECK tool must declare return type bool (e.g. async def fn(...) -> bool)."
+                )
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):

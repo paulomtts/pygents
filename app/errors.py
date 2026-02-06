@@ -12,3 +12,15 @@ class WrongRunMethodError(Exception):
 
 class TurnTimeoutError(TimeoutError):
     """Raised when a Turn exceeds its timeout while running."""
+
+
+class UnregisteredToolError(KeyError):
+    """Raised when a tool name is not found in ToolRegistry."""
+
+
+class UnregisteredAgentError(KeyError):
+    """Raised when an agent name is not found in AgentRegistry."""
+
+
+class CompletionCheckReturnError(TypeError):
+    """Raised when a COMPLETION_CHECK tool returns a value that is not bool."""

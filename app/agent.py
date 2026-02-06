@@ -1,11 +1,29 @@
 import asyncio
 import inspect
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Callable, TypeVar
 
-from app.errors import TurnTimeoutError
+from app.errors import (
+    CompletionCheckReturnError,
+    SafeExecutionError,
+    TurnTimeoutError,
+)
 from app.hooks import AgentHook, run_hooks
+from app.registry import AgentRegistry, ToolRegistry
 from app.tool import Tool, ToolType
 from app.turn import Turn
+
+R = TypeVar("R")
+
+
+def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
+    def wrapper(self: "Agent", *args: Any, **kwargs: Any) -> R:
+        if not self._is_running:
+            return func(self, *args, **kwargs)
+        raise SafeExecutionError(
+            f"Skipped <{func.__name__}> call because {self} is running."
+        )
+
+    return wrapper
 
 
 class Agent:
@@ -17,13 +35,38 @@ class Agent:
     name: str
     description: str
 
+    _is_running: bool = False
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name != "_is_running" and getattr(self, "_is_running", False):
+            raise SafeExecutionError(
+                f"Cannot change property '{name}' while the agent is running."
+            )
+        super().__setattr__(name, value)
+
     def __init__(self, name: str, description: str, tools: list[Tool]):
+        for t in tools:
+            registered = ToolRegistry.get(t.metadata.name)
+            if registered is not t:
+                raise ValueError(
+                    f"Tool {t.metadata.name!r} is registered but not the instance given to this agent."
+                )
         self.name = name
         self.description = description
         self.tools = tools
         self._tool_names = {t.metadata.name for t in tools}
-        self._queue: asyncio.Queue[Turn] = asyncio.Queue()
-        self.hooks: dict[AgentHook, list] = {}
+        self._queue = asyncio.Queue()
+        self.hooks = {}
+        self._is_running = False
+        AgentRegistry.register(self)
+
+    def _queue_snapshot(self) -> list[Turn]:
+        items = []
+        for _ in range(self._queue.qsize()):
+            turn = self._queue.get_nowait()
+            items.append(turn)
+            self._queue.put_nowait(turn)
+        return items
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
         await run_hooks(self.hooks.get(name, []), *args, **kwargs)
@@ -48,46 +91,80 @@ class Agent:
         self._queue.put_nowait(turn)
         await self._run_hooks(AgentHook.AFTER_PUT, self, turn)
 
+    async def send_turn(self, agent_name: str, turn: Turn) -> None:
+        """
+        Enqueue a Turn on another Agent's queue. The target agent must be registered in AgentRegistry.
+        """
+        target = AgentRegistry.get(agent_name)
+        await target.put(turn)
+
+    def _is_completion_check_true(self, turn: Turn) -> bool:
+        if turn.tool.metadata.type != ToolType.COMPLETION_CHECK:
+            return False
+        if not isinstance(turn.output, bool):
+            raise CompletionCheckReturnError(
+                f"COMPLETION_CHECK tool {turn.tool.metadata.name!r} must return bool, got {type(turn.output).__name__}"
+            )
+        return turn.output
+
     async def _run_turn(self, turn: Turn) -> Any:
         if inspect.isasyncgenfunction(turn.tool.fn):
             return [x async for x in turn.yielding()]
         return await turn.returning()
 
+    @safe_execution
     async def run(self) -> AsyncIterator[tuple[Turn, Any]]:
         """
         Run the event loop until a completion-check tool returns True.
         Streams results: yields (turn, value) for each value produced (one per run for single-value tools, one per yield for async-gen tools).
         Propagates TurnTimeoutError and any exception raised by a tool.
         """
-        while True:
-            await self._run_hooks(AgentHook.BEFORE_TURN, self)
-            turn = await self.pop()
-            try:
-                if inspect.isasyncgenfunction(turn.tool.fn):
-                    async for value in turn.yielding():
+        try:
+            self._is_running = True
+            while True:
+                await self._run_hooks(AgentHook.BEFORE_TURN, self)
+                turn = await self.pop()
+                try:
+                    if inspect.isasyncgenfunction(turn.tool.fn):
+                        async for value in turn.yielding():
+                            await self._run_hooks(
+                                AgentHook.ON_TURN_VALUE, self, turn, value
+                            )
+                            yield (turn, value)
+                    else:
+                        output = await turn.returning()
                         await self._run_hooks(
-                            AgentHook.ON_TURN_VALUE, self, turn, value
+                            AgentHook.ON_TURN_VALUE, self, turn, output
                         )
-                        yield (turn, value)
-                else:
-                    output = await turn.returning()
-                    await self._run_hooks(
-                        AgentHook.ON_TURN_VALUE, self, turn, output
-                    )
-                    yield (turn, output)
-            except TurnTimeoutError:
-                await self._run_hooks(AgentHook.ON_TURN_TIMEOUT, self, turn)
-                raise
-            except Exception as e:
-                await self._run_hooks(AgentHook.ON_TURN_ERROR, self, turn, e)
-                raise
-            await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
+                        yield (turn, output)
+                except TurnTimeoutError:
+                    await self._run_hooks(AgentHook.ON_TURN_TIMEOUT, self, turn)
+                    raise
+                except Exception as e:
+                    await self._run_hooks(AgentHook.ON_TURN_ERROR, self, turn, e)
+                    raise
+                await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
 
-            if (
-                turn.tool.metadata.type == ToolType.COMPLETION_CHECK
-                and turn.output is True
-            ):
-                break
+                if self._is_completion_check_true(turn):
+                    break
 
-            if isinstance(turn.output, Turn):
-                await self.put(turn.output)
+                if isinstance(turn.output, Turn):
+                    await self.put(turn.output)
+        finally:
+            self._is_running = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "tool_names": [t.metadata.name for t in self.tools],
+            "queue": [t.to_dict() for t in self._queue_snapshot()],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Agent":
+        tools = [ToolRegistry.get(name) for name in data["tool_names"]]
+        agent = cls(data["name"], data["description"], tools)
+        for turn_data in data.get("queue", []):
+            agent._queue.put_nowait(Turn.from_dict(turn_data))
+        return agent
