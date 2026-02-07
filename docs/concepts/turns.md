@@ -84,7 +84,7 @@ Turn hooks fire at specific points during execution. Exceptions in hooks propaga
 from pygents import TurnHook
 
 async def log_start(turn):
-    print(f"Starting {turn.tool_name}")
+    print(f"Starting {turn.tool.metadata.name}")
 
 turn.add_hook(TurnHook.BEFORE_RUN, log_start)  # registers in HookRegistry and appends
 ```

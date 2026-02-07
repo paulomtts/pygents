@@ -268,7 +268,7 @@ def test_turn_to_dict_roundtrip():
 
     restored = Turn.from_dict(data)
     assert restored.uuid == turn.uuid
-    assert restored.tool_name == turn.tool_name
+    assert restored.tool.metadata.name == turn.tool.metadata.name
     assert restored.kwargs == turn.kwargs
     assert restored.metadata == turn.metadata
     assert restored.timeout == turn.timeout
@@ -282,7 +282,7 @@ def test_turn_to_dict_roundtrip():
 def test_turn_from_dict_minimal():
     data = {"tool_name": "turn_run_sync", "kwargs": {"x": 5}}
     turn = Turn.from_dict(data)
-    assert turn.tool_name == "turn_run_sync"
+    assert turn.tool.metadata.name == "turn_run_sync"
     assert turn.kwargs == {"x": 5}
     assert turn.metadata == {}
     assert turn.timeout == 60

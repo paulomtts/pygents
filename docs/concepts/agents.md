@@ -26,7 +26,7 @@ await agent.put(Turn("work", kwargs={"x": 5}))
 await agent.put(Turn("work", kwargs={"x": 10}))
 
 async for turn, value in agent.run():
-    print(f"{turn.tool_name}: {value}")
+    print(f"{turn.tool.metadata.name}: {value}")
     # work: 10
     # work: 20
     # (then loop exits when queue is empty)
@@ -93,7 +93,7 @@ Agent hooks fire at specific points during the run loop. Exceptions in hooks pro
 from pygents import AgentHook
 
 async def on_complete(agent, turn):
-    print(f"[{agent.name}] {turn.tool_name} → {turn.stop_reason}")
+    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.stop_reason}")
 
 agent.add_hook(AgentHook.AFTER_TURN, on_complete)  # registers in HookRegistry and appends
 ```

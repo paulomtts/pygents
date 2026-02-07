@@ -50,7 +50,6 @@ class Turn[T]:
     """
 
     uuid: str
-    tool_name: str
     tool: Tool | None = None
     kwargs: dict[str, Any] = {}
     metadata: dict[str, Any] = {}
@@ -85,7 +84,7 @@ class Turn[T]:
 
     def __init__(
         self,
-        tool_name: str,
+        tool: str | Callable,
         kwargs: dict[str, Any] = {},
         metadata: dict[str, Any] | None = None,
         timeout: int = 60,
@@ -95,8 +94,11 @@ class Turn[T]:
         uuid: str | None = None,
     ):
         self.uuid = uuid if uuid is not None else str(uuid4())
-        self.tool_name = tool_name
-        self.tool = ToolRegistry.get(tool_name)
+        if isinstance(tool, str):
+            resolved = ToolRegistry.get(tool)
+        else:
+            resolved = ToolRegistry.get(tool.__name__)
+        self.tool = resolved
         self.kwargs = kwargs
         self.metadata = metadata if metadata is not None else {}
         self.timeout = timeout
@@ -228,7 +230,7 @@ class Turn[T]:
     def to_dict(self) -> dict[str, Any]:
         return {
             "uuid": self.uuid,
-            "tool_name": self.tool_name,
+            "tool_name": self.tool.metadata.name,
             "kwargs": self._eval_kwargs(self.kwargs),
             "metadata": self.metadata,
             "timeout": self.timeout,
@@ -245,7 +247,7 @@ class Turn[T]:
         end_time = data.get("end_time")
         stop_reason = data.get("stop_reason")
         turn = cls(
-            tool_name=data["tool_name"],
+            tool=data["tool_name"],
             kwargs=data.get("kwargs", {}),
             metadata=data.get("metadata", {}),
             timeout=data.get("timeout", 60),

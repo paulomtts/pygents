@@ -29,7 +29,7 @@ async def main():
     await agent.put(Turn("fetch", kwargs={"url": "https://example.com"}))
 
     async for turn, value in agent.run():
-        print(f"{turn.tool_name}: {value}")
+        print(f"{turn.tool.metadata.name}: {value}")
 
 asyncio.run(main())
 ```
