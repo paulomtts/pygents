@@ -45,4 +45,4 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
 
 ## Docs
 
-Full documentation: `uv run mkdocs serve`
+Full documentation: `uv run mkdocs serve`. MkDocs is an optional dependency—install with `pip install -e ".[docs]"` (or use `uv run` as above) so the library itself does not depend on it.
