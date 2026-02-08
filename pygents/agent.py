@@ -1,28 +1,13 @@
 import asyncio
 import inspect
-from typing import Any, AsyncIterator, Callable, TypeVar
+from typing import Any, AsyncIterator
 
-from pygents.errors import (
-    SafeExecutionError,
-    TurnTimeoutError,
-)
+from pygents.errors import SafeExecutionError, TurnTimeoutError
 from pygents.hooks import AgentHook, Hook, run_hooks
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool
 from pygents.turn import Turn
-
-R = TypeVar("R")
-
-
-def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
-    def wrapper(self: "Agent", *args: Any, **kwargs: Any) -> R:
-        if not self._is_running:
-            return func(self, *args, **kwargs)
-        raise SafeExecutionError(
-            f"Skipped <{func.__name__}> call because {self} is running."
-        )
-
-    return wrapper
+from pygents.utils import safe_execution
 
 
 class Agent:

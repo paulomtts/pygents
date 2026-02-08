@@ -39,6 +39,7 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
 - **Dynamic arguments** — callable kwargs evaluated at runtime
 - **Timeouts** — per-turn, default 60s
 - **Per-tool locking** — opt-in serialization for shared state
+- **Fixed kwargs** — decorator kwargs (e.g. `@tool(permission="admin")`) are merged into every invocation; call-time kwargs override
 - **Hooks** — async callbacks at turn, agent, and tool level
 - **Serialization** — `to_dict()` / `from_dict()` for turns and agents
 

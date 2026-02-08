@@ -7,7 +7,7 @@ from pygents.errors import (
     UnregisteredToolError,
     WrongRunMethodError,
 )
-from pygents.hooks import AgentHook, Hook, run_hooks, ToolHook, TurnHook
+from pygents.hooks import AgentHook, Hook, ToolHook, TurnHook, run_hooks
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool, ToolMetadata, tool
 from pygents.turn import StopReason, Turn

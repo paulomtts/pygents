@@ -10,8 +10,8 @@ from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodE
 from pygents.hooks import Hook, TurnHook, run_hooks
 from pygents.registry import HookRegistry, ToolRegistry
 from pygents.tool import Tool
+from pygents.utils import eval_kwargs, safe_execution
 
-R = TypeVar("R")
 T = TypeVar("T")
 
 
@@ -33,17 +33,6 @@ class _NullLock:
 _null_lock = _NullLock()
 
 
-def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
-    def wrapper(self: "Turn", *args: Any, **kwargs: Any) -> R:
-        if not self._is_running:
-            return func(self, *args, **kwargs)
-        raise SafeExecutionError(
-            f"Skipped <{func.__name__}> call because {self} is running."
-        )
-
-    return wrapper
-
-
 class Turn[T]:
     """
     A Turn represents a single conceptual unit of work. It describes what should happen - but not how it should happen.
@@ -60,12 +49,6 @@ class Turn[T]:
     stop_reason: StopReason | None = None
 
     _is_running: bool = False
-
-    def _eval_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        function_type = type(lambda: None)
-        return {
-            k: v() if isinstance(v, function_type) else v for k, v in kwargs.items()
-        }
 
     def __setattr__(self, name: str, value: Any) -> None:
         mutable_while_running = {
@@ -133,7 +116,7 @@ class Turn[T]:
                     raise WrongRunMethodError(
                         "Tool is async generator; use yielding() instead."
                     )
-                runtime_kwargs = self._eval_kwargs(self.kwargs)
+                runtime_kwargs = eval_kwargs(self.kwargs)
                 self.output = await asyncio.wait_for(
                     self.tool(**runtime_kwargs), timeout=self.timeout
                 )
@@ -169,7 +152,7 @@ class Turn[T]:
                     raise WrongRunMethodError(
                         "Tool is not an async generator; use returning() for single value."
                     )
-                runtime_kwargs = self._eval_kwargs(self.kwargs)
+                runtime_kwargs = eval_kwargs(self.kwargs)
                 queue: asyncio.Queue[Any] = asyncio.Queue()
 
                 async def produce() -> None:
@@ -231,7 +214,7 @@ class Turn[T]:
         return {
             "uuid": self.uuid,
             "tool_name": self.tool.metadata.name,
-            "kwargs": self._eval_kwargs(self.kwargs),
+            "kwargs": eval_kwargs(self.kwargs),
             "metadata": self.metadata,
             "timeout": self.timeout,
             "start_time": self.start_time.isoformat() if self.start_time else None,
