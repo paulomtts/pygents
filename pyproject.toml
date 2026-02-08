@@ -8,16 +8,15 @@ version = "0.1.4"
 description = "Async agent orchestration for Python"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.5.0",
     "bump2version>=1.0.1",
     "pytest>=8.0.0",
     "ruff>=0.15.0",
-]
-
-[project.optional-dependencies]
-docs = [
-    "mkdocs>=1.6.1",
-    "mkdocs-material>=9.5.0",
 ]
 
 
