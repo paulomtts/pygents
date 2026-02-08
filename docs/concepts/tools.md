@@ -27,8 +27,18 @@ async def write_file(path: str, content: str) -> None:
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `lock` | `False` | If `True`, concurrent runs of this tool are serialized via `asyncio.Lock` |
+| `**kwargs` | — | Any other keyword arguments are passed to the decorated function on every invocation. Call-time kwargs override these (with a warning). |
 
-Locking is opt-in because most tools are stateless and can run in parallel without contention. Use `lock=True` for tools that write to shared state (files, databases, external APIs with rate limits).
+!!! info "Opt-in Locking"
+    Locking is opt-in because most tools are stateless and can run in parallel without contention. Use `lock=True` for tools that write to shared state (files, databases, external APIs with rate limits).
+
+If any decorator kwarg is a callable (e.g. a lambda), it is **evaluated at runtime** when the tool is invoked; the function receives the result. Use this for dynamic config, fresh tokens, or values that must be read at invocation time.
+
+```python
+@tool(api_key=lambda: get_config()["api_key"])
+async def call_api(endpoint: str) -> str:
+    ...
+```
 
 ## Single-value vs streaming
 
