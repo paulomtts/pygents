@@ -29,6 +29,26 @@ def test_register_duplicate_name_raises_value_error():
         ToolRegistry.register(duplicate_name)
 
 
+def test_all_returns_all_registered_tools():
+    @tool()
+    async def tool_one(x: int) -> int:
+        return x
+
+    @tool()
+    async def tool_two(y: str) -> str:
+        return y
+
+    @tool()
+    async def tool_three(z: float) -> float:
+        return z
+
+    all_tools = ToolRegistry.all()
+    assert tool_one in all_tools
+    assert tool_two in all_tools
+    assert tool_three in all_tools
+    assert len(all_tools) >= 3
+
+
 @tool()
 async def _registry_test_tool(x: int) -> int:
     return x

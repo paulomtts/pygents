@@ -4,7 +4,11 @@ from __future__ import annotations
 from abc import ABC
 from typing import TYPE_CHECKING
 
-from pygents.errors import UnregisteredAgentError, UnregisteredHookError, UnregisteredToolError
+from pygents.errors import (
+    UnregisteredAgentError,
+    UnregisteredHookError,
+    UnregisteredToolError,
+)
 
 if TYPE_CHECKING:
     from pygents.agent import Agent
@@ -52,6 +56,13 @@ class ToolRegistry(ABC):
         if tool is None:
             raise UnregisteredToolError(f"Tool {name!r} not found")
         return tool
+
+    @classmethod
+    def all(cls) -> list[Tool]:
+        """
+        Get all registered Tools.
+        """
+        return list(cls._registry.values())
 
 
 class AgentRegistry(ABC):
