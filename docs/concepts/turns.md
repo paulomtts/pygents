@@ -35,7 +35,9 @@ The agent's `run()` picks the right method automatically.
 |-----------|-----|------------------------|
 | `tool`, `args`, `kwargs`, `timeout` | init | No |
 | `metadata` | init (optional dict) | Yes |
-| `output`, `start_time`, `end_time`, `stop_reason` | during/after run | Yes (by framework) |
+| `output`, `start_time`, `end_time`, `stop_reason` | by framework during/after run | Yes (by framework) |
+
+`start_time`, `end_time`, and `stop_reason` are **not** constructor parameters — they are managed by the framework and set during execution. On a fresh turn they default to `None`. When deserializing with `from_dict()`, the class method restores them directly on the instance.
 
 !!! warning "SafeExecutionError"
     Changing immutable attributes while running raises `SafeExecutionError`. Calling `returning()` or `yielding()` on an already-running turn also raises `SafeExecutionError`.

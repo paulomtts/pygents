@@ -1,10 +1,11 @@
 # pygents
 
-Async agent orchestration for Python. Three abstractions:
+Async agent orchestration for Python. Four abstractions:
 
 - **Tools** define _how_ — async functions decorated with `@tool`
 - **Turns** define _what_ — which tool to run with what arguments
 - **Agents** _orchestrate_ — process a queue of turns and stream results
+- **Working Memory** provides _context_ — bounded, branchable window of state
 
 ## Install
 
@@ -107,6 +108,7 @@ await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 | Timeouts | Per-turn timeout (default 60s), raises `TurnTimeoutError` |
 | Per-tool locking | `@tool(lock=True)` serializes concurrent runs |
 | Hooks | Async callbacks at turn, agent, and tool level |
-| Serialization | `to_dict()` / `from_dict()` for turns and agents |
+| Serialization | `to_dict()` / `from_dict()` for turns, agents, and working memory |
+| Working memory | Bounded context window with branching and optional compaction |
 
-Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), or [Agents](concepts/agents.md).
+Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), or [Working Memory](concepts/working-memory.md).

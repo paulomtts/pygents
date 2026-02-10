@@ -45,12 +45,6 @@ class Turn[T]:
         Keyword arguments for the tool. Callables are evaluated at run time.
     timeout : int
         Max seconds for the turn to run. Default 60.
-    start_time : datetime | None
-        Set when the turn starts running.
-    end_time : datetime | None
-        Set when the turn finishes.
-    stop_reason : StopReason | None
-        Why the turn stopped (completed, timeout, error, cancelled).
     metadata : dict[str, Any] | None
         Optional metadata.
     """
@@ -90,9 +84,6 @@ class Turn[T]:
         args: Iterable[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
         timeout: int = 60,
-        start_time: datetime | None = None,
-        end_time: datetime | None = None,
-        stop_reason: StopReason | None = None,
         metadata: dict[str, Any] | None = None,
     ):
         if isinstance(tool, str):
@@ -104,9 +95,9 @@ class Turn[T]:
         self.kwargs = kwargs if kwargs is not None else {}
         self.metadata = metadata if metadata is not None else {}
         self.timeout = timeout
-        self.start_time = start_time
-        self.end_time = end_time
-        self.stop_reason = stop_reason
+        self.start_time = None
+        self.end_time = None
+        self.stop_reason = None
         self._is_running = False
         self.hooks: dict[TurnHook, list] = {}
 
@@ -263,19 +254,19 @@ class Turn[T]:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Turn[Any]":
-        start_time = data.get("start_time")
-        end_time = data.get("end_time")
-        stop_reason = data.get("stop_reason")
         turn = cls(
             tool=data["tool_name"],
             args=data.get("args", []),
             kwargs=data.get("kwargs", {}),
             timeout=data.get("timeout", 60),
-            start_time=datetime.fromisoformat(start_time) if start_time else None,
-            end_time=datetime.fromisoformat(end_time) if end_time else None,
-            stop_reason=StopReason(stop_reason) if stop_reason else None,
             metadata=data.get("metadata", {}),
         )
+        start_time = data.get("start_time")
+        end_time = data.get("end_time")
+        stop_reason = data.get("stop_reason")
+        turn.start_time = datetime.fromisoformat(start_time) if start_time else None
+        turn.end_time = datetime.fromisoformat(end_time) if end_time else None
+        turn.stop_reason = StopReason(stop_reason) if stop_reason else None
         if "output" in data:
             turn.output = data["output"]
         for hook_type_str, hook_names in data.get("hooks", {}).items():
