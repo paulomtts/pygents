@@ -1,7 +1,11 @@
 import pytest
 
 from pygents.agent import Agent
-from pygents.errors import UnregisteredAgentError, UnregisteredHookError, UnregisteredToolError
+from pygents.errors import (
+    UnregisteredAgentError,
+    UnregisteredHookError,
+    UnregisteredToolError,
+)
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import tool
 

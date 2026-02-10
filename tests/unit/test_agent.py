@@ -45,7 +45,7 @@ def test_agent_rejects_tool_not_in_registry():
 def test_put_rejects_turn_with_unknown_tool():
     AgentRegistry.clear()
     agent = Agent("a", "desc", [add_agent])
-    turn = Turn("add_agent", {"a": 1, "b": 2})
+    turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
     fake_tool = type("FakeTool", (), {"metadata": type("M", (), {"name": "other_tool"})()})()
     object.__setattr__(turn, "tool", fake_tool)
     with pytest.raises(ValueError, match="does not accept tool"):
@@ -55,7 +55,7 @@ def test_put_rejects_turn_with_unknown_tool():
 def test_put_then_pop_returns_same_turn():
     AgentRegistry.clear()
     agent = Agent("a", "desc", [add_agent])
-    turn = Turn("add_agent", {"a": 1, "b": 2})
+    turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
 
     async def pop_and_run():
         await agent.put(turn)
@@ -72,7 +72,7 @@ def test_run_processes_turn_and_stops_when_queue_empty():
     agent = Agent("a", "desc", [add_agent])
 
     async def consume():
-        await agent.put(Turn("add_agent", {"a": 1, "b": 2}))
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
         async for _ in agent.run():
             pass
 
@@ -85,8 +85,8 @@ def test_run_streams_turn_results():
     agent = Agent("a", "desc", [add_agent])
 
     async def collect():
-        await agent.put(Turn("add_agent", {"a": 1, "b": 2}))
-        await agent.put(Turn("add_agent", {"a": 10, "b": 20}))
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        await agent.put(Turn("add_agent", kwargs={"a": 10, "b": 20}))
         items = []
         async for t, v in agent.run():
             items.append((t, v))
@@ -100,13 +100,30 @@ def test_run_streams_turn_results():
     assert items[1][0].output == 30
 
 
+def test_run_supports_turn_with_positional_args():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+
+    async def collect():
+        await agent.put(Turn("add_agent", args=[1, 2]))
+        items = []
+        async for t, v in agent.run():
+            items.append((t, v))
+        return items
+
+    items = asyncio.run(collect())
+    assert len(items) == 1
+    assert items[0][1] == 3
+    assert items[0][0].output == 3
+
+
 def test_run_streams_yielding_turn_multiple_values():
     AgentRegistry.clear()
     agent = Agent("a", "desc", [stream_agent, add_agent])
 
     async def collect():
-        await agent.put(Turn("stream_agent", {}))
-        await agent.put(Turn("add_agent", {"a": 5, "b": 5}))
+        await agent.put(Turn("stream_agent", kwargs={}))
+        await agent.put(Turn("add_agent", kwargs={"a": 5, "b": 5}))
         items = []
         async for t, v in agent.run():
             items.append((t, v))
@@ -123,7 +140,7 @@ def test_run_propagates_turn_timeout_error():
     agent = Agent("a", "desc", [slow_tool_agent])
 
     async def consume():
-        await agent.put(Turn("slow_tool_agent", {"duration": 2.0}, timeout=1))
+        await agent.put(Turn("slow_tool_agent", kwargs={"duration": 2.0}, timeout=1))
         async for _ in agent.run():
             pass
 
@@ -136,8 +153,8 @@ def test_run_reentrant_raises_safe_execution_error():
     agent = Agent("a", "desc", [slow_tool_agent])
 
     async def main():
-        await agent.put(Turn("slow_tool_agent", {"duration": 2.0}))
-        await agent.put(Turn("slow_tool_agent", {"duration": 0.1}))
+        await agent.put(Turn("slow_tool_agent", kwargs={"duration": 2.0}))
+        await agent.put(Turn("slow_tool_agent", kwargs={"duration": 0.1}))
         runner = asyncio.create_task(_consume(agent.run()))
         await asyncio.sleep(0.05)
         with pytest.raises(SafeExecutionError, match="running"):
@@ -162,8 +179,8 @@ def test_send_turn_enqueues_on_target_agent():
     agent_b = Agent("bob", "Second", [add_agent])
 
     async def main():
-        await agent_a.send_turn("bob", Turn("add_agent", {"a": 10, "b": 20}))
-        await agent_a.send_turn("bob", Turn("add_agent", {"a": 5, "b": 5}))
+        await agent_a.send_turn("bob", Turn("add_agent", kwargs={"a": 10, "b": 20}))
+        await agent_a.send_turn("bob", Turn("add_agent", kwargs={"a": 5, "b": 5}))
         out = []
         async for t, v in agent_b.run():
             out.append((t, v))
@@ -180,7 +197,7 @@ def test_send_turn_to_unregistered_agent_raises():
     agent = Agent("solo", "Only", [add_agent])
 
     async def main():
-        await agent.send_turn("nonexistent", Turn("add_agent", {"a": 1, "b": 2}))
+        await agent.send_turn("nonexistent", Turn("add_agent", kwargs={"a": 1, "b": 2}))
 
     with pytest.raises(UnregisteredAgentError, match="not found"):
         asyncio.run(main())
@@ -201,8 +218,8 @@ def test_agent_to_dict_includes_queued_turns():
     agent = Agent("q", "With queue", [add_agent])
 
     async def put_then_serialize():
-        await agent.put(Turn("add_agent", {"a": 2, "b": 3}, metadata={"m": 1}))
-        await agent.put(Turn("add_agent", {"a": 10, "b": 20}))
+        await agent.put(Turn("add_agent", kwargs={"a": 2, "b": 3}, metadata={"m": 1}))
+        await agent.put(Turn("add_agent", kwargs={"a": 10, "b": 20}))
         return agent.to_dict()
 
     data = asyncio.run(put_then_serialize())
@@ -218,8 +235,8 @@ def test_agent_from_dict_roundtrip():
     agent = Agent("roundtrip", "Desc", [add_agent])
 
     async def put_run_serialize():
-        await agent.put(Turn("add_agent", {"a": 5, "b": 10}))
-        await agent.put(Turn("add_agent", {"a": 1, "b": 1}))
+        await agent.put(Turn("add_agent", kwargs={"a": 5, "b": 10}))
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 1}))
         return agent.to_dict()
 
     data = asyncio.run(put_run_serialize())

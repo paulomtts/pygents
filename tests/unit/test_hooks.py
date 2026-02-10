@@ -36,7 +36,7 @@ def test_tool_hooks_before_and_after_invoke():
     async def hooked_tool(x: int) -> int:
         return x + 10
 
-    turn = Turn("hooked_tool", {"x": 5})
+    turn = Turn("hooked_tool", kwargs={"x": 5})
     result = asyncio.run(turn.returning())
 
     assert result == 15
@@ -61,7 +61,7 @@ def test_tool_hooks_async_gen_before_and_after_invoke():
         yield "a"
         yield "b"
 
-    turn = Turn("hooked_gen_tool", {})
+    turn = Turn("hooked_gen_tool", kwargs={})
 
     async def collect():
         return [x async for x in turn.yielding()]
@@ -97,7 +97,7 @@ def test_turn_add_hook_registers_and_adds():
     async def turn_hook(turn):
         pass
 
-    turn = Turn("tool_for_hook_test", {"x": 5})
+    turn = Turn("tool_for_hook_test", kwargs={"x": 5})
     turn.add_hook(TurnHook.BEFORE_RUN, turn_hook)
 
     assert turn_hook in turn.hooks[TurnHook.BEFORE_RUN]
@@ -110,7 +110,7 @@ def test_turn_add_hook_with_custom_name():
     async def another_turn_hook(turn):
         pass
 
-    turn = Turn("tool_for_hook_test", {"x": 5})
+    turn = Turn("tool_for_hook_test", kwargs={"x": 5})
     turn.add_hook(TurnHook.AFTER_RUN, another_turn_hook, name="custom_turn_hook")
 
     assert another_turn_hook in turn.hooks[TurnHook.AFTER_RUN]
@@ -125,7 +125,7 @@ def test_turn_to_dict_includes_hooks():
 
     HookRegistry.register(serializable_turn_hook)
 
-    turn = Turn("tool_for_hook_test", {"x": 10})
+    turn = Turn("tool_for_hook_test", kwargs={"x": 10})
     turn.hooks[TurnHook.BEFORE_RUN] = [serializable_turn_hook]
 
     data = turn.to_dict()
@@ -157,11 +157,11 @@ def test_turn_serialization_roundtrip_with_hooks():
     events = []
 
     async def roundtrip_hook(turn):
-        events.append(turn.uuid)
+        events.append(id(turn))
 
     HookRegistry.register(roundtrip_hook)
 
-    turn = Turn("tool_for_hook_test", {"x": 7})
+    turn = Turn("tool_for_hook_test", kwargs={"x": 7})
     turn.hooks[TurnHook.BEFORE_RUN] = [roundtrip_hook]
 
     data = turn.to_dict()
@@ -170,7 +170,7 @@ def test_turn_serialization_roundtrip_with_hooks():
     assert restored.hooks[TurnHook.BEFORE_RUN] == [roundtrip_hook]
 
     asyncio.run(restored.returning())
-    assert events == [restored.uuid]
+    assert events == [id(restored)]
     assert restored.output == 14
 
 
@@ -256,7 +256,7 @@ def test_agent_serialization_roundtrip_with_hooks():
     agent.hooks[AgentHook.ON_TURN_VALUE] = [agent_roundtrip_hook]
 
     async def put_and_serialize():
-        await agent.put(Turn("tool_for_hook_test", {"x": 3}))
+        await agent.put(Turn("tool_for_hook_test", kwargs={"x": 3}))
         return agent.to_dict()
 
     data = asyncio.run(put_and_serialize())

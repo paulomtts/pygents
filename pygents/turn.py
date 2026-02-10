@@ -3,14 +3,12 @@ import inspect
 import time
 from datetime import datetime
 from enum import Enum
-from typing import Any, AsyncIterator, Callable, TypeVar
-from uuid import uuid4
-
+from typing import Any, AsyncIterator, Callable, Iterable, TypeVar
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from pygents.hooks import Hook, TurnHook, run_hooks
 from pygents.registry import HookRegistry, ToolRegistry
 from pygents.tool import Tool
-from pygents.utils import eval_kwargs, safe_execution
+from pygents.utils import eval_args, eval_kwargs, safe_execution
 
 T = TypeVar("T")
 
@@ -38,8 +36,8 @@ class Turn[T]:
     A Turn represents a single conceptual unit of work. It describes what should happen - but not how it should happen.
     """
 
-    uuid: str
     tool: Tool | None = None
+    args: list[Any] = []
     kwargs: dict[str, Any] = {}
     metadata: dict[str, Any] = {}
     output: Any | None = None
@@ -68,21 +66,21 @@ class Turn[T]:
     def __init__(
         self,
         tool: str | Callable,
-        kwargs: dict[str, Any] = {},
-        metadata: dict[str, Any] | None = None,
+        args: Iterable[Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
         timeout: int = 60,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         stop_reason: StopReason | None = None,
-        uuid: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ):
-        self.uuid = uuid if uuid is not None else str(uuid4())
         if isinstance(tool, str):
             resolved = ToolRegistry.get(tool)
         else:
             resolved = ToolRegistry.get(tool.__name__)
         self.tool = resolved
-        self.kwargs = kwargs
+        self.args = list(args) if args is not None else []
+        self.kwargs = kwargs if kwargs is not None else {}
         self.metadata = metadata if metadata is not None else {}
         self.timeout = timeout
         self.start_time = start_time
@@ -116,9 +114,10 @@ class Turn[T]:
                     raise WrongRunMethodError(
                         "Tool is async generator; use yielding() instead."
                     )
+                runtime_args = eval_args(self.args)
                 runtime_kwargs = eval_kwargs(self.kwargs)
                 self.output = await asyncio.wait_for(
-                    self.tool(**runtime_kwargs), timeout=self.timeout
+                    self.tool(*runtime_args, **runtime_kwargs), timeout=self.timeout
                 )
                 self.stop_reason = StopReason.COMPLETED
                 await self._run_hooks(TurnHook.AFTER_RUN, self)
@@ -152,12 +151,13 @@ class Turn[T]:
                     raise WrongRunMethodError(
                         "Tool is not an async generator; use returning() for single value."
                     )
+                runtime_args = eval_args(self.args)
                 runtime_kwargs = eval_kwargs(self.kwargs)
                 queue: asyncio.Queue[Any] = asyncio.Queue()
 
                 async def produce() -> None:
                     try:
-                        async for value in self.tool(**runtime_kwargs):
+                        async for value in self.tool(*runtime_args, **runtime_kwargs):
                             await queue.put(value)
                     finally:
                         await queue.put(None)
@@ -212,8 +212,8 @@ class Turn[T]:
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "uuid": self.uuid,
             "tool_name": self.tool.metadata.name,
+            "args": eval_args(self.args),
             "kwargs": eval_kwargs(self.kwargs),
             "metadata": self.metadata,
             "timeout": self.timeout,
@@ -231,13 +231,13 @@ class Turn[T]:
         stop_reason = data.get("stop_reason")
         turn = cls(
             tool=data["tool_name"],
+            args=data.get("args", []),
             kwargs=data.get("kwargs", {}),
-            metadata=data.get("metadata", {}),
             timeout=data.get("timeout", 60),
             start_time=datetime.fromisoformat(start_time) if start_time else None,
             end_time=datetime.fromisoformat(end_time) if end_time else None,
             stop_reason=StopReason(stop_reason) if stop_reason else None,
-            uuid=data.get("uuid"),
+            metadata=data.get("metadata", {}),
         )
         if "output" in data:
             turn.output = data["output"]

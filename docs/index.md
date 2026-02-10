@@ -54,15 +54,18 @@ This is powerful because:
 
 ## Dynamic arguments
 
-Callable kwargs are evaluated when the tool runs, not when the turn is created:
+Callable positional args and kwargs are evaluated when the tool runs, not when the turn is created:
 
 ```python
 config = {"retries": 3}
 
-turn = Turn("fetch", kwargs={
-    "url": "https://example.com",
-    "retries": lambda: config["retries"],  # read at runtime
-})
+turn = Turn(
+    "fetch",
+    args=["https://example.com"],
+    kwargs={
+        "retries": lambda: config["retries"],  # read at runtime
+    },
+)
 ```
 
 ## Streaming
@@ -100,7 +103,7 @@ await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 |---------|-------------|
 | Streaming | Agents yield results as produced via `async for turn, value in agent.run()` |
 | Inter-agent messaging | `agent.send_turn(name, turn)` enqueues work on another agent |
-| Dynamic arguments | Callable kwargs evaluated at invocation time |
+| Dynamic arguments | Callable positional args and kwargs evaluated at invocation time |
 | Timeouts | Per-turn timeout (default 60s), raises `TurnTimeoutError` |
 | Per-tool locking | `@tool(lock=True)` serializes concurrent runs |
 | Hooks | Async callbacks at turn, agent, and tool level |

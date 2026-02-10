@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar
 
 from pygents.errors import SafeExecutionError
 
@@ -25,3 +25,7 @@ def eval_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {
         k: v() if isinstance(v, _function_type) else v for k, v in kwargs.items()
     }
+
+
+def eval_args(args: Iterable[Any]) -> list[Any]:
+    return [v() if isinstance(v, _function_type) else v for v in args]

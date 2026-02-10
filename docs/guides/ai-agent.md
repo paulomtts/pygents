@@ -16,10 +16,13 @@ async def chat(messages: list[dict]) -> str | Turn:
     response = await llm.chat(messages=messages, system="You are a calendar assistant.")
 
     if response.tool_calls:  # LLM wants to create an event
-        return Turn(create_event, kwargs=dict(
-            request=response.tool_calls[0].arguments["request"],
-            messages=messages,
-        ))
+        return Turn(
+            create_event,
+            kwargs=dict(
+                request=response.tool_calls[0].arguments["request"],
+                messages=messages,
+            ),
+        )
 
     return response.content
 ```
@@ -49,10 +52,12 @@ async def create_event(request: str, messages: list[dict]) -> Turn:
     )
     calendar.append(event)
 
-    messages.append(dict(
-        role="assistant",
-        content=f"Created '{event.title}' on {event.start:%Y-%m-%d %H:%M}",
-    ))
+    messages.append(
+        dict(
+            role="assistant",
+            content=f"Created '{event.title}' on {event.start:%Y-%m-%d %H:%M}",
+        )
+    )
     return Turn(chat, kwargs=dict(messages=messages))
 ```
 

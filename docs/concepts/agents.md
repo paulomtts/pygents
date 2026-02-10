@@ -23,7 +23,7 @@ Each tool must be the same instance as in `ToolRegistry` — the constructor val
 
 ```python
 await agent.put(Turn("work", kwargs={"x": 5}))
-await agent.put(Turn("work", kwargs={"x": 10}))
+await agent.put(Turn("work", args=[10]))
 
 async for turn, value in agent.run():
     print(f"{turn.tool.metadata.name}: {value}")

@@ -11,6 +11,10 @@ from pygents import Turn
 turn = Turn("fetch", kwargs={"url": "https://example.com"}, timeout=30)
 result = await turn.returning()
 
+# with positional args
+turn = Turn("fetch", args=["https://example.com"], timeout=30)
+result = await turn.returning()
+
 # streaming
 turn = Turn("stream_lines", kwargs={"path": "/tmp/data.txt"})
 async for line in turn.yielding():
@@ -29,8 +33,7 @@ The agent's `run()` picks the right method automatically.
 
 | Attribute | Set | Mutable while running? |
 |-----------|-----|------------------------|
-| `uuid` | init (auto-generated) | No |
-| `tool_name`, `tool`, `kwargs`, `timeout` | init | No |
+| `tool`, `args`, `kwargs`, `timeout` | init | No |
 | `metadata` | init (optional dict) | Yes |
 | `output`, `start_time`, `end_time`, `stop_reason` | during/after run | Yes (by framework) |
 
@@ -55,15 +58,18 @@ For `returning()`, the timeout applies to the single await. For `yielding()`, it
 !!! warning "TurnTimeoutError"
     When a turn exceeds its timeout, `TurnTimeoutError` is raised and `stop_reason` is set to `TIMEOUT`.
 
-## Dynamic kwargs
+## Dynamic args and kwargs
 
-Callable kwargs are late-evaluated: any no-arg callable passed as a kwarg is called at tool invocation time, not at turn creation. This supports dynamic config, rotating tokens, memory reads, or any value that should be fresh when the tool actually runs.
+Callable positional args and kwargs are late-evaluated: any no-arg callable passed as an arg or kwarg is called at tool invocation time, not at turn creation. This supports dynamic config, rotating tokens, memory reads, or any value that should be fresh when the tool actually runs.
 
 ```python
-turn = Turn("fetch", kwargs={
-    "url": "https://example.com",
-    "token": lambda: get_current_token(),  # called when tool runs, not now
-})
+turn = Turn(
+    "fetch",
+    args=[lambda: get_current_url()],  # called when tool runs, not now
+    kwargs={
+        "token": lambda: get_current_token(),  # called when tool runs, not now
+    },
+)
 ```
 
 This is especially useful when turns are queued — the lambda captures the latest state when the turn executes, not when it was created.
@@ -97,7 +103,7 @@ The `add_hook()` method registers the hook in `HookRegistry` automatically. You 
 ## Serialization
 
 ```python
-data = turn.to_dict()    # dict with uuid, tool_name, kwargs, metadata, hooks, ...
+data = turn.to_dict()    # dict with tool_name, args, kwargs, metadata, hooks, ...
 turn = Turn.from_dict(data)  # restores from dict, resolves tool and hooks from registries
 ```
 
