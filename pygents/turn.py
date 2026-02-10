@@ -33,7 +33,26 @@ _null_lock = _NullLock()
 
 class Turn[T]:
     """
-    A Turn represents a single conceptual unit of work. It describes what should happen - but not how it should happen.
+    Single conceptual unit of work: what should happen, not how.
+
+    Parameters
+    ----------
+    tool : str | Callable
+        Tool name (looked up in ToolRegistry) or callable (by __name__).
+    args : Iterable[Any] | None
+        Positional arguments for the tool. Callables are evaluated at run time.
+    kwargs : dict[str, Any] | None
+        Keyword arguments for the tool. Callables are evaluated at run time.
+    timeout : int
+        Max seconds for the turn to run. Default 60.
+    start_time : datetime | None
+        Set when the turn starts running.
+    end_time : datetime | None
+        Set when the turn finishes.
+    stop_reason : StopReason | None
+        Why the turn stopped (completed, timeout, error, cancelled).
+    metadata : dict[str, Any] | None
+        Optional metadata.
     """
 
     tool: Tool | None = None
@@ -47,6 +66,8 @@ class Turn[T]:
     stop_reason: StopReason | None = None
 
     _is_running: bool = False
+
+    # -- mutation guard -------------------------------------------------------
 
     def __setattr__(self, name: str, value: Any) -> None:
         mutable_while_running = {
@@ -89,20 +110,33 @@ class Turn[T]:
         self._is_running = False
         self.hooks: dict[TurnHook, list] = {}
 
+    # -- hooks -----------------------------------------------------------------
+
     async def _run_hooks(self, name: TurnHook, *args: Any, **kwargs: Any) -> None:
         await run_hooks(self.hooks.get(name, []), *args, **kwargs)
 
     def add_hook(self, hook_type: TurnHook, hook: Hook, name: str | None = None) -> None:
-        """
-        Add a hook for the given hook type and register it in HookRegistry.
+        """Add a hook for the given hook type and register it in HookRegistry.
+
+        Parameters
+        ----------
+        hook_type : TurnHook
+            When to run the hook.
+        hook : Hook
+            Async callable to run.
+        name : str | None
+            Name to register under; uses hook.__name__ if not provided.
         """
         HookRegistry.register(hook, name)
         self.hooks.setdefault(hook_type, []).append(hook)
 
+    # -- execution ------------------------------------------------------------
+
     @safe_execution
     async def returning(self) -> T:
-        """
-        Run the Turn and return a single result. Use yielding() for async generator tools.
+        """Run the Turn and return a single result.
+
+        Use yielding() for async generator tools.
         """
         lock_ctx = self.tool.lock if self.tool.lock is not None else _null_lock
         async with lock_ctx:
@@ -138,8 +172,9 @@ class Turn[T]:
 
     @safe_execution
     async def yielding(self) -> AsyncIterator[T]:
-        """
-        Run the Turn and yield each result as it is produced. Tools are async generators.
+        """Run the Turn and yield each result as it is produced.
+
+        For tools that are async generators.
         """
         lock_ctx = self.tool.lock if self.tool.lock is not None else _null_lock
         async with lock_ctx:
@@ -209,6 +244,8 @@ class Turn[T]:
             finally:
                 self.end_time = datetime.now()
                 self._is_running = False
+
+    # -- serialization --------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         return {

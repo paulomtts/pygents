@@ -360,11 +360,11 @@ wheels = [
 
 [[package]]
 name = "pygents"
-version = "0.1.4"
+version = "0.1.7"
 source = { editable = "." }
 
 [package.optional-dependencies]
-docs = [
+dev = [
     { name = "bump2version" },
     { name = "mkdocs" },
     { name = "mkdocs-material" },
@@ -374,13 +374,13 @@ docs = [
 
 [package.metadata]
 requires-dist = [
-    { name = "bump2version", marker = "extra == 'docs'", specifier = ">=1.0.1" },
-    { name = "mkdocs", marker = "extra == 'docs'", specifier = ">=1.6.1" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5.0" },
-    { name = "pytest", marker = "extra == 'docs'", specifier = ">=8.0.0" },
-    { name = "ruff", marker = "extra == 'docs'", specifier = ">=0.15.0" },
+    { name = "bump2version", marker = "extra == 'dev'", specifier = ">=1.0.1" },
+    { name = "mkdocs", marker = "extra == 'dev'", specifier = ">=1.6.1" },
+    { name = "mkdocs-material", marker = "extra == 'dev'", specifier = ">=9.5.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15.0" },
 ]
-provides-extras = ["docs"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "pygments"

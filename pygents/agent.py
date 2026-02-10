@@ -12,14 +12,28 @@ from pygents.utils import safe_execution
 
 class Agent:
     """
-    An Agent is an orchestrator. It runs an event loop that processes Turns from a queue. It controls its flow via a set of policies.
-    Agents stream by default: run() is an async generator that yields (turn, value) for each result as it is produced.
+    Orchestrator that runs an event loop processing Turns from a queue.
+
+    Controls flow via policies and hooks. Streams by default: run() is an
+    async generator that yields (turn, value) for each result as it is produced.
+
+    Parameters
+    ----------
+    name : str
+        Agent display name.
+    description : str
+        Agent description.
+    tools : list[Tool]
+        Tools this agent can run. Each must be registered in ToolRegistry
+        and be the same instance given here.
     """
 
     name: str
     description: str
 
     _is_running: bool = False
+
+    # -- mutation guard -------------------------------------------------------
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name != "_is_running" and getattr(self, "_is_running", False):
@@ -44,6 +58,8 @@ class Agent:
         self._is_running = False
         AgentRegistry.register(self)
 
+    # -- queue snapshot -------------------------------------------------------
+
     def _queue_snapshot(self) -> list[Turn]:
         items = []
         for _ in range(self._queue.qsize()):
@@ -52,25 +68,45 @@ class Agent:
             self._queue.put_nowait(turn)
         return items
 
+    # -- hooks -----------------------------------------------------------------
+
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
         await run_hooks(self.hooks.get(name, []), *args, **kwargs)
 
     def add_hook(self, hook_type: AgentHook, hook: Hook, name: str | None = None) -> None:
-        """
-        Add a hook for the given hook type and register it in HookRegistry.
+        """Add a hook for the given hook type and register it in HookRegistry.
+
+        Parameters
+        ----------
+        hook_type : AgentHook
+            When to run the hook.
+        hook : Hook
+            Async callable to run.
+        name : str | None
+            Name to register under; uses hook.__name__ if not provided.
         """
         HookRegistry.register(hook, name)
         self.hooks.setdefault(hook_type, []).append(hook)
 
+    # -- queue -----------------------------------------------------------------
+
     async def pop(self) -> Turn:
-        """
-        Pop a Turn from the queue.
-        """
+        """Pop a Turn from the queue."""
         return await self._queue.get()
 
     async def put(self, turn: Turn) -> None:
-        """
-        Put a Turn on the queue.
+        """Put a Turn on the queue.
+
+        Parameters
+        ----------
+        turn : Turn
+            Turn to enqueue. Must have a tool whose name is in this agent's
+            tools.
+
+        Raises
+        ------
+        ValueError
+            If turn has no tool or tool is not accepted by this agent.
         """
         if turn.tool is None:
             raise ValueError("Turn has no tool")
@@ -83,11 +119,19 @@ class Agent:
         await self._run_hooks(AgentHook.AFTER_PUT, self, turn)
 
     async def send_turn(self, agent_name: str, turn: Turn) -> None:
-        """
-        Enqueue a Turn on another Agent's queue. The target agent must be registered in AgentRegistry.
+        """Enqueue a Turn on another agent's queue.
+
+        Parameters
+        ----------
+        agent_name : str
+            Name of the target agent (must be in AgentRegistry).
+        turn : Turn
+            Turn to enqueue.
         """
         target = AgentRegistry.get(agent_name)
         await target.put(turn)
+
+    # -- run -------------------------------------------------------------------
 
     async def _run_turn(self, turn: Turn) -> Any:
         if inspect.isasyncgenfunction(turn.tool.fn):
@@ -96,10 +140,11 @@ class Agent:
 
     @safe_execution
     async def run(self) -> AsyncIterator[tuple[Turn, Any]]:
-        """
-        Run the event loop until the queue is empty.
-        Streams results: yields (turn, value) for each value produced (one per run for single-value tools, one per yield for async-gen tools).
-        Propagates TurnTimeoutError and any exception raised by a tool.
+        """Run the event loop until the queue is empty.
+
+        Yields (turn, value) for each value produced (one per run for
+        single-value tools, one per yield for async-gen tools). Propagates
+        TurnTimeoutError and any exception raised by a tool.
         """
         try:
             self._is_running = True
@@ -131,6 +176,8 @@ class Agent:
                     await self.put(turn.output)
         finally:
             self._is_running = False
+
+    # -- serialization --------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
         return {

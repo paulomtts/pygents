@@ -20,6 +20,8 @@ T = TypeVar("T", bound=Any)
 
 
 class ToolMetadata(NamedTuple):
+    """Name and description of a tool."""
+
     name: str
     description: str
 
