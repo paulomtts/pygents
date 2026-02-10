@@ -51,64 +51,60 @@ def test_append_successive_eviction():
     assert mem.items == ["b", "c"]
 
 
-# -- append with compact ------------------------------------------------------
+# -- compact callback --------------------------------------------------------
 
 
-def test_compact_is_called_before_new_items():
-    mem = WorkingMemory(5)
-    mem.append("a", "b", "c")
-
+def test_compact_is_called_on_every_append():
     calls = []
 
     def spy(items):
         calls.append(list(items))
         return items
 
-    mem.append("d", compact=spy)
-    assert calls == [["a", "b", "c"]]
-    assert mem.items == ["a", "b", "c", "d"]
+    mem = WorkingMemory(5, compact=spy)
+    mem.append("a")
+    mem.append("b")
+    assert calls == [[], ["a"]]
+    assert mem.items == ["a", "b"]
 
 
 def test_compact_reduces_items():
-    mem = WorkingMemory(5)
+    mem = WorkingMemory(5, compact=lambda items: items[-2:])
     mem.append("a", "b", "c", "d", "e")
-
-    mem.append("f", compact=lambda items: items[-2:])
+    # compact sees [] on first append, returns [], then all 5 are appended
+    assert mem.items == ["a", "b", "c", "d", "e"]
+    # now compact sees all 5, keeps last 2, then "f" is appended
+    mem.append("f")
     assert mem.items == ["d", "e", "f"]
 
 
 def test_compact_result_subject_to_limit():
-    mem = WorkingMemory(3)
+    mem = WorkingMemory(3, compact=lambda _: ["x", "y", "w", "v"])
     mem.append("a")
-
-    mem.append("z", compact=lambda _: ["x", "y", "w", "v"])
-    # deque(maxlen=3) keeps only the last 3 of the compacted list, then appends "z"
-    assert mem.items == ["w", "v", "z"]
+    # compact returns 4 items into a deque(maxlen=3) → keeps last 3, then "a"
+    assert mem.items == ["w", "v", "a"]
 
 
 def test_compact_can_return_empty():
-    mem = WorkingMemory(3)
+    mem = WorkingMemory(3, compact=lambda _: [])
     mem.append("a", "b")
-
-    mem.append("c", compact=lambda _: [])
-    assert mem.items == ["c"]
+    # compact clears, then "a" and "b" are appended
+    assert mem.items == ["a", "b"]
 
 
 def test_compact_receives_copy():
     """Mutating the list passed to compact must not affect the memory."""
-    mem = WorkingMemory(5)
-    mem.append("a", "b")
-
     def mutating_compact(items):
         items.clear()
         return ["x"]
 
-    mem.append("y", compact=mutating_compact)
-    # compact received a copy, so clearing it is harmless; result is ["x", "y"]
-    assert mem.items == ["x", "y"]
+    mem = WorkingMemory(5, compact=mutating_compact)
+    mem.append("a", "b")
+    # first append: compact([]) -> clear() is harmless, returns ["x"], then "a","b"
+    assert mem.items == ["x", "a", "b"]
 
 
-def test_append_without_compact_does_not_compact():
+def test_no_compact_does_not_compact():
     mem = WorkingMemory(5)
     mem.append("a", "b", "c")
     mem.append("d")
@@ -185,6 +181,30 @@ def test_nested_branch():
     assert root.items == ["a"]
     assert child.items == ["a", "b"]
     assert grandchild.items == ["a", "b", "c"]
+
+
+def test_branch_inherits_compact():
+    calls = []
+
+    def spy(items):
+        calls.append(list(items))
+        return items
+
+    mem = WorkingMemory(5, compact=spy)
+    mem.append("a")
+    child = mem.branch()
+    child.append("b")
+    # parent compact called once for "a", child compact called once for "b"
+    assert calls == [[], ["a"]]
+
+
+def test_branch_overrides_compact():
+    mem = WorkingMemory(5, compact=lambda items: items[-1:])
+    child = mem.branch(compact=None)
+    child.append("a")
+    child.append("b")
+    # child has no compaction, so both items remain
+    assert child.items == ["a", "b"]
 
 
 # -- dunder protocols ---------------------------------------------------------

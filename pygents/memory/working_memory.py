@@ -18,12 +18,22 @@ class WorkingMemory:
     limit : int
         Maximum number of items the window can hold.  When a new item is
         appended and the window is full, the oldest item is evicted.
+    compact : (list[Any]) -> list[Any] | None
+        If provided, called with the current items *before* new ones are
+        inserted on every ``append`` call.  Must return the compacted list
+        that will replace the window contents.  The returned list is still
+        subject to the window limit.
     """
 
-    def __init__(self, limit: int) -> None:
+    def __init__(
+        self,
+        limit: int,
+        compact: Callable[[list[Any]], list[Any]] | None = None,
+    ) -> None:
         if limit < 1:
             raise ValueError("limit must be >= 1")
         self._items: deque[Any] = deque(maxlen=limit)
+        self._compact = compact
 
     # -- properties ----------------------------------------------------------
 
@@ -37,26 +47,14 @@ class WorkingMemory:
 
     # -- mutation -------------------------------------------------------------
 
-    def append(
-        self,
-        *items: Any,
-        compact: Callable[[list[Any]], list[Any]] | None = None,
-    ) -> None:
-        """Add one or more items, optionally compacting the window first.
+    def append(self, *items: Any) -> None:
+        """Add one or more items.  Oldest items are evicted when full.
 
-        Parameters
-        ----------
-        *items : Any
-            Items to append.
-        compact : (list[Any]) -> list[Any] | None
-            If provided, called with the current items *before* the new ones
-            are inserted.  Must return the compacted list that will replace
-            the window contents.  The returned list is still subject to the
-            window limit — if it exceeds ``limit``, oldest entries are
-            evicted as usual.
+        If a ``compact`` callback was provided at construction, it is called
+        with the current items before the new ones are inserted.
         """
-        if compact is not None:
-            compacted = compact(list(self._items))
+        if self._compact is not None:
+            compacted = self._compact(list(self._items))
             self._items.clear()
             for item in compacted:
                 self._items.append(item)
@@ -68,7 +66,11 @@ class WorkingMemory:
 
     # -- branching ------------------------------------------------------------
 
-    def branch(self, limit: int | None = None) -> WorkingMemory:
+    def branch(
+        self,
+        limit: int | None = None,
+        compact: Callable[[list[Any]], list[Any]] | None = ...,  # type: ignore[assignment]
+    ) -> WorkingMemory:
         """
         Create a child working memory that starts with a snapshot of this
         memory's current state.
@@ -82,9 +84,14 @@ class WorkingMemory:
             Window size for the child.  Defaults to the parent's limit.
             If smaller than the parent's, only the most recent items that
             fit are kept.
+        compact : (list[Any]) -> list[Any] | None | ...
+            Compaction callback for the child.  Defaults to the parent's
+            callback.  Pass ``None`` explicitly to disable compaction on
+            the child.
         """
         child_limit = limit if limit is not None else self.limit
-        child = WorkingMemory(child_limit)
+        child_compact = self._compact if compact is ... else compact
+        child = WorkingMemory(child_limit, compact=child_compact)
         for item in self._items:
             child._items.append(item)
         return child

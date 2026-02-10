@@ -24,16 +24,16 @@ mem.append("msg1", "msg2", "msg3")
 
 ## Compaction
 
-You can pass a `compact` callback to `append`. It receives the current items and returns a (potentially shorter) list that replaces the window contents **before** the new items are inserted:
+You can pass a `compact` callback at construction time. It runs on every `append` call — receiving the current items and returning a (potentially shorter) list that replaces the window contents **before** the new items are inserted:
 
 ```python
-mem.append(
-    new_message,
+mem = WorkingMemory(
+    limit=20,
     compact=lambda items: [summarize(items[:-2])] + items[-2:],
 )
 ```
 
-The compacted result is still subject to the window limit — if it exceeds `limit`, the oldest entries are evicted as usual. If `compact` is not provided, items are appended directly.
+The compacted result is still subject to the window limit — if it exceeds `limit`, the oldest entries are evicted as usual. If `compact` is not provided, items are appended directly without compaction.
 
 ## Branching
 
@@ -58,6 +58,14 @@ assert "sub-step output" not in turn_mem
 
 When a child branches with a smaller `limit`, only the most recent items that fit are kept.
 
+By default, the child inherits the parent's `compact` callback. Pass `compact=None` explicitly to disable compaction on the child, or pass a different callable to override it:
+
+```python
+mem = WorkingMemory(limit=10, compact=my_compactor)
+child = mem.branch(compact=None)       # no compaction
+other = mem.branch(compact=other_fn)   # different compaction
+```
+
 ## Reading items
 
 ```python
@@ -75,3 +83,6 @@ bool(mem)   # False when empty
 data = mem.to_dict()              # {"limit": 10, "items": [...]}
 restored = WorkingMemory.from_dict(data)
 ```
+
+!!! info "Compact callbacks are not serialized"
+    `to_dict()` / `from_dict()` persist the limit and items but not the `compact` callback. If you need compaction after deserialization, pass the callback when constructing the restored instance or set it via `branch()`.
