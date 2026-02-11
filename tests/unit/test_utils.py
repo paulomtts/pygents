@@ -1,7 +1,47 @@
+"""
+Tests for pygents.utils, driven by the following decision table.
+
+Decision table for pygents/utils.py
+-----------------------------------
+safe_execution(func):
+  SE1  getattr(self, "_is_running", False) is False -> call func(self, *args, **kwargs), return result
+  SE2  _is_running is True -> SafeExecutionError with func.__name__ and "running"
+  SE3  self has no _is_running -> getattr returns False -> same as SE1
+
+validate_fixed_kwargs(fn, fixed_kwargs, kind):
+  V1   fn has **kwargs (VAR_KEYWORD) -> no raise
+  V2   fn has no **kwargs and fixed key not in params -> TypeError
+  V3   All fixed keys in params -> no raise
+
+eval_args(args): each item callable (_function_type) -> call and use return value; else pass through.
+eval_kwargs(kwargs): same per value, keys unchanged.
+
+merge_kwargs(fixed_kwargs, call_kwargs, label):
+  MK1  evaluated = eval_kwargs(fixed_kwargs)
+  MK2  key in call_kwargs also in evaluated -> log.warning
+  MK3  return {**evaluated, **call_kwargs} (call overrides)
+
+hooks_by_type_for_serialization(hooks):
+  HT1  hook has no hook_type or None -> skipped
+  HT2  hook_type has .value (enum) -> key = hook_type.value
+  HT3  hook_type no .value -> key = str(hook_type)
+  HT4  name = getattr(h, "__name__", "hook"); by_type[key].append(name)
+"""
+
+import logging
+
 import pytest
 
 from pygents.errors import SafeExecutionError
-from pygents.utils import eval_kwargs, safe_execution
+from pygents.hooks import TurnHook
+from pygents.utils import (
+    eval_args,
+    eval_kwargs,
+    hooks_by_type_for_serialization,
+    merge_kwargs,
+    safe_execution,
+    validate_fixed_kwargs,
+)
 
 
 def test_eval_kwargs_leaves_non_callables_unchanged():
@@ -71,3 +111,108 @@ def test_safe_execution_uses_getattr_so_missing_is_false():
 
     obj = NoFlag()
     assert obj.run_me() == "ok"
+
+
+# --- eval_args -----------------------------------------------------------------------
+
+
+def test_eval_args_leaves_non_callables_unchanged():
+    assert eval_args([1, "x", None]) == [1, "x", None]
+
+
+def test_eval_args_calls_callables_and_uses_return_value():
+    assert eval_args([lambda: 10, lambda: "y"]) == [10, "y"]
+
+
+def test_eval_args_mixes_callables_and_static_values():
+    assert eval_args([1, lambda: 2, "three"]) == [1, 2, "three"]
+
+
+def test_eval_args_empty_iterable():
+    assert eval_args([]) == []
+
+
+def test_eval_args_calls_at_eval_time():
+    counter = [0]
+
+    def make():
+        counter[0] += 1
+        return counter[0]
+
+    assert eval_args([make]) == [1]
+    assert eval_args([make]) == [2]
+
+
+# --- validate_fixed_kwargs -----------------------------------------------------------
+
+
+def test_validate_fixed_kwargs_all_keys_in_signature_passes():
+    def fn(a: int, b: str) -> None:
+        pass
+
+    validate_fixed_kwargs(fn, {"a": 1, "b": "x"})
+
+
+def test_validate_fixed_kwargs_key_not_in_signature_raises():
+    def fn(x: int) -> None:
+        pass
+
+    with pytest.raises(TypeError, match="fixed kwargs .* are not in function signature"):
+        validate_fixed_kwargs(fn, {"x": 1, "unknown": 2})
+
+
+def test_validate_fixed_kwargs_allowed_when_function_has_kwargs():
+    def fn(x: int, **kwargs) -> None:
+        pass
+
+    validate_fixed_kwargs(fn, {"x": 1, "extra": 2})
+
+
+def test_validate_fixed_kwargs_kind_in_error_message():
+    def fn(x: int) -> None:
+        pass
+
+    with pytest.raises(TypeError, match="Hook .* fixed kwargs"):
+        validate_fixed_kwargs(fn, {"bad": 1}, kind="Hook")
+
+
+# --- merge_kwargs --------------------------------------------------------------------
+
+
+def test_merge_kwargs_merges_fixed_and_call_call_overrides():
+    result = merge_kwargs({"a": 1, "b": 2}, {"b": 20, "c": 3}, "label")
+    assert result == {"a": 1, "b": 20, "c": 3}
+
+
+def test_merge_kwargs_override_logs_warning(caplog):
+    with caplog.at_level(logging.WARNING, logger="pygents"):
+        merge_kwargs({"k": 1}, {"k": 2}, "my_label")
+    assert "Fixed kwarg 'k' is overridden" in caplog.text
+    assert "my_label" in caplog.text
+
+
+# --- hooks_by_type_for_serialization --------------------------------------------------
+
+
+def test_hooks_by_type_for_serialization_empty():
+    assert hooks_by_type_for_serialization([]) == {}
+
+
+def test_hooks_by_type_for_serialization_uses_enum_value_and_name():
+    hook1 = type("H", (), {"hook_type": TurnHook.BEFORE_RUN, "__name__": "my_hook"})()
+    result = hooks_by_type_for_serialization([hook1])
+    assert result == {"before_run": ["my_hook"]}
+
+
+def test_hooks_by_type_for_serialization_skips_hook_without_type():
+    hook_no_type = type("H", (), {"__name__": "anonymous"})()
+    assert hooks_by_type_for_serialization([hook_no_type]) == {}
+
+
+def test_hooks_by_type_for_serialization_name_fallback():
+    class E:
+        value = "ev"
+
+    hook_no_name = type("H", (), {"hook_type": E()})()
+    result = hooks_by_type_for_serialization([hook_no_name])
+    assert result == {"ev": ["hook"]}

@@ -33,8 +33,7 @@ async for turn, value in agent.run():
 ```
 
 - `put(turn)` — enqueues a turn (validates tool is in agent's set)
-- `pop()` — blocks until a turn is available
-- `run()` — async generator: pops turns, runs them, yields `(turn, value)`, exits when queue is empty
+- `run()` — async generator: consumes turns from the queue, runs them, yields `(turn, value)`, exits when queue is empty
 
 !!! warning "ValueError"
     `put(turn)` raises `ValueError` if the turn has no tool or the tool is not in the agent's set.
@@ -77,11 +76,11 @@ While `run()` is active, agent attributes cannot be changed. Calling `run()` aga
 
 ## Hooks
 
-Agent hooks fire at specific points during the run loop. Exceptions in hooks propagate.
+Agent hooks fire at specific points during the run loop. Hooks are stored as a list and selected by type at run time. Exceptions in hooks propagate.
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_TURN` | Before popping next turn | `(agent)` |
+| `BEFORE_TURN` | Before consuming next turn from queue | `(agent)` |
 | `AFTER_TURN` | After turn fully processed | `(agent, turn)` |
 | `ON_TURN_VALUE` | Before yielding each result | `(agent, turn, value)` |
 | `ON_TURN_ERROR` | Turn raised an exception | `(agent, turn, exception)` |
@@ -89,16 +88,20 @@ Agent hooks fire at specific points during the run loop. Exceptions in hooks pro
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
 | `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
 
-```python
-from pygents import AgentHook
+Use the `@hook(hook_type)` decorator so the hook is registered and carries its type, then append it to `agent.hooks`:
 
+```python
+from pygents import Agent, AgentHook, hook
+
+@hook(AgentHook.AFTER_TURN)
 async def on_complete(agent, turn):
     print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.stop_reason}")
 
-agent.add_hook(AgentHook.AFTER_TURN, on_complete)  # registers in HookRegistry and appends
+agent = Agent("my_agent", "Description", [my_tool])
+agent.hooks.append(on_complete)
 ```
 
-The `add_hook()` method registers the hook in `HookRegistry` automatically. You can also append directly to `agent.hooks[AgentHook.AFTER_TURN]` if the hook is already registered.
+Hooks are registered in `HookRegistry` at decoration time. Use named functions so they serialize by name.
 
 !!! warning "ValueError"
     Registering a hook with a name that already exists in `HookRegistry` raises `ValueError`.

@@ -78,7 +78,7 @@ This is especially useful when turns are queued — the lambda captures the late
 
 ## Hooks
 
-Turn hooks fire at specific points during execution. Exceptions in hooks propagate.
+Turn hooks fire at specific points during execution. Hooks are stored as a list and selected by type at run time. Exceptions in hooks propagate.
 
 | Hook | When | Args |
 |------|------|------|
@@ -88,16 +88,20 @@ Turn hooks fire at specific points during execution. Exceptions in hooks propaga
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
 | `ON_VALUE` | Before each yielded value (streaming only) | `(turn, value)` |
 
-```python
-from pygents import TurnHook
+Use the `@hook(hook_type)` decorator so the hook is registered and carries its type, then append it to `turn.hooks`:
 
+```python
+from pygents import Turn, hook, TurnHook
+
+@hook(TurnHook.BEFORE_RUN)
 async def log_start(turn):
     print(f"Starting {turn.tool.metadata.name}")
 
-turn.add_hook(TurnHook.BEFORE_RUN, log_start)  # registers in HookRegistry and appends
+turn = Turn("my_tool", kwargs={})
+turn.hooks.append(log_start)
 ```
 
-The `add_hook()` method registers the hook in `HookRegistry` automatically. You can also append directly to `turn.hooks[TurnHook.BEFORE_RUN]` if the hook is already registered.
+Hooks are registered in `HookRegistry` at decoration time. Use named functions so they serialize by name.
 
 !!! warning "ValueError"
     Registering a hook with a name that already exists in `HookRegistry` raises `ValueError`.

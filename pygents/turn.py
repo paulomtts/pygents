@@ -4,11 +4,17 @@ import time
 from datetime import datetime
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, Iterable, TypeVar
+
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
-from pygents.hooks import Hook, TurnHook, run_hooks
+from pygents.hooks import Hook, TurnHook
 from pygents.registry import HookRegistry, ToolRegistry
 from pygents.tool import Tool
-from pygents.utils import eval_args, eval_kwargs, safe_execution
+from pygents.utils import (
+    eval_args,
+    eval_kwargs,
+    hooks_by_type_for_serialization,
+    safe_execution,
+)
 
 T = TypeVar("T")
 
@@ -18,17 +24,6 @@ class StopReason(str, Enum):
     TIMEOUT = "timeout"
     ERROR = "error"
     CANCELLED = "cancelled"
-
-
-class _NullLock:
-    async def __aenter__(self) -> None:
-        pass
-
-    async def __aexit__(self, *args: Any) -> None:
-        pass
-
-
-_null_lock = _NullLock()
 
 
 class Turn[T]:
@@ -99,27 +94,17 @@ class Turn[T]:
         self.end_time = None
         self.stop_reason = None
         self._is_running = False
-        self.hooks: dict[TurnHook, list] = {}
+        self.hooks: list[Hook] = []
+
+    def __repr__(self) -> str:
+        tool_name = self.tool.metadata.name if self.tool else None
+        return f"Turn(tool={tool_name!r}, timeout={self.timeout})"
 
     # -- hooks -----------------------------------------------------------------
 
-    async def _run_hooks(self, name: TurnHook, *args: Any, **kwargs: Any) -> None:
-        await run_hooks(self.hooks.get(name, []), *args, **kwargs)
-
-    def add_hook(self, hook_type: TurnHook, hook: Hook, name: str | None = None) -> None:
-        """Add a hook for the given hook type and register it in HookRegistry.
-
-        Parameters
-        ----------
-        hook_type : TurnHook
-            When to run the hook.
-        hook : Hook
-            Async callable to run.
-        name : str | None
-            Name to register under; uses hook.__name__ if not provided.
-        """
-        HookRegistry.register(hook, name)
-        self.hooks.setdefault(hook_type, []).append(hook)
+    async def _run_hook(self, hook_type: TurnHook, *args: Any) -> None:
+        if h := HookRegistry.get_by_type(hook_type, self.hooks):
+            await h(self, *args)
 
     # -- execution ------------------------------------------------------------
 
@@ -129,37 +114,35 @@ class Turn[T]:
 
         Use yielding() for async generator tools.
         """
-        lock_ctx = self.tool.lock if self.tool.lock is not None else _null_lock
-        async with lock_ctx:
-            try:
-                self._is_running = True
-                self.start_time = datetime.now()
-                await self._run_hooks(TurnHook.BEFORE_RUN, self)
-                if inspect.isasyncgenfunction(self.tool.fn):
-                    raise WrongRunMethodError(
-                        "Tool is async generator; use yielding() instead."
-                    )
-                runtime_args = eval_args(self.args)
-                runtime_kwargs = eval_kwargs(self.kwargs)
-                self.output = await asyncio.wait_for(
-                    self.tool(*runtime_args, **runtime_kwargs), timeout=self.timeout
+        try:
+            self._is_running = True
+            self.start_time = datetime.now()
+            await self._run_hook(TurnHook.BEFORE_RUN)
+            if inspect.isasyncgenfunction(self.tool.fn):
+                raise WrongRunMethodError(
+                    "Tool is async generator; use yielding() instead."
                 )
-                self.stop_reason = StopReason.COMPLETED
-                await self._run_hooks(TurnHook.AFTER_RUN, self)
-                return self.output
-            except (asyncio.TimeoutError, TimeoutError):
-                self.stop_reason = StopReason.TIMEOUT
-                await self._run_hooks(TurnHook.ON_TIMEOUT, self)
-                raise TurnTimeoutError(
-                    f"Turn timed out after {self.timeout}s"
-                ) from None
-            except Exception as e:
-                self.stop_reason = StopReason.ERROR
-                await self._run_hooks(TurnHook.ON_ERROR, self, e)
-                raise
-            finally:
-                self.end_time = datetime.now()
-                self._is_running = False
+            runtime_args = eval_args(self.args)
+            runtime_kwargs = eval_kwargs(self.kwargs)
+            self.output = await asyncio.wait_for(
+                self.tool(*runtime_args, **runtime_kwargs), timeout=self.timeout
+            )
+            self.stop_reason = StopReason.COMPLETED
+            await self._run_hook(TurnHook.AFTER_RUN)
+            return self.output
+        except (asyncio.TimeoutError, TimeoutError):
+            self.stop_reason = StopReason.TIMEOUT
+            await self._run_hook(TurnHook.ON_TIMEOUT)
+            raise TurnTimeoutError(
+                f"Turn timed out after {self.timeout}s"
+            ) from None
+        except Exception as e:
+            self.stop_reason = StopReason.ERROR
+            await self._run_hook(TurnHook.ON_ERROR, e)
+            raise
+        finally:
+            self.end_time = datetime.now()
+            self._is_running = False
 
     @safe_execution
     async def yielding(self) -> AsyncIterator[T]:
@@ -167,77 +150,74 @@ class Turn[T]:
 
         For tools that are async generators.
         """
-        lock_ctx = self.tool.lock if self.tool.lock is not None else _null_lock
-        async with lock_ctx:
-            try:
-                self._is_running = True
-                self.start_time = datetime.now()
-                await self._run_hooks(TurnHook.BEFORE_RUN, self)
-                if not inspect.isasyncgenfunction(self.tool.fn):
-                    raise WrongRunMethodError(
-                        "Tool is not an async generator; use returning() for single value."
-                    )
-                runtime_args = eval_args(self.args)
-                runtime_kwargs = eval_kwargs(self.kwargs)
-                queue: asyncio.Queue[Any] = asyncio.Queue()
+        try:
+            self._is_running = True
+            self.start_time = datetime.now()
+            await self._run_hook(TurnHook.BEFORE_RUN)
+            if not inspect.isasyncgenfunction(self.tool.fn):
+                raise WrongRunMethodError(
+                    "Tool is not an async generator; use returning() for single value."
+                )
+            runtime_args = eval_args(self.args)
+            runtime_kwargs = eval_kwargs(self.kwargs)
+            queue: asyncio.Queue[Any] = asyncio.Queue()
 
-                async def produce() -> None:
-                    try:
-                        async for value in self.tool(*runtime_args, **runtime_kwargs):
-                            await queue.put(value)
-                    finally:
-                        await queue.put(None)
-
-                producer = asyncio.create_task(produce())
-                deadline = time.monotonic() + self.timeout
-                aggregated: list[Any] = []
+            async def produce() -> None:
                 try:
-                    while True:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            producer.cancel()
-                            try:
-                                await producer
-                            except asyncio.CancelledError:
-                                pass
-                            self.stop_reason = StopReason.TIMEOUT
-                            await self._run_hooks(TurnHook.ON_TIMEOUT, self)
-                            raise TurnTimeoutError(
-                                f"Turn timed out after {self.timeout}s"
-                            ) from None
-                        item = await asyncio.wait_for(queue.get(), timeout=remaining)
-                        if item is None:
-                            break
-                        aggregated.append(item)
-                        await self._run_hooks(TurnHook.ON_VALUE, self, item)
-                        yield item
+                    async for value in self.tool(*runtime_args, **runtime_kwargs):
+                        await queue.put(value)
+                finally:
+                    await queue.put(None)
+
+            producer = asyncio.create_task(produce())
+            deadline = time.monotonic() + self.timeout
+            aggregated: list[Any] = []
+            try:
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        producer.cancel()
+                        try:
+                            await producer
+                        except asyncio.CancelledError:
+                            pass
+                        self.stop_reason = StopReason.TIMEOUT
+                        await self._run_hook(TurnHook.ON_TIMEOUT)
+                        raise TurnTimeoutError(
+                            f"Turn timed out after {self.timeout}s"
+                        ) from None
+                    item = await asyncio.wait_for(queue.get(), timeout=remaining)
+                    if item is None:
+                        break
+                    aggregated.append(item)
+                    await self._run_hook(TurnHook.ON_VALUE, item)
+                    yield item
+                await producer
+            except (asyncio.TimeoutError, TimeoutError):
+                producer.cancel()
+                try:
                     await producer
-                except (asyncio.TimeoutError, TimeoutError):
-                    producer.cancel()
-                    try:
-                        await producer
-                    except asyncio.CancelledError:
-                        pass
-                    self.stop_reason = StopReason.TIMEOUT
-                    await self._run_hooks(TurnHook.ON_TIMEOUT, self)
-                    raise TurnTimeoutError(
-                        f"Turn timed out after {self.timeout}s"
-                    ) from None
-                self.output = aggregated
-                self.stop_reason = StopReason.COMPLETED
-                await self._run_hooks(TurnHook.AFTER_RUN, self)
-            except TurnTimeoutError:
-                raise
-            except Exception as e:
-                self.stop_reason = StopReason.ERROR
-                await self._run_hooks(TurnHook.ON_ERROR, self, e)
-                raise
-            finally:
-                self.end_time = datetime.now()
-                self._is_running = False
+                except asyncio.CancelledError:
+                    pass
+                self.stop_reason = StopReason.TIMEOUT
+                await self._run_hook(TurnHook.ON_TIMEOUT)
+                raise TurnTimeoutError(
+                    f"Turn timed out after {self.timeout}s"
+                ) from None
+            self.output = aggregated
+            self.stop_reason = StopReason.COMPLETED
+            await self._run_hook(TurnHook.AFTER_RUN)
+        except TurnTimeoutError:
+            raise
+        except Exception as e:
+            self.stop_reason = StopReason.ERROR
+            await self._run_hook(TurnHook.ON_ERROR, e)
+            raise
+        finally:
+            self.end_time = datetime.now()
+            self._is_running = False
 
     # -- serialization --------------------------------------------------------
-
     def to_dict(self) -> dict[str, Any]:
         return {
             "tool_name": self.tool.metadata.name,
@@ -249,7 +229,7 @@ class Turn[T]:
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "stop_reason": self.stop_reason.value if self.stop_reason else None,
             "output": self.output,
-            "hooks": {k.value: [h.__name__ for h in v] for k, v in self.hooks.items()},
+            "hooks": hooks_by_type_for_serialization(self.hooks),
         }
 
     @classmethod
@@ -269,7 +249,7 @@ class Turn[T]:
         turn.stop_reason = StopReason(stop_reason) if stop_reason else None
         if "output" in data:
             turn.output = data["output"]
-        for hook_type_str, hook_names in data.get("hooks", {}).items():
-            hook_type = TurnHook(hook_type_str)
-            turn.hooks[hook_type] = [HookRegistry.get(name) for name in hook_names]
+        for _type_str, hook_names in data.get("hooks", {}).items():
+            for hname in hook_names:
+                turn.hooks.append(HookRegistry.get(hname))
         return turn

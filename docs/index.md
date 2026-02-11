@@ -108,7 +108,7 @@ await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 | Timeouts | Per-turn timeout (default 60s), raises `TurnTimeoutError` |
 | Per-tool locking | `@tool(lock=True)` serializes concurrent runs |
 | Hooks | Async callbacks at turn, agent, and tool level |
-| Serialization | `to_dict()` / `from_dict()` for turns, agents, and working memory |
-| Working memory | Bounded context window with branching and optional compaction |
+| Serialization | `to_dict()` / `from_dict()` for turns, agents, and memory |
+| Memory | Bounded context window with branching and optional compaction |
 
-Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), or [Working Memory](concepts/working-memory.md).
+Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), or [Memory](concepts/memory.md).

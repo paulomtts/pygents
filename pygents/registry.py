@@ -147,48 +147,66 @@ class HookRegistry(ABC):
         cls._registry = {}
 
     @classmethod
-    def register(cls, hook: Hook, name: str | None = None) -> None:
+    def register(
+        cls,
+        hook: Hook,
+        name: str | None = None,
+        hook_type: object | None = None,
+    ) -> None:
         """Register a Hook.
 
         Parameters
         ----------
         hook : Hook
-            The Hook to register.
+            The hook to register.
         name : str | None
             Name to register under; uses hook.__name__ if not provided.
+        hook_type : enum member | None
+            If provided, stored on the hook for get_by_type lookups.
 
         Raises
         ------
         ValueError
-            If the Hook is already registered.
+            If the hook is already registered.
         """
-        hook_name = name or hook.__name__
-        if hook_name in cls._registry:
+        hook_name = name or getattr(hook, "__name__", None) or "hook"
+        existing = cls._registry.get(hook_name)
+        if existing is not None and existing is not hook:
             raise ValueError(f"Hook {hook_name!r} already registered")
         cls._registry[hook_name] = hook
+        if hook_type is not None:
+            hook.hook_type = hook_type  # type: ignore[attr-defined]
 
     # -- lookup ----------------------------------------------------------------
 
     @classmethod
     def get(cls, name: str) -> Hook:
-        """Get a Hook by name.
+        """Get a hook by name.
 
         Parameters
         ----------
         name : str
-            The name of the Hook.
+            The name of the hook.
 
         Returns
         -------
         Hook
-            The registered Hook.
+            The registered hook.
 
         Raises
         ------
         UnregisteredHookError
-            If the Hook is not found.
+            If the hook is not found.
         """
-        hook = cls._registry.get(name)
-        if hook is None:
+        h = cls._registry.get(name)
+        if h is None:
             raise UnregisteredHookError(f"Hook {name!r} not found")
-        return hook
+        return h
+
+    @classmethod
+    def get_by_type(cls, hook_type: object, hooks: list[Hook]) -> Hook | None:
+        """Return the first hook in the given list that matches the hook_type."""
+        return next(
+            (h for h in hooks if getattr(h, "hook_type", None) == hook_type),
+            None,
+        )

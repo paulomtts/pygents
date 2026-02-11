@@ -41,9 +41,9 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
 - **Inter-agent messaging** — agents can send turns to each other
 - **Dynamic arguments** — callable positional args and kwargs evaluated at runtime
 - **Timeouts** — per-turn, default 60s
-- **Per-tool locking** — opt-in serialization for shared state
+- **Per-tool locking** — opt-in serialization for shared state (lock is acquired inside the tool wrapper, so turn-level hooks run outside the tool lock)
 - **Fixed kwargs** — decorator kwargs (e.g. `@tool(permission="admin")`) are merged into every invocation; call-time kwargs override
-- **Hooks** — async callbacks at turn, agent, and tool level
+- **Hooks** — `@hook(hook_type, lock=..., **fixed_kwargs)` decorator; hooks stored as a list and selected by type; turn, agent, tool, and memory hooks; same fixed_kwargs and lock options as tools
 - **Serialization** — `to_dict()` / `from_dict()` for turns and agents
 
 ## Design decisions
@@ -65,6 +65,18 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
   ```
 
   This keeps positional arguments explicit while reserving `metadata` purely for user-level annotations.
+
+- **Agent serialization and current turn**: `Agent.to_dict()` includes a `current_turn` key when the agent is in the middle of `run()` (the turn being executed). That turn is already off the queue, so without it a snapshot would lose the in-flight work. `from_dict()` restores it; the next `run()` consumes the restored current turn first, then the queue. So you can save agent state at any time and get a faithful snapshot (config, queue, and current turn if any).
+
+- **Tool and hook metadata timing**: `ToolMetadata` and `HookMetadata` include `start_time` and `end_time` (`datetime | None`). They are set on the metadata instance when the tool or hook runs (start at entry, end in a `finally`). So the same metadata object is updated each run; `dict()` includes ISO strings for serialization.
+
+- **Hook protocol**: Registered hooks conform to a `Hook` protocol (like `Tool`), with `metadata` (`HookMetadata`: name, description, and run timing), `hook_type`, `fn`, and `lock`. The decorator sets `metadata` (from `__name__` and `__doc__`), `fn`, and `lock`; `HookRegistry.register()` sets `hook_type`. Raw async callables are typed as `Callable[..., Awaitable[None]]`.
+
+- **Hook decorator**: `@hook(hook_type, lock=False, **fixed_kwargs)` mirrors the tool decorator: keyword arguments are merged into every invocation (call-time overrides), and `lock=True` uses an asyncio lock to serialize hook invocations.
+
+- **Tool lock in tool layer**: The tool lock is acquired inside the `@tool` wrapper, not in the turn. So the lock covers only the tool’s own execution (including its BEFORE_INVOKE / ON_YIELD / AFTER_INVOKE hooks). Turn-level hooks (BEFORE_RUN, AFTER_RUN, ON_TIMEOUT, ON_ERROR) run outside the tool lock; hooks that need serialization use their own `lock=True`.
+
+- **Memory hooks**: `Memory` has no compact callback. It supports `MemoryHook.BEFORE_APPEND` and `MemoryHook.AFTER_APPEND` only. Hooks are stored as `list[Hook]` (like Agent/Turn), filtered by `hook_type` when running. BEFORE_APPEND hooks receive `(items, result)` and can fill `result` to replace the window before new items are appended. Serialization uses the same by-type-by-name shape as Agent/Turn; `from_dict()` resolves names from `HookRegistry`.
 
 ## Docs
 

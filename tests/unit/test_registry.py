@@ -1,3 +1,33 @@
+"""
+Tests for pygents.registry, driven by the following decision table.
+
+Decision table for pygents/registry.py
+--------------------------------------
+ToolRegistry:
+  TR1  register(tool): name already in _registry -> ValueError "already registered"
+  TR2  register(tool): else -> _registry[tool.__name__] = tool
+  TR3  get(name): not in _registry -> UnregisteredToolError
+  TR4  get(name): in _registry -> return tool
+  TR5  all() -> list(_registry.values())
+
+AgentRegistry:
+  AR1  clear() -> _registry = {}
+  AR2  register(agent): agent.name already in _registry -> ValueError
+  AR3  register(agent): else -> _registry[agent.name] = agent
+  AR4  get(name): not in _registry -> UnregisteredAgentError
+  AR5  get(name): in _registry -> return agent
+
+HookRegistry:
+  HR1  clear() -> _registry = {}
+  HR2  register(hook, name=None, hook_type=None): hook_name = name or __name__ or "hook"
+  HR3  register: different hook already under hook_name -> ValueError "already registered"
+  HR4  register: same hook instance again -> no error (overwrite)
+  HR5  register(..., hook_type=X) -> hook.hook_type = X
+  HR6  get(name): not in _registry -> UnregisteredHookError
+  HR7  get(name): in _registry -> return hook
+  HR8  get_by_type(hook_type, hooks) -> first h in hooks with hook_type match, else None
+"""
+
 import pytest
 
 from pygents.agent import Agent
@@ -19,7 +49,7 @@ def test_get_returns_registered_tool():
     assert retrieved is add_test
 
 
-def test_get_missing_raises_key_error():
+def test_get_missing_raises_unregistered_tool_error():
     with pytest.raises(UnregisteredToolError, match=r"'nonexistent' not found"):
         ToolRegistry.get("nonexistent")
 
@@ -77,6 +107,15 @@ def test_agent_registry_register_duplicate_name_raises_value_error():
         Agent("duplicate_agent", "Second", [_registry_test_tool])
 
 
+def test_agent_registry_clear_empties_registry():
+    AgentRegistry.clear()
+    agent = Agent("clearable_agent", "Desc", [_registry_test_tool])
+    assert AgentRegistry.get("clearable_agent") is agent
+    AgentRegistry.clear()
+    with pytest.raises(UnregisteredAgentError, match="clearable_agent"):
+        AgentRegistry.get("clearable_agent")
+
+
 def test_hook_registry_register_and_get():
     HookRegistry.clear()
 
@@ -111,9 +150,37 @@ def test_hook_registry_register_duplicate_raises_value_error():
     async def duplicate_hook():
         pass
 
+    async def other_hook():
+        pass
+
     HookRegistry.register(duplicate_hook)
     with pytest.raises(ValueError, match=r"'duplicate_hook' already registered"):
-        HookRegistry.register(duplicate_hook)
+        HookRegistry.register(other_hook, name="duplicate_hook")
+
+
+def test_hook_registry_reregister_same_hook_does_not_raise():
+    HookRegistry.clear()
+
+    async def same_hook():
+        pass
+
+    HookRegistry.register(same_hook)
+    HookRegistry.register(same_hook)
+    assert HookRegistry.get("same_hook") is same_hook
+
+
+def test_hook_registry_register_with_hook_type_stores_and_findable():
+    from pygents.hooks import TurnHook
+
+    HookRegistry.clear()
+
+    async def before_run(turn):
+        pass
+
+    HookRegistry.register(before_run, hook_type=TurnHook.BEFORE_RUN)
+    assert getattr(before_run, "hook_type", None) == TurnHook.BEFORE_RUN
+    found = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [before_run])
+    assert found is before_run
 
 
 def test_hook_registry_clear():
@@ -128,3 +195,47 @@ def test_hook_registry_clear():
     HookRegistry.clear()
     with pytest.raises(UnregisteredHookError):
         HookRegistry.get("clearable_hook")
+
+
+def test_hook_registry_get_by_type():
+    from pygents.hooks import AgentHook, TurnHook
+
+    HookRegistry.clear()
+
+    async def turn_before(turn):
+        pass
+
+    async def agent_after(agent, turn):
+        pass
+
+    turn_before.hook_type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
+    agent_after.hook_type = AgentHook.AFTER_TURN  # type: ignore[attr-defined]
+
+    before_run = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [turn_before])
+    assert before_run is turn_before
+
+    after_turn = HookRegistry.get_by_type(AgentHook.AFTER_TURN, [agent_after])
+    assert after_turn is agent_after
+
+    empty = HookRegistry.get_by_type(TurnHook.AFTER_RUN, [])
+    assert empty is None
+
+
+def test_hook_registry_get_by_type_returns_first_match():
+    from pygents.hooks import TurnHook
+
+    HookRegistry.clear()
+
+    async def first_hook(turn):
+        pass
+
+    async def second_hook(turn):
+        pass
+
+    first_hook.hook_type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
+    second_hook.hook_type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
+
+    single = HookRegistry.get_by_type(
+        TurnHook.BEFORE_RUN, [first_hook, second_hook]
+    )
+    assert single is first_hook

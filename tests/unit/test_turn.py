@@ -1,9 +1,43 @@
+"""
+Tests for pygents.turn, driven by the following decision table.
+
+Decision table for pygents/turn.py
+----------------------------------
+__setattr__:
+  S1  _is_running and name not in mutable_while_running -> SafeExecutionError
+  S2  Else -> super().__setattr__
+
+__init__:
+  I1  tool is str -> self.tool = ToolRegistry.get(tool)
+  I2  tool is callable -> self.tool = ToolRegistry.get(tool.__name__)
+  I3  args/kwargs/metadata None -> defaults []; {}; {}
+  I4  After init: start_time, end_time, stop_reason None; _is_running False; hooks []
+
+returning():
+  R1  Already running -> SafeExecutionError (decorator)
+  R2  Tool is async gen -> WrongRunMethodError "use yielding()"
+  R3  Normal: start_time, BEFORE_RUN, eval_args/kwargs, wait_for(tool), COMPLETED, AFTER_RUN, return output
+  R4  Timeout -> TIMEOUT, ON_TIMEOUT, TurnTimeoutError, finally end_time
+  R5  Tool raises -> ERROR, ON_ERROR(e), re-raise, finally end_time
+
+yielding():
+  Y1  Already running -> SafeExecutionError
+  Y2  Tool not async gen -> WrongRunMethodError "use returning()"
+  Y3  Normal: BEFORE_RUN, queue, ON_VALUE per item, yield, COMPLETED, AFTER_RUN, output = aggregated
+  Y4  Timeout -> ON_TIMEOUT, TurnTimeoutError, finally end_time
+  Y5  Tool raises -> ERROR, ON_ERROR(e), finally end_time
+
+to_dict/from_dict:
+  D1  to_dict: tool_name, args/kwargs evaluated, metadata, timeout, start/end (iso or None), stop_reason.value, output, hooks
+  D2  from_dict: restore turn, start/end from iso, StopReason, output, hooks via HookRegistry.get
+"""
+
 import asyncio
 
 import pytest
 
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
-from pygents.hooks import TurnHook
+from pygents.hooks import TurnHook, hook
 from pygents.tool import tool
 from pygents.turn import StopReason, Turn
 
@@ -103,12 +137,12 @@ def test_returning_async_single_value_returns_output_and_sets_completed():
     assert turn.end_time is not None
 
 
-def test_returning_async_async_tool_returns_output():
-    turn = Turn[int]("turn_run_async", kwargs={"x": 5})
+def test_turn_init_accepts_tool_callable():
+    turn = Turn[int](turn_run_sync, kwargs={"x": 3})
+    assert turn.tool is turn_run_sync
     result = asyncio.run(turn.returning())
-    assert result == 7
-    assert turn.output == 7
-    assert turn.stop_reason == StopReason.COMPLETED
+    assert result == 4
+    assert turn.output == 4
 
 
 def test_returning_supports_positional_args_only():
@@ -142,19 +176,34 @@ def test_returning_async_reentrant_raises_safe_execution_error():
         asyncio.run(turn.returning())
 
 
+def test_turn_setattr_raises_while_running():
+    turn = Turn("turn_run_slow", kwargs={"duration": 1.0}, timeout=5)
+
+    async def run_turn():
+        await turn.returning()
+
+    async def main():
+        task = asyncio.create_task(run_turn())
+        await asyncio.sleep(0.05)
+        try:
+            with pytest.raises(SafeExecutionError, match="Cannot change property .* while the turn is running"):
+                turn.timeout = 99
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(main())
+
+
 def test_returning_async_returning_list_works():
     turn = Turn[list[int]]("turn_run_returns_list", kwargs={})
     result = asyncio.run(turn.returning())
     assert result == [1, 2, 3]
     assert turn.output == [1, 2, 3]
     assert turn.stop_reason == StopReason.COMPLETED
-
-
-def test_returning_async_sets_end_time_in_finally_on_error():
-    turn = Turn("turn_run_raises", kwargs={})
-    with pytest.raises(ValueError):
-        asyncio.run(turn.returning())
-    assert turn.end_time is not None
 
 
 def test_returning_async_rejects_async_gen_tool():
@@ -170,15 +219,6 @@ def test_yielding_async_yields_and_sets_aggregated_output():
     assert turn.output == [10, 20]
     assert turn.stop_reason == StopReason.COMPLETED
     assert turn.start_time is not None
-    assert turn.end_time is not None
-
-
-def test_yielding_async_async_gen_yields_and_sets_aggregated_output():
-    turn = Turn("turn_run_async_gen", kwargs={})
-    items = asyncio.run(_collect_async(turn.yielding()))
-    assert items == [1, 2]
-    assert turn.output == [1, 2]
-    assert turn.stop_reason == StopReason.COMPLETED
     assert turn.end_time is not None
 
 
@@ -200,16 +240,77 @@ def test_yielding_async_reentrant_raises_safe_execution_error():
 def test_turn_before_run_hook_called():
     events = []
 
+    @hook(TurnHook.BEFORE_RUN)
     async def before_run(turn):
         events.append(("before_run", id(turn)))
 
     turn = Turn("turn_run_sync", kwargs={"x": 10})
-    turn.hooks[TurnHook.BEFORE_RUN] = [before_run]
+    turn.hooks.append(before_run)
     asyncio.run(turn.returning())
     assert len(events) == 1
     assert events[0][0] == "before_run"
     assert events[0][1] == id(turn)
     assert turn.output == 11
+
+
+def test_turn_after_run_hook_called():
+    events = []
+
+    @hook(TurnHook.AFTER_RUN)
+    async def after_run(turn):
+        events.append(("after_run", turn.output))
+
+    turn = Turn("turn_run_sync", kwargs={"x": 10})
+    turn.hooks.append(after_run)
+    asyncio.run(turn.returning())
+    assert len(events) == 1
+    assert events[0][0] == "after_run"
+    assert events[0][1] == 11
+
+
+def test_turn_on_timeout_hook_called():
+    events = []
+
+    @hook(TurnHook.ON_TIMEOUT)
+    async def on_timeout(turn):
+        events.append("on_timeout")
+
+    turn = Turn("turn_run_slow", kwargs={"duration": 2.0}, timeout=1)
+    turn.hooks.append(on_timeout)
+    with pytest.raises(TurnTimeoutError):
+        asyncio.run(turn.returning())
+    assert events == ["on_timeout"]
+
+
+def test_turn_on_error_hook_called():
+    events = []
+
+    @hook(TurnHook.ON_ERROR)
+    async def on_error(turn, exc):
+        events.append(("on_error", type(exc).__name__, str(exc)))
+
+    turn = Turn("turn_run_raises", kwargs={})
+    turn.hooks.append(on_error)
+    with pytest.raises(ValueError, match="tool failed"):
+        asyncio.run(turn.returning())
+    assert len(events) == 1
+    assert events[0][0] == "on_error"
+    assert events[0][1] == "ValueError"
+    assert "tool failed" in events[0][2]
+
+
+def test_turn_on_value_hook_called_for_each_yield():
+    values_seen = []
+
+    @hook(TurnHook.ON_VALUE)
+    async def on_value(turn, value):
+        values_seen.append(value)
+
+    turn = Turn("turn_run_async_gen_20", kwargs={})
+    turn.hooks.append(on_value)
+    items = asyncio.run(_collect_async(turn.yielding()))
+    assert items == [10, 20]
+    assert values_seen == [10, 20]
 
 
 def test_yielding_async_rejects_coroutine_tool():
@@ -271,6 +372,19 @@ def test_turn_accepts_metadata():
 def test_turn_metadata_default_empty():
     turn = Turn("turn_run_sync", kwargs={"x": 1})
     assert turn.metadata == {}
+
+
+def test_turn_to_dict_before_run():
+    turn = Turn("turn_run_sync", kwargs={"x": 1}, metadata={"k": "v"}, timeout=30)
+    data = turn.to_dict()
+    assert data["tool_name"] == "turn_run_sync"
+    assert data["kwargs"] == {"x": 1}
+    assert data["metadata"] == {"k": "v"}
+    assert data["timeout"] == 30
+    assert data["start_time"] is None
+    assert data["end_time"] is None
+    assert data["stop_reason"] is None
+    assert data["output"] is None
 
 
 def test_turn_to_dict_roundtrip():

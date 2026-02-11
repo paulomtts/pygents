@@ -3,11 +3,11 @@ import inspect
 from typing import Any, AsyncIterator
 
 from pygents.errors import SafeExecutionError, TurnTimeoutError
-from pygents.hooks import AgentHook, Hook, run_hooks
+from pygents.hooks import AgentHook, Hook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool
 from pygents.turn import Turn
-from pygents.utils import safe_execution
+from pygents.utils import hooks_by_type_for_serialization, safe_execution
 
 
 class Agent:
@@ -32,11 +32,14 @@ class Agent:
     description: str
 
     _is_running: bool = False
+    _current_turn: Turn | None = None
 
     # -- mutation guard -------------------------------------------------------
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name != "_is_running" and getattr(self, "_is_running", False):
+        if name not in ("_is_running", "_current_turn") and getattr(
+            self, "_is_running", False
+        ):
             raise SafeExecutionError(
                 f"Cannot change property '{name}' while the agent is running."
             )
@@ -54,9 +57,14 @@ class Agent:
         self.tools = tools
         self._tool_names = {t.metadata.name for t in tools}
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
-        self.hooks = {}
+        self.hooks: list[Hook] = []
         self._is_running = False
+        self._current_turn = None
         AgentRegistry.register(self)
+
+    def __repr__(self) -> str:
+        tool_names = [t.metadata.name for t in self.tools]
+        return f"Agent(name={self.name!r}, tools={tool_names})"
 
     # -- queue snapshot -------------------------------------------------------
 
@@ -71,28 +79,10 @@ class Agent:
     # -- hooks -----------------------------------------------------------------
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
-        await run_hooks(self.hooks.get(name, []), *args, **kwargs)
-
-    def add_hook(self, hook_type: AgentHook, hook: Hook, name: str | None = None) -> None:
-        """Add a hook for the given hook type and register it in HookRegistry.
-
-        Parameters
-        ----------
-        hook_type : AgentHook
-            When to run the hook.
-        hook : Hook
-            Async callable to run.
-        name : str | None
-            Name to register under; uses hook.__name__ if not provided.
-        """
-        HookRegistry.register(hook, name)
-        self.hooks.setdefault(hook_type, []).append(hook)
+        if h := HookRegistry.get_by_type(name, self.hooks):
+            await h(*args, **kwargs)
 
     # -- queue -----------------------------------------------------------------
-
-    async def pop(self) -> Turn:
-        """Pop a Turn from the queue."""
-        return await self._queue.get()
 
     async def put(self, turn: Turn) -> None:
         """Put a Turn on the queue.
@@ -133,11 +123,6 @@ class Agent:
 
     # -- run -------------------------------------------------------------------
 
-    async def _run_turn(self, turn: Turn) -> Any:
-        if inspect.isasyncgenfunction(turn.tool.fn):
-            return [x async for x in turn.yielding()]
-        return await turn.returning()
-
     @safe_execution
     async def run(self) -> AsyncIterator[tuple[Turn, Any]]:
         """Run the event loop until the queue is empty.
@@ -148,9 +133,13 @@ class Agent:
         """
         try:
             self._is_running = True
-            while not self._queue.empty():
+            while self._current_turn is not None or not self._queue.empty():
                 await self._run_hooks(AgentHook.BEFORE_TURN, self)
-                turn = self._queue.get_nowait()
+                turn = self._current_turn
+                self._current_turn = None
+                if turn is None:
+                    turn = self._queue.get_nowait()
+                self._current_turn = turn
                 try:
                     if inspect.isasyncgenfunction(turn.tool.fn):
                         async for value in turn.yielding():
@@ -174,18 +163,22 @@ class Agent:
 
                 if isinstance(turn.output, Turn):
                     await self.put(turn.output)
+                self._current_turn = None
         finally:
             self._is_running = False
+            self._current_turn = None
 
     # -- serialization --------------------------------------------------------
-
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
             "tool_names": [t.metadata.name for t in self.tools],
             "queue": [t.to_dict() for t in self._queue_snapshot()],
-            "hooks": {k.value: [h.__name__ for h in v] for k, v in self.hooks.items()},
+            "current_turn": self._current_turn.to_dict()
+            if self._current_turn
+            else None,
+            "hooks": hooks_by_type_for_serialization(self.hooks),
         }
 
     @classmethod
@@ -194,7 +187,9 @@ class Agent:
         agent = cls(data["name"], data["description"], tools)
         for turn_data in data.get("queue", []):
             agent._queue.put_nowait(Turn.from_dict(turn_data))
-        for hook_type_str, hook_names in data.get("hooks", {}).items():
-            hook_type = AgentHook(hook_type_str)
-            agent.hooks[hook_type] = [HookRegistry.get(name) for name in hook_names]
+        if data.get("current_turn") is not None:
+            agent._current_turn = Turn.from_dict(data["current_turn"])
+        for _type_str, hook_names in data.get("hooks", {}).items():
+            for hname in hook_names:
+                agent.hooks.append(HookRegistry.get(hname))
         return agent

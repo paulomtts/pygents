@@ -360,7 +360,7 @@ wheels = [
 
 [[package]]
 name = "pygents"
-version = "0.1.7"
+version = "0.2.1"
 source = { editable = "." }
 
 [package.optional-dependencies]

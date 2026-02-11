@@ -1,3 +1,39 @@
+"""
+Tests for pygents.agent, driven by the following decision table.
+
+Decision table for pygents/agent.py
+-----------------------------------
+__setattr__:
+  S1  _is_running and name not in (_is_running, _current_turn) -> SafeExecutionError
+  S2  Else -> super().__setattr__
+
+__init__:
+  I1  Tool not in ToolRegistry -> UnregisteredToolError (from get)
+  I2  Tool in registry but different instance -> ValueError "not the instance given"
+  I3  Ok: name, description, tools, _tool_names, _queue, hooks [], _is_running False, _current_turn None; AgentRegistry.register
+
+put(turn):
+  P1  turn.tool is None -> ValueError "Turn has no tool"
+  P2  turn.tool.metadata.name not in _tool_names -> ValueError "does not accept tool"
+  P3  Else: BEFORE_PUT, put_nowait, AFTER_PUT
+
+send_turn(agent_name, turn):
+  T1  AgentRegistry.get(agent_name) raises -> that exception
+  T2  Else -> await target.put(turn)
+
+run():
+  R1  Already running -> SafeExecutionError
+  R2  Loop: get turn from _current_turn or queue; BEFORE_TURN
+  R3  Async gen tool -> yielding(), ON_TURN_VALUE per value, yield (turn, value)
+  R4  Coroutine tool -> returning(), ON_TURN_VALUE, yield (turn, output)
+  R5  TurnTimeoutError -> ON_TURN_TIMEOUT, re-raise
+  R6  Other exception -> ON_TURN_ERROR, re-raise
+  R7  After: AFTER_TURN; if turn.output is Turn -> put(turn.output); clear _current_turn
+  R8  finally: _is_running False, _current_turn None
+
+_queue_snapshot: non-destructive peek. to_dict/from_dict: queue, current_turn, hooks.
+"""
+
 import asyncio
 
 import pytest
@@ -8,6 +44,7 @@ from pygents.errors import (
     UnregisteredAgentError,
     UnregisteredToolError,
 )
+from pygents.hooks import AgentHook, hook
 from pygents.registry import AgentRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
@@ -32,6 +69,16 @@ async def stream_agent():
     yield 3
 
 
+@tool()
+async def returns_turn_agent(turn: Turn) -> Turn:
+    return turn
+
+
+@tool()
+async def raising_tool_agent() -> None:
+    raise ValueError("tool error")
+
+
 def test_agent_rejects_tool_not_in_registry():
     unregistered = type(
         "FakeTool",
@@ -40,6 +87,27 @@ def test_agent_rejects_tool_not_in_registry():
     )()
     with pytest.raises(UnregisteredToolError, match="not found"):
         Agent("a", "desc", [unregistered])
+
+
+def test_agent_init_rejects_tool_wrong_instance():
+    AgentRegistry.clear()
+    Agent("a", "desc", [add_agent])
+    fake_same_name = type(
+        "FakeTool",
+        (),
+        {"metadata": type("M", (), {"name": "add_agent"})(), "fn": None},
+    )()
+    with pytest.raises(ValueError, match="not the instance given"):
+        Agent("b", "desc", [fake_same_name])
+
+
+def test_put_rejects_turn_with_no_tool():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
+    object.__setattr__(turn, "tool", None)
+    with pytest.raises(ValueError, match="Turn has no tool"):
+        asyncio.run(agent.put(turn))
 
 
 def test_put_rejects_turn_with_unknown_tool():
@@ -52,18 +120,45 @@ def test_put_rejects_turn_with_unknown_tool():
         asyncio.run(agent.put(turn))
 
 
-def test_put_then_pop_returns_same_turn():
+def test_agent_registered_after_init():
+    AgentRegistry.clear()
+    agent = Agent("registered_agent", "Desc", [add_agent])
+    assert AgentRegistry.get("registered_agent") is agent
+
+
+def test_put_before_put_and_after_put_hooks_called():
+    AgentRegistry.clear()
+    events = []
+
+    @hook(AgentHook.BEFORE_PUT)
+    async def before_put(agent, turn):
+        events.append(("before_put", turn.tool.metadata.name))
+
+    @hook(AgentHook.AFTER_PUT)
+    async def after_put(agent, turn):
+        events.append(("after_put", turn.tool.metadata.name))
+
+    agent = Agent("a", "desc", [add_agent])
+    agent.hooks.extend([before_put, after_put])
+    turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
+    asyncio.run(agent.put(turn))
+    assert events == [("before_put", "add_agent"), ("after_put", "add_agent")]
+
+
+def test_put_then_run_yields_turn_and_result():
     AgentRegistry.clear()
     agent = Agent("a", "desc", [add_agent])
     turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
 
-    async def pop_and_run():
+    async def put_and_run_once():
         await agent.put(turn)
-        t = await agent.pop()
-        return await agent._run_turn(t)
+        async for t, v in agent.run():
+            return t, v
+        return None, None
 
-    result = asyncio.run(pop_and_run())
-    assert result == 3
+    result_turn, result_value = asyncio.run(put_and_run_once())
+    assert result_value == 3
+    assert result_turn is turn
     assert turn.output == 3
 
 
@@ -173,6 +268,125 @@ def test_run_reentrant_raises_safe_execution_error():
     asyncio.run(main())
 
 
+def test_agent_setattr_raises_while_running():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [slow_tool_agent])
+
+    async def run_agent():
+        await agent.put(Turn("slow_tool_agent", kwargs={"duration": 1.0}))
+        async for _ in agent.run():
+            break
+
+    async def main():
+        task = asyncio.create_task(run_agent())
+        await asyncio.sleep(0.05)
+        try:
+            with pytest.raises(SafeExecutionError, match="Cannot change property .* while the agent is running"):
+                agent.name = "other"
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    asyncio.run(main())
+
+
+def test_run_before_turn_after_turn_and_on_turn_value_hooks_called():
+    AgentRegistry.clear()
+    events = []
+
+    @hook(AgentHook.BEFORE_TURN)
+    async def before_turn(agent):
+        events.append("before_turn")
+
+    @hook(AgentHook.ON_TURN_VALUE)
+    async def on_turn_value(agent, turn, value):
+        events.append(("on_turn_value", value))
+
+    @hook(AgentHook.AFTER_TURN)
+    async def after_turn(agent, turn):
+        events.append(("after_turn", turn.tool.metadata.name))
+
+    agent = Agent("a", "desc", [add_agent])
+    agent.hooks.extend([before_turn, on_turn_value, after_turn])
+    asyncio.run(agent.put(Turn("add_agent", kwargs={"a": 2, "b": 3})))
+
+    async def run_and_collect():
+        out = []
+        async for t, v in agent.run():
+            out.append((t, v))
+        return out
+
+    items = asyncio.run(run_and_collect())
+    assert events == ["before_turn", ("on_turn_value", 5), ("after_turn", "add_agent")]
+    assert items[0][1] == 5
+
+
+def test_run_on_turn_timeout_hook_called():
+    AgentRegistry.clear()
+    events = []
+
+    @hook(AgentHook.ON_TURN_TIMEOUT)
+    async def on_turn_timeout(agent, turn):
+        events.append("on_turn_timeout")
+
+    agent = Agent("a", "desc", [slow_tool_agent])
+    agent.hooks.append(on_turn_timeout)
+    asyncio.run(agent.put(Turn("slow_tool_agent", kwargs={"duration": 2.0}, timeout=1)))
+
+    async def consume():
+        async for _ in agent.run():
+            pass
+
+    with pytest.raises(TurnTimeoutError):
+        asyncio.run(consume())
+    assert events == ["on_turn_timeout"]
+
+
+def test_run_on_turn_error_hook_called():
+    AgentRegistry.clear()
+    events = []
+
+    @hook(AgentHook.ON_TURN_ERROR)
+    async def on_turn_error(agent, turn, exc):
+        events.append(("on_turn_error", type(exc).__name__))
+
+    agent = Agent("a", "desc", [raising_tool_agent])
+    agent.hooks.append(on_turn_error)
+    asyncio.run(agent.put(Turn("raising_tool_agent", kwargs={})))
+
+    async def consume():
+        async for _ in agent.run():
+            pass
+
+    with pytest.raises(ValueError, match="tool error"):
+        asyncio.run(consume())
+    assert events == [("on_turn_error", "ValueError")]
+
+
+def test_run_puts_turn_output_when_turn_returns_turn():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent, returns_turn_agent])
+    inner = Turn("add_agent", kwargs={"a": 1, "b": 2})
+    outer = Turn("returns_turn_agent", kwargs={"turn": inner})
+    asyncio.run(agent.put(outer))
+
+    async def collect():
+        out = []
+        async for t, v in agent.run():
+            out.append((t, v))
+        return out
+
+    items = asyncio.run(collect())
+    assert len(items) == 2
+    assert items[0][0] is outer
+    assert items[0][1] is inner
+    assert items[1][0] is inner
+    assert items[1][1] == 3
+
+
 def test_send_turn_enqueues_on_target_agent():
     AgentRegistry.clear()
     agent_a = Agent("alice", "First", [add_agent])
@@ -229,6 +443,15 @@ def test_agent_to_dict_includes_queued_turns():
     assert data["queue"][0]["metadata"] == {"m": 1}
     assert data["queue"][1]["tool_name"] == "add_agent"
 
+    async def run_after_snapshot():
+        results = []
+        async for _, v in agent.run():
+            results.append(v)
+        return results
+
+    results = asyncio.run(run_after_snapshot())
+    assert results == [5, 30]
+
 
 def test_agent_from_dict_roundtrip():
     AgentRegistry.clear()
@@ -267,3 +490,39 @@ def test_agent_from_dict_empty_queue():
     restored = Agent.from_dict(data)
     assert restored.name == "empty"
     assert restored._queue.qsize() == 0
+
+
+def test_agent_to_dict_includes_current_turn_when_set():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    data = agent.to_dict()
+    data["current_turn"] = Turn("add_agent", kwargs={"a": 1, "b": 2}).to_dict()
+    data["queue"] = []
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+    assert restored._current_turn is not None
+    assert restored._current_turn.tool.metadata.name == "add_agent"
+    serialized = restored.to_dict()
+    assert serialized["current_turn"] is not None
+    assert serialized["current_turn"]["tool_name"] == "add_agent"
+
+
+def test_agent_from_dict_with_current_turn_processes_it_first():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    turn = Turn("add_agent", kwargs={"a": 7, "b": 3})
+    data = agent.to_dict()
+    data["current_turn"] = turn.to_dict()
+    data["queue"] = []
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+
+    async def run_once():
+        async for t, v in restored.run():
+            return t, v
+        return None, None
+
+    result_turn, result_value = asyncio.run(run_once())
+    assert result_value == 10
+    assert result_turn.tool.metadata.name == "add_agent"
+    assert restored._queue.empty()

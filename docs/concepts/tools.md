@@ -83,7 +83,7 @@ my_tool = ToolRegistry.get("fetch")  # lookup by name
 
 ## Hooks
 
-Tool hooks fire during invocation. Pass them when decorating:
+Tool hooks fire during invocation. Pass a list of hooks; each must have `hook_type` (e.g. from `@hook(ToolHook.BEFORE_INVOKE)`):
 
 | Hook | When | Args |
 |------|------|------|
@@ -91,23 +91,22 @@ Tool hooks fire during invocation. Pass them when decorating:
 | `AFTER_INVOKE` | After tool returns/yields a value | `(value)` |
 
 ```python
-from pygents import tool, ToolHook
+from pygents import tool, hook, ToolHook
 
+@hook(ToolHook.BEFORE_INVOKE)
 async def audit(*args, **kwargs):
     print(f"Called with {kwargs}")
 
+@hook(ToolHook.AFTER_INVOKE)
 async def log_result(value):
     print(f"Result: {value}")
 
-@tool(hooks={
-    ToolHook.BEFORE_INVOKE: [audit],
-    ToolHook.AFTER_INVOKE: [log_result]
-})
+@tool(hooks=[audit, log_result])
 async def my_tool(x: int) -> int:
     return x * 2
 ```
 
-Tool hooks are registered in `HookRegistry` automatically and apply to **all** invocations of that tool. Exceptions in hooks propagate.
+Tool hooks are registered in `HookRegistry` and apply to **all** invocations of that tool. Exceptions in hooks propagate.
 
 ## Metadata
 

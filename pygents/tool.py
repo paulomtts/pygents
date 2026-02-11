@@ -1,32 +1,33 @@
 import asyncio
 import functools
 import inspect
-from typing import (
-    Any,
-    AsyncIterator,
-    Callable,
-    Coroutine,
-    NamedTuple,
-    Protocol,
-    TypeVar,
-    cast,
-)
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, AsyncIterator, Callable, Coroutine, Protocol, TypeVar, cast
 
-from pygents.hooks import Hook, ToolHook, run_hooks
+from pygents.hooks import Hook, ToolHook
 from pygents.registry import HookRegistry, ToolRegistry
-from pygents.utils import eval_kwargs, log
+from pygents.utils import _null_lock, merge_kwargs, validate_fixed_kwargs
 
 T = TypeVar("T", bound=Any)
 
 
-class ToolMetadata(NamedTuple):
-    """Name and description of a tool."""
+@dataclass
+class ToolMetadata:
+    """Name, description, and run timing of a tool."""
 
     name: str
-    description: str
+    description: str | None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
 
     def dict(self) -> dict[str, Any]:
-        return self._asdict()
+        return {
+            "name": self.name,
+            "description": self.description,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+        }
 
 
 class Tool(Protocol):
@@ -41,7 +42,7 @@ def tool(
     func: Callable[..., T] | None = None,
     *,
     lock: bool = False,
-    hooks: dict[ToolHook, list[Hook]] | None = None,
+    hooks: list[Hook] | None = None,
     **fixed_kwargs: Any,
 ) -> Callable[..., T]:
     """
@@ -57,63 +58,49 @@ def tool(
                 "Tool must be async (coroutine or async generator function)."
             )
 
-        sig = inspect.signature(fn)
-        params = sig.parameters
-        has_var_kwargs = any(
-            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-        )
-        if not has_var_kwargs:
-            valid_keys = set(params.keys())
-            invalid = set(fixed_kwargs.keys()) - valid_keys
-            if invalid:
-                raise TypeError(
-                    f"Tool {fn.__name__!r} fixed kwargs {sorted(invalid)} are not in "
-                    "function signature and function does not accept **kwargs."
-                )
+        validate_fixed_kwargs(fn, fixed_kwargs, kind="Tool")
 
-        def merge_kwargs(call_kwargs: dict[str, Any]) -> dict[str, Any]:
-            evaluated = eval_kwargs(fixed_kwargs)
-            for key in call_kwargs:
-                if key in evaluated:
-                    log.warning(
-                        "Fixed kwarg %r is overridden by call-time argument for tool %s.",
-                        key,
-                        fn.__name__,
-                    )
-            return {**evaluated, **call_kwargs}
+        async def _run_hook(hook_type: ToolHook, *args: Any, **kwargs: Any) -> None:
+            if h := HookRegistry.get_by_type(hook_type, wrapper.hooks):
+                await h(*args, **kwargs)
 
         if inspect.isasyncgenfunction(fn):
 
             @functools.wraps(fn)
             async def wrapper(*args, **kwargs):
-                merged = merge_kwargs(kwargs)
-                await run_hooks(
-                    wrapper.hooks.get(ToolHook.BEFORE_INVOKE, []), *args, **merged
-                )
-                async for value in fn(*args, **merged):
-                    await run_hooks(wrapper.hooks.get(ToolHook.AFTER_INVOKE, []), value)
-                    yield value
+                merged = merge_kwargs(fixed_kwargs, kwargs, f"tool {fn.__name__!r}")
+                lock_ctx = wrapper.lock if wrapper.lock is not None else _null_lock
+                async with lock_ctx:
+                    wrapper.metadata.start_time = datetime.now()
+                    try:
+                        await _run_hook(ToolHook.BEFORE_INVOKE, *args, **merged)
+                        value = None
+                        async for value in fn(*args, **merged):
+                            await _run_hook(ToolHook.ON_YIELD, value)
+                            yield value
+                        await _run_hook(ToolHook.AFTER_INVOKE, value)
+                    finally:
+                        wrapper.metadata.end_time = datetime.now()
         else:
 
             @functools.wraps(fn)
             async def wrapper(*args, **kwargs):
-                merged = merge_kwargs(kwargs)
-                await run_hooks(
-                    wrapper.hooks.get(ToolHook.BEFORE_INVOKE, []), *args, **merged
-                )
-                result = await fn(*args, **merged)
-                await run_hooks(wrapper.hooks.get(ToolHook.AFTER_INVOKE, []), result)
-                return result
+                merged = merge_kwargs(fixed_kwargs, kwargs, f"tool {fn.__name__!r}")
+                lock_ctx = wrapper.lock if wrapper.lock is not None else _null_lock
+                async with lock_ctx:
+                    wrapper.metadata.start_time = datetime.now()
+                    try:
+                        await _run_hook(ToolHook.BEFORE_INVOKE, *args, **merged)
+                        result = await fn(*args, **merged)
+                        await _run_hook(ToolHook.AFTER_INVOKE, result)
+                        return result
+                    finally:
+                        wrapper.metadata.end_time = datetime.now()
 
-        wrapper.metadata = ToolMetadata(fn.__name__, fn.__doc__)
         wrapper.fn = fn
+        wrapper.metadata = ToolMetadata(fn.__name__, fn.__doc__)
         wrapper.lock = asyncio.Lock() if lock else None
-        wrapper.hooks: dict[ToolHook, list] = {}
-        if hooks:
-            for hook_type, hook_list in hooks.items():
-                for hook in hook_list:
-                    HookRegistry.register(hook)
-                wrapper.hooks[hook_type] = hook_list
+        wrapper.hooks = list(hooks) if hooks else []
         ToolRegistry.register(cast(Tool, wrapper))
         return wrapper
 
