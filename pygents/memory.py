@@ -5,7 +5,7 @@ from typing import Any, Iterator
 
 from pygents.hooks import Hook, MemoryHook
 from pygents.registry import HookRegistry
-from pygents.utils import hooks_by_type_for_serialization
+from pygents.utils import rebuild_hooks_from_serialization, serialize_hooks_by_type
 
 
 class Memory:
@@ -24,7 +24,7 @@ class Memory:
         appended and the window is full, the oldest item is evicted.
     hooks : list[Hook] | None
         Optional list of hooks (BEFORE_APPEND and/or AFTER_APPEND). Each
-        must have hook_type set (e.g. via @hook(MemoryHook.BEFORE_APPEND)).
+        must have type set (e.g. via @hook(MemoryHook.BEFORE_APPEND)).
     """
 
     def __init__(
@@ -112,7 +112,7 @@ class Memory:
         out: dict[str, Any] = {
             "limit": self.limit,
             "items": list(self._items),
-            "hooks": hooks_by_type_for_serialization(self.hooks),
+            "hooks": serialize_hooks_by_type(self.hooks),
         }
         return out
 
@@ -121,7 +121,5 @@ class Memory:
         memory = cls(limit=data["limit"])
         for item in data.get("items", []):
             memory._items.append(item)
-        for _type_str, hook_names in data.get("hooks", {}).items():
-            for hname in hook_names:
-                memory.hooks.append(HookRegistry.get(hname))
+        memory.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return memory

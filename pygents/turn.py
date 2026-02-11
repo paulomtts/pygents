@@ -12,8 +12,9 @@ from pygents.tool import Tool
 from pygents.utils import (
     eval_args,
     eval_kwargs,
-    hooks_by_type_for_serialization,
+    rebuild_hooks_from_serialization,
     safe_execution,
+    serialize_hooks_by_type,
 )
 
 T = TypeVar("T")
@@ -42,6 +43,8 @@ class Turn[T]:
         Max seconds for the turn to run. Default 60.
     metadata : dict[str, Any] | None
         Optional metadata.
+    hooks : list[Hook] | None
+        Optional list of hooks (e.g. TurnHook). Applied during turn execution.
     """
 
     tool: Tool | None = None
@@ -80,6 +83,7 @@ class Turn[T]:
         kwargs: dict[str, Any] | None = None,
         timeout: int = 60,
         metadata: dict[str, Any] | None = None,
+        hooks: list[Hook] | None = None,
     ):
         if isinstance(tool, str):
             resolved = ToolRegistry.get(tool)
@@ -94,7 +98,7 @@ class Turn[T]:
         self.end_time = None
         self.stop_reason = None
         self._is_running = False
-        self.hooks: list[Hook] = []
+        self.hooks: list[Hook] = list(hooks) if hooks else []
 
     def __repr__(self) -> str:
         tool_name = self.tool.metadata.name if self.tool else None
@@ -133,9 +137,7 @@ class Turn[T]:
         except (asyncio.TimeoutError, TimeoutError):
             self.stop_reason = StopReason.TIMEOUT
             await self._run_hook(TurnHook.ON_TIMEOUT)
-            raise TurnTimeoutError(
-                f"Turn timed out after {self.timeout}s"
-            ) from None
+            raise TurnTimeoutError(f"Turn timed out after {self.timeout}s") from None
         except Exception as e:
             self.stop_reason = StopReason.ERROR
             await self._run_hook(TurnHook.ON_ERROR, e)
@@ -229,7 +231,7 @@ class Turn[T]:
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "stop_reason": self.stop_reason.value if self.stop_reason else None,
             "output": self.output,
-            "hooks": hooks_by_type_for_serialization(self.hooks),
+            "hooks": serialize_hooks_by_type(self.hooks),
         }
 
     @classmethod
@@ -249,7 +251,5 @@ class Turn[T]:
         turn.stop_reason = StopReason(stop_reason) if stop_reason else None
         if "output" in data:
             turn.output = data["output"]
-        for _type_str, hook_names in data.get("hooks", {}).items():
-            for hname in hook_names:
-                turn.hooks.append(HookRegistry.get(hname))
+        turn.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return turn

@@ -178,7 +178,7 @@ def test_hook_registry_register_with_hook_type_stores_and_findable():
         pass
 
     HookRegistry.register(before_run, hook_type=TurnHook.BEFORE_RUN)
-    assert getattr(before_run, "hook_type", None) == TurnHook.BEFORE_RUN
+    assert getattr(before_run, "type", None) == TurnHook.BEFORE_RUN
     found = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [before_run])
     assert found is before_run
 
@@ -208,8 +208,8 @@ def test_hook_registry_get_by_type():
     async def agent_after(agent, turn):
         pass
 
-    turn_before.hook_type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
-    agent_after.hook_type = AgentHook.AFTER_TURN  # type: ignore[attr-defined]
+    turn_before.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
+    agent_after.type = AgentHook.AFTER_TURN  # type: ignore[attr-defined]
 
     before_run = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [turn_before])
     assert before_run is turn_before
@@ -232,8 +232,8 @@ def test_hook_registry_get_by_type_returns_first_match():
     async def second_hook(turn):
         pass
 
-    first_hook.hook_type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
-    second_hook.hook_type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
+    first_hook.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
+    second_hook.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
 
     single = HookRegistry.get_by_type(
         TurnHook.BEFORE_RUN, [first_hook, second_hook]

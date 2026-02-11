@@ -121,3 +121,43 @@ def test_agent_run_with_hooks_and_memory():
         "memory_after_append",
     ]
     assert events == expected_sequence
+
+
+def test_agent_multi_type_hook_invoked_for_each_event():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    events = []
+
+    @tool()
+    async def simple_tool(x: int) -> int:
+        return x + 1
+
+    @hook(
+        [
+            AgentHook.BEFORE_TURN,
+            AgentHook.AFTER_TURN,
+            TurnHook.BEFORE_RUN,
+            TurnHook.AFTER_RUN,
+        ]
+    )
+    async def multi_type_log(*args, **kwargs):
+        events.append(("multi_type", len(args)))
+
+    agent = Agent("multi_hook_agent", "Test", [simple_tool])
+    agent.hooks.append(multi_type_log)
+
+    turn = Turn("simple_tool", kwargs={"x": 5}, hooks=[multi_type_log])
+    asyncio.run(agent.put(turn))
+
+    async def run():
+        return [r async for r in agent.run()]
+
+    results = asyncio.run(run())
+    assert len(results) == 1
+    assert results[0][1] == 6
+    assert events == [
+        ("multi_type", 1),
+        ("multi_type", 1),
+        ("multi_type", 1),
+        ("multi_type", 2),
+    ]

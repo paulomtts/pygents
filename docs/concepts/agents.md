@@ -88,7 +88,7 @@ Agent hooks fire at specific points during the run loop. Hooks are stored as a l
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
 | `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
 
-Use the `@hook(hook_type)` decorator so the hook is registered and carries its type, then append it to `agent.hooks`:
+Use the `@hook(type)` decorator so the hook is registered and carries its type, then append it to `agent.hooks`:
 
 ```python
 from pygents import Agent, AgentHook, hook

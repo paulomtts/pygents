@@ -7,7 +7,11 @@ from pygents.hooks import AgentHook, Hook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool
 from pygents.turn import Turn
-from pygents.utils import hooks_by_type_for_serialization, safe_execution
+from pygents.utils import (
+    rebuild_hooks_from_serialization,
+    safe_execution,
+    serialize_hooks_by_type,
+)
 
 
 class Agent:
@@ -178,7 +182,7 @@ class Agent:
             "current_turn": self._current_turn.to_dict()
             if self._current_turn
             else None,
-            "hooks": hooks_by_type_for_serialization(self.hooks),
+            "hooks": serialize_hooks_by_type(self.hooks),
         }
 
     @classmethod
@@ -189,7 +193,5 @@ class Agent:
             agent._queue.put_nowait(Turn.from_dict(turn_data))
         if data.get("current_turn") is not None:
             agent._current_turn = Turn.from_dict(data["current_turn"])
-        for _type_str, hook_names in data.get("hooks", {}).items():
-            for hname in hook_names:
-                agent.hooks.append(HookRegistry.get(hname))
+        agent.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return agent

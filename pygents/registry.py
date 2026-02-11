@@ -175,7 +175,7 @@ class HookRegistry(ABC):
             raise ValueError(f"Hook {hook_name!r} already registered")
         cls._registry[hook_name] = hook
         if hook_type is not None:
-            hook.hook_type = hook_type  # type: ignore[attr-defined]
+            hook.type = hook_type  # type: ignore[attr-defined]
 
     # -- lookup ----------------------------------------------------------------
 
@@ -206,7 +206,13 @@ class HookRegistry(ABC):
     @classmethod
     def get_by_type(cls, hook_type: object, hooks: list[Hook]) -> Hook | None:
         """Return the first hook in the given list that matches the hook_type."""
-        return next(
-            (h for h in hooks if getattr(h, "hook_type", None) == hook_type),
-            None,
-        )
+
+        def matches(h: "Hook") -> bool:
+            ht = getattr(h, "type", None)
+            if ht is None:
+                return False
+            if isinstance(ht, (tuple, frozenset)):
+                return hook_type in ht
+            return ht == hook_type
+
+        return next((h for h in hooks if matches(h)), None)

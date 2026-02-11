@@ -4,7 +4,7 @@ Hooks are async callables that run at specific points in the lifecycle of turns,
 
 ## Defining hooks
 
-Decorate an async function with `@hook(hook_type)`. The decorator registers the hook and sets its type so run-time code can select it by `hook_type`.
+Decorate an async function with `@hook(type)`. The decorator registers the hook and sets its type so run-time code can select it by type.
 
 ```python
 from pygents import hook, TurnHook
@@ -22,7 +22,7 @@ async def on_error(turn, exception):
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `hook_type` | required | One of `TurnHook`, `AgentHook`, `ToolHook`, `MemoryHook`. Stored on the hook for filtering. |
+| `type` | required | One or more of `TurnHook`, `AgentHook`, `ToolHook`, `MemoryHook`. Stored on the hook for filtering. Pass a list (e.g. `@hook([TurnHook.BEFORE_RUN, AgentHook.AFTER_TURN])`) to register for several events. |
 | `lock` | `False` | If `True`, concurrent runs of this hook are serialized via `asyncio.Lock`. |
 | `**kwargs` | — | Fixed keyword arguments merged into every invocation. Call-time kwargs override these (with a warning). |
 
@@ -80,7 +80,19 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 - **Tools** — `@tool(hooks=[...])`; applied on every invocation of that tool.
 - **Memory** — `Memory(limit=..., hooks=[...])` or `mem.branch(hooks=[...])`; serialized by name.
 
-The framework selects which hook to run via `HookRegistry.get_by_type(hook_type, list_of_hooks)`. Only hooks whose `hook_type` matches the event are invoked. Exceptions in hooks propagate.
+The framework selects which hook to run via `HookRegistry.get_by_type(type, list_of_hooks)`. Only hooks whose type matches the event are invoked. Exceptions in hooks propagate.
+
+## Multi-type hooks
+
+To reuse the same hook for multiple event types, pass a list of types:
+
+```python
+@hook([AgentHook.BEFORE_TURN, AgentHook.AFTER_TURN])
+async def log_turn_events(*args, **kwargs):
+    print(f"Event: {args}")
+```
+
+Multi-type hooks **must** accept `*args, **kwargs` because different hook types receive different arguments (e.g. `BEFORE_TURN` gets `(agent,)`, `AFTER_TURN` gets `(agent, turn)`). You can inspect `args` to distinguish the event.
 
 ## Fixed kwargs
 
@@ -134,4 +146,4 @@ my_hook = HookRegistry.get("log_start")
 !!! warning "UnregisteredHookError"
     `HookRegistry.get(name)` raises `UnregisteredHookError` if no hook is registered with that name.
 
-`get_by_type` is used internally: given a list of hooks (e.g. `turn.hooks`), it returns the first hook whose `hook_type` matches. You typically don't call it directly; you attach hooks to turns, agents, tools, or memory and the framework invokes the right one at each event.
+`get_by_type` is used internally: given a list of hooks (e.g. `turn.hooks`), it returns the first hook whose type matches. You typically don't call it directly; you attach hooks to turns, agents, tools, or memory and the framework invokes the right one at each event.

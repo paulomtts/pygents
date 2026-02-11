@@ -77,11 +77,32 @@ def merge_kwargs(
     return {**evaluated, **call_kwargs}
 
 
-def hooks_by_type_for_serialization(hooks: Iterable[Any]) -> dict[str, list[str]]:
-    by_type: dict[str, list[str]] = {}
+def rebuild_hooks_from_serialization(hooks_data: dict[str, list[str]]) -> list[Any]:
+    """Rebuild hook list from serialized data by looking up names in HookRegistry."""
+    from pygents.registry import HookRegistry
+
+    seen: set[str] = set()
+    result: list[Any] = []
+    for _type_str, hook_names in hooks_data.items():
+        for hname in hook_names:
+            if hname not in seen:
+                seen.add(hname)
+                result.append(HookRegistry.get(hname))
+    return result
+
+
+def serialize_hooks_by_type(hooks: Iterable[Any]) -> dict[str, list[str]]:
+    """Serialize hooks by type."""
+    hooks_dict: dict[str, list[str]] = {}
     for h in hooks:
-        t = getattr(h, "hook_type", None)
-        if t is not None:
-            key = t.value if hasattr(t, "value") else str(t)
-            by_type.setdefault(key, []).append(getattr(h, "__name__", "hook"))
-    return by_type
+        t = getattr(h, "type", None)
+        if t is None:
+            continue
+        types_to_add = t if isinstance(t, (tuple, frozenset)) else (t,)
+        hook_name = getattr(h, "__name__", "hook")
+        for single_type in types_to_add:
+            key = (
+                single_type.value if hasattr(single_type, "value") else str(single_type)
+            )
+            hooks_dict.setdefault(key, []).append(hook_name)
+    return hooks_dict

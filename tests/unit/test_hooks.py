@@ -30,7 +30,6 @@ from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
 
-
 # --- Fixtures: tools used by hook integration tests ---------------------------------
 
 
@@ -92,10 +91,13 @@ def test_hook_sets_type_metadata_and_registers():
     async def decorated_before_run(turn):
         pass
 
-    assert decorated_before_run.hook_type == TurnHook.BEFORE_RUN
+    assert decorated_before_run.type == TurnHook.BEFORE_RUN
     assert decorated_before_run.metadata == HookMetadata("decorated_before_run", None)
     assert HookRegistry.get("decorated_before_run") is decorated_before_run
-    assert HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [decorated_before_run]) is decorated_before_run
+    assert (
+        HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [decorated_before_run])
+        is decorated_before_run
+    )
 
 
 def test_hook_metadata_includes_docstring():
@@ -130,8 +132,77 @@ def test_hook_memory_hook_type_accepted():
     async def before_append(items):
         pass
 
-    assert before_append.hook_type == MemoryHook.BEFORE_APPEND
+    assert before_append.type == MemoryHook.BEFORE_APPEND
     assert HookRegistry.get("before_append") is before_append
+
+
+def test_hook_multi_type_matches_each_type():
+    HookRegistry.clear()
+
+    @hook([AgentHook.BEFORE_TURN, AgentHook.AFTER_TURN])
+    async def multi_type_hook(*args, **kwargs):
+        pass
+
+    assert isinstance(multi_type_hook.type, tuple)
+    assert AgentHook.BEFORE_TURN in multi_type_hook.type
+    assert AgentHook.AFTER_TURN in multi_type_hook.type
+    assert (
+        HookRegistry.get_by_type(AgentHook.BEFORE_TURN, [multi_type_hook])
+        is multi_type_hook
+    )
+    assert (
+        HookRegistry.get_by_type(AgentHook.AFTER_TURN, [multi_type_hook])
+        is multi_type_hook
+    )
+
+
+def test_hook_multi_type_serialization():
+    HookRegistry.clear()
+
+    @hook([AgentHook.BEFORE_TURN, AgentHook.AFTER_TURN])
+    async def multi_serial_hook(*args, **kwargs):
+        pass
+
+    from pygents.utils import serialize_hooks_by_type
+
+    result = serialize_hooks_by_type([multi_serial_hook])
+    assert "before_turn" in result
+    assert "after_turn" in result
+    assert result["before_turn"] == ["multi_serial_hook"]
+    assert result["after_turn"] == ["multi_serial_hook"]
+
+
+def test_hook_multi_type_deduplication_on_deserialization():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+
+    @hook([AgentHook.BEFORE_TURN, AgentHook.AFTER_TURN])
+    async def multi_dedup_hook(*args, **kwargs):
+        pass
+
+    data = {
+        "name": "dedup_agent",
+        "description": "Test",
+        "tool_names": ["tool_for_hook_test"],
+        "queue": [],
+        "current_turn": None,
+        "hooks": {
+            "before_turn": ["multi_dedup_hook"],
+            "after_turn": ["multi_dedup_hook"],
+        },
+    }
+    agent = Agent.from_dict(data)
+    assert len(agent.hooks) == 1
+    assert agent.hooks[0] is multi_dedup_hook
+
+
+def test_hook_empty_list_raises():
+    HookRegistry.clear()
+    with pytest.raises(ValueError, match="at least one type"):
+
+        @hook([])
+        async def bad_hook(*args, **kwargs):
+            pass
 
 
 # --- hook() decorator: lock (H2, H3) --------------------------------------------------
@@ -198,7 +269,9 @@ def test_hook_call_kwargs_override_fixed_kwargs():
 
 def test_hook_fixed_kwarg_not_in_signature_raises():
     HookRegistry.clear()
-    with pytest.raises(TypeError, match="fixed kwargs .* are not in function signature"):
+    with pytest.raises(
+        TypeError, match="fixed kwargs .* are not in function signature"
+    ):
 
         @hook(TurnHook.BEFORE_RUN, unknown=1)
         async def no_such_param(turn):
@@ -248,8 +321,8 @@ def test_tool_hooks_before_and_after_invoke():
     async def after_hook(result):
         events.append(("after", result))
 
-    before_hook.hook_type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-    after_hook.hook_type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
+    before_hook.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
+    after_hook.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
 
     @tool(hooks=[before_hook, after_hook])
     async def hooked_tool(x: int) -> int:
@@ -276,9 +349,9 @@ def test_tool_hooks_async_gen_before_on_yield_after():
     async def after_hook(value):
         events.append(("after", value))
 
-    before_hook.hook_type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-    on_yield_hook.hook_type = ToolHook.ON_YIELD  # type: ignore[attr-defined]
-    after_hook.hook_type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
+    before_hook.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
+    on_yield_hook.type = ToolHook.ON_YIELD  # type: ignore[attr-defined]
+    after_hook.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
 
     @tool(hooks=[before_hook, on_yield_hook, after_hook])
     async def hooked_gen_tool():
@@ -330,8 +403,10 @@ def test_turn_hook_custom_registry_name():
     async def another_turn_hook(turn):
         pass
 
-    another_turn_hook.hook_type = TurnHook.AFTER_RUN  # type: ignore[attr-defined]
-    HookRegistry.register(another_turn_hook, "custom_turn_hook", hook_type=TurnHook.AFTER_RUN)
+    another_turn_hook.type = TurnHook.AFTER_RUN  # type: ignore[attr-defined]
+    HookRegistry.register(
+        another_turn_hook, "custom_turn_hook", hook_type=TurnHook.AFTER_RUN
+    )
     turn = Turn("tool_for_hook_test", kwargs={"x": 5})
     turn.hooks.append(another_turn_hook)
     assert HookRegistry.get("custom_turn_hook") is another_turn_hook
@@ -410,8 +485,10 @@ def test_agent_hook_custom_registry_name():
     async def another_agent_hook(agent):
         pass
 
-    another_agent_hook.hook_type = AgentHook.AFTER_TURN  # type: ignore[attr-defined]
-    HookRegistry.register(another_agent_hook, "custom_agent_hook", hook_type=AgentHook.AFTER_TURN)
+    another_agent_hook.type = AgentHook.AFTER_TURN  # type: ignore[attr-defined]
+    HookRegistry.register(
+        another_agent_hook, "custom_agent_hook", hook_type=AgentHook.AFTER_TURN
+    )
     agent = Agent("hook_agent2", "Test agent", [tool_for_hook_test])
     agent.hooks.append(another_agent_hook)
     assert HookRegistry.get("custom_agent_hook") is another_agent_hook
@@ -459,6 +536,7 @@ def test_agent_roundtrip_with_hooks():
 
     agent = Agent("roundtrip_hook_agent", "Roundtrip test", [tool_for_hook_test])
     agent.hooks.append(agent_roundtrip_hook)
+
     async def put_and_serialize():
         await agent.put(Turn("tool_for_hook_test", kwargs={"x": 3}))
         return agent.to_dict()
@@ -468,8 +546,10 @@ def test_agent_roundtrip_with_hooks():
     restored = Agent.from_dict(data)
     assert len(restored.hooks) == 1
     assert restored.hooks[0] is agent_roundtrip_hook
+
     async def run_restored():
         return [v async for _, v in restored.run()]
+
     assert asyncio.run(run_restored()) == [6]
     assert events == [("value", 6)]
 
@@ -500,4 +580,5 @@ def test_agent_multiple_hooks_serialization():
 def _collect_async(agen):
     async def run():
         return [x async for x in agen]
+
     return asyncio.run(run())

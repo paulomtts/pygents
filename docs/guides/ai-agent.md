@@ -22,19 +22,18 @@ import logging
 from py_ai_toolkit import PyAIToolkit
 from py_ai_toolkit.core.domain.interfaces import LLMConfig
 
-from pygents import Memory, hook, AgentHook
+from pygents import Memory, MemoryHook, hook
 
 logger = logging.getLogger(__name__)
 
 # Uses LLM_MODEL, LLM_API_KEY, etc. from the environment if set
 toolkit = PyAIToolkit(main_model_config=LLMConfig())
 
-# Last 20 messages kept as context for the LLM
-memory = Memory(limit=20)
+@hook(MemoryHook.AFTER_APPEND)
+async def log_memory_append(items: list) -> None:
+    logger.debug("Memory: %d items", len(items))
 
-@hook(AgentHook.AFTER_TURN)
-async def log_turn(agent, turn):
-    logger.debug("%s: %s → %s", agent.name, turn.tool.metadata.name, turn.stop_reason)
+memory = Memory(limit=20, hooks=[log_memory_append])
 ```
 
 !!! info "LLM configuration"
@@ -151,11 +150,6 @@ import asyncio
 from pygents import Agent, Turn
 
 agent = Agent("assistant", "Calendar assistant", [think, respond, create_event])
-agent.memory = memory
-agent.hooks.append(log_turn)
-
-# Set logging to DEBUG to see turn completion in logs, e.g.:
-# logging.basicConfig(level=logging.DEBUG)
 
 async def main():
     await memory.append("User: Schedule standup tomorrow at 9am")

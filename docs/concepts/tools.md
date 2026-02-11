@@ -84,7 +84,7 @@ my_tool = ToolRegistry.get("fetch")  # lookup by name
 
 ## Hooks
 
-Tool hooks fire during invocation. Pass a list of hooks; each must have `hook_type` (e.g. from `@hook(ToolHook.BEFORE_INVOKE)`):
+Tool hooks fire during invocation. Pass a list of hooks; each must have `type` (e.g. from `@hook(ToolHook.BEFORE_INVOKE)`):
 
 | Hook | When | Args |
 |------|------|------|

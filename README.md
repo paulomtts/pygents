@@ -72,11 +72,11 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
 
 - **Hook protocol**: Registered hooks conform to a `Hook` protocol (like `Tool`), with `metadata` (`HookMetadata`: name, description, and run timing), `hook_type`, `fn`, and `lock`. The decorator sets `metadata` (from `__name__` and `__doc__`), `fn`, and `lock`; `HookRegistry.register()` sets `hook_type`. Raw async callables are typed as `Callable[..., Awaitable[None]]`.
 
-- **Hook decorator**: `@hook(hook_type, lock=False, **fixed_kwargs)` mirrors the tool decorator: keyword arguments are merged into every invocation (call-time overrides), and `lock=True` uses an asyncio lock to serialize hook invocations.
+- **Hook decorator**: `@hook(hook_type, lock=False, **fixed_kwargs)` mirrors the tool decorator: keyword arguments are merged into every invocation (call-time overrides), and `lock=True` uses an asyncio lock to serialize hook invocations. Pass a list of types (e.g. `@hook([TurnHook.BEFORE_RUN, AgentHook.AFTER_TURN])`) to reuse one hook for several events; multi-type hooks must accept `*args, **kwargs` since different types receive different arguments.
 
 - **Tool lock in tool layer**: The tool lock is acquired inside the `@tool` wrapper, not in the turn. So the lock covers only the tool’s own execution (including its BEFORE_INVOKE / ON_YIELD / AFTER_INVOKE hooks). Turn-level hooks (BEFORE_RUN, AFTER_RUN, ON_TIMEOUT, ON_ERROR) run outside the tool lock; hooks that need serialization use their own `lock=True`.
 
-- **Memory hooks**: `Memory` has no compact callback. It supports `MemoryHook.BEFORE_APPEND` and `MemoryHook.AFTER_APPEND` only. Hooks are stored as `list[Hook]` (like Agent/Turn), filtered by `hook_type` when running. BEFORE_APPEND hooks receive `(items, result)` and can fill `result` to replace the window before new items are appended. Serialization uses the same by-type-by-name shape as Agent/Turn; `from_dict()` resolves names from `HookRegistry`.
+- **Memory hooks**: `Memory` has no compact callback. It supports `MemoryHook.BEFORE_APPEND` and `MemoryHook.AFTER_APPEND` only. Hooks are stored as `list[Hook]` (like Agent/Turn), filtered by type when running. BEFORE_APPEND and AFTER_APPEND hooks receive `(items,)` — the current items as a list (read-only). Serialization uses the same by-type-by-name shape as Agent/Turn; `from_dict()` resolves names from `HookRegistry`.
 
 ## Docs
 

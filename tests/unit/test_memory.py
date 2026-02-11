@@ -109,7 +109,7 @@ def test_before_append_is_called_on_every_append():
     async def spy(items):
         calls.append(list(items))
 
-    spy.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    spy.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(5, hooks=[spy])
@@ -125,7 +125,7 @@ def test_before_append_does_not_replace_items():
     async def keep_last_two(items):
         pass
 
-    keep_last_two.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    keep_last_two.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(5, hooks=[keep_last_two])
@@ -141,7 +141,7 @@ def test_before_append_observes_only():
     async def four_items(items):
         pass
 
-    four_items.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    four_items.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(3, hooks=[four_items])
@@ -155,7 +155,7 @@ def test_before_append_can_be_no_op():
     async def clear_all(items):
         pass
 
-    clear_all.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    clear_all.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(3, hooks=[clear_all])
@@ -173,7 +173,7 @@ def test_before_append_receives_copy():
     async def mutating_compact(items):
         items.clear()
 
-    mutating_compact.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    mutating_compact.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(5, hooks=[mutating_compact])
@@ -199,7 +199,7 @@ def test_after_append_hook_called():
     async def after_spy(items):
         seen.append(list(items))
 
-    after_spy.hook_type = MemoryHook.AFTER_APPEND  # type: ignore[attr-defined]
+    after_spy.type = MemoryHook.AFTER_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(5, hooks=[after_spy])
@@ -308,7 +308,7 @@ def test_branch_inherits_hooks():
     async def spy(items):
         calls.append(list(items))
 
-    spy.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    spy.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(5, hooks=[spy])
@@ -325,7 +325,7 @@ def test_branch_overrides_hooks():
     async def keep_last(items):
         pass
 
-    keep_last.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    keep_last.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(5, hooks=[keep_last])
@@ -344,8 +344,8 @@ def test_branch_with_explicit_hooks_uses_them():
     async def child_compact(items):
         pass
 
-    parent_compact.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
-    child_compact.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    parent_compact.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    child_compact.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(5, hooks=[parent_compact])

@@ -37,9 +37,9 @@ from pygents.hooks import TurnHook
 from pygents.utils import (
     eval_args,
     eval_kwargs,
-    hooks_by_type_for_serialization,
     merge_kwargs,
     safe_execution,
+    serialize_hooks_by_type,
     validate_fixed_kwargs,
 )
 
@@ -157,7 +157,9 @@ def test_validate_fixed_kwargs_key_not_in_signature_raises():
     def fn(x: int) -> None:
         pass
 
-    with pytest.raises(TypeError, match="fixed kwargs .* are not in function signature"):
+    with pytest.raises(
+        TypeError, match="fixed kwargs .* are not in function signature"
+    ):
         validate_fixed_kwargs(fn, {"x": 1, "unknown": 2})
 
 
@@ -195,24 +197,24 @@ def test_merge_kwargs_override_logs_warning(caplog):
 
 
 def test_hooks_by_type_for_serialization_empty():
-    assert hooks_by_type_for_serialization([]) == {}
+    assert serialize_hooks_by_type([]) == {}
 
 
 def test_hooks_by_type_for_serialization_uses_enum_value_and_name():
-    hook1 = type("H", (), {"hook_type": TurnHook.BEFORE_RUN, "__name__": "my_hook"})()
-    result = hooks_by_type_for_serialization([hook1])
+    hook1 = type("H", (), {"type": TurnHook.BEFORE_RUN, "__name__": "my_hook"})()
+    result = serialize_hooks_by_type([hook1])
     assert result == {"before_run": ["my_hook"]}
 
 
 def test_hooks_by_type_for_serialization_skips_hook_without_type():
     hook_no_type = type("H", (), {"__name__": "anonymous"})()
-    assert hooks_by_type_for_serialization([hook_no_type]) == {}
+    assert serialize_hooks_by_type([hook_no_type]) == {}
 
 
 def test_hooks_by_type_for_serialization_name_fallback():
     class E:
         value = "ev"
 
-    hook_no_name = type("H", (), {"hook_type": E()})()
-    result = hooks_by_type_for_serialization([hook_no_name])
+    hook_no_name = type("H", (), {"type": E()})()
+    result = serialize_hooks_by_type([hook_no_name])
     assert result == {"ev": ["hook"]}

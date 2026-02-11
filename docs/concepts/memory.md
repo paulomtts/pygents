@@ -24,7 +24,7 @@ await mem.append("msg1", "msg2", "msg3")
 
 ## Hooks (BEFORE_APPEND, AFTER_APPEND)
 
-Memory supports two hook types. Pass `hooks` as a list; each hook must have `hook_type` (e.g. from `@hook(MemoryHook.BEFORE_APPEND)`).
+Memory supports two hook types. Pass `hooks` as a list; each hook must have `type` (e.g. from `@hook(MemoryHook.BEFORE_APPEND)`).
 
 | Hook | When | Args |
 |------|------|------|

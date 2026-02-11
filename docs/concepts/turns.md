@@ -93,7 +93,7 @@ Turn hooks fire at specific points during execution. Hooks are stored as a list 
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
 | `ON_VALUE` | Before each yielded value (streaming only) | `(turn, value)` |
 
-Use the `@hook(hook_type)` decorator so the hook is registered and carries its type, then append it to `turn.hooks`:
+Use the `@hook(type)` decorator so the hook is registered and carries its type. Pass hooks in the constructor or append to `turn.hooks`:
 
 ```python
 from pygents import Turn, hook, TurnHook
@@ -102,8 +102,7 @@ from pygents import Turn, hook, TurnHook
 async def log_start(turn):
     print(f"Starting {turn.tool.metadata.name}")
 
-turn = Turn("my_tool", kwargs={})
-turn.hooks.append(log_start)
+turn = Turn("my_tool", kwargs={}, hooks=[log_start])
 ```
 
 Hooks are registered in `HookRegistry` at decoration time. Use named functions so they serialize by name.
