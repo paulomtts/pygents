@@ -127,8 +127,8 @@ def test_hook_memory_hook_type_accepted():
     HookRegistry.clear()
 
     @hook(MemoryHook.BEFORE_APPEND)
-    async def before_append(items, result):
-        result.extend(items)
+    async def before_append(items):
+        pass
 
     assert before_append.hook_type == MemoryHook.BEFORE_APPEND
     assert HookRegistry.get("before_append") is before_append

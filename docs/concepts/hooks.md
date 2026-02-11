@@ -70,8 +70,8 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_APPEND` | Before new items are inserted | `(items, result)` — fill `result` to replace the window |
-| `AFTER_APPEND` | After new items have been added | `(items,)` |
+| `BEFORE_APPEND` | Before new items are inserted | `(items,)` — current items (read-only; does not clear or replace the window) |
+| `AFTER_APPEND` | After new items have been added | `(items,)` — current items |
 
 ## Where hooks attach
 

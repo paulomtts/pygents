@@ -23,9 +23,8 @@ def test_agent_run_with_hooks_and_memory():
     events = []
 
     @hook(MemoryHook.BEFORE_APPEND)
-    async def memory_before(items, result):
+    async def memory_before(items):
         events.append("memory_before_append")
-        result.extend(items)
 
     @hook(MemoryHook.AFTER_APPEND)
     async def memory_after(items):

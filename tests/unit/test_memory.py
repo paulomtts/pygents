@@ -10,7 +10,7 @@ __init__(limit, hooks=None):
 limit/items properties: maxlen; list(_items).
 
 append(*items):
-  A1  BEFORE_APPEND hook -> current, result, await hook(current, result), replace _items from result, then append items
+  A1  BEFORE_APPEND hook -> await hook(list(self._items)), then append items (eviction by maxlen)
   A2  No BEFORE_APPEND -> append items (eviction by maxlen)
   A3  AFTER_APPEND hook -> await hook(list(self._items))
 
@@ -106,9 +106,8 @@ def test_before_append_is_called_on_every_append():
     HookRegistry.clear()
     calls = []
 
-    async def spy(items, result):
+    async def spy(items):
         calls.append(list(items))
-        result.extend(items)
 
     spy.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
@@ -122,9 +121,9 @@ def test_before_append_is_called_on_every_append():
     asyncio.run(_())
 
 
-def test_before_append_reduces_items():
-    async def keep_last_two(items, result):
-        result.extend(items[-2:] if len(items) >= 2 else items)
+def test_before_append_does_not_replace_items():
+    async def keep_last_two(items):
+        pass
 
     keep_last_two.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
@@ -133,27 +132,27 @@ def test_before_append_reduces_items():
         await mem.append("a", "b", "c", "d", "e")
         assert mem.items == ["a", "b", "c", "d", "e"]
         await mem.append("f")
-        assert mem.items == ["d", "e", "f"]
+        assert mem.items == ["b", "c", "d", "e", "f"]
 
     asyncio.run(_())
 
 
-def test_before_append_result_subject_to_limit():
-    async def four_items(items, result):
-        result.extend(["x", "y", "w", "v"])
+def test_before_append_observes_only():
+    async def four_items(items):
+        pass
 
     four_items.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(3, hooks=[four_items])
         await mem.append("a")
-        assert mem.items == ["w", "v", "a"]
+        assert mem.items == ["a"]
 
     asyncio.run(_())
 
 
-def test_before_append_can_return_empty():
-    async def clear_all(items, result):
+def test_before_append_can_be_no_op():
+    async def clear_all(items):
         pass
 
     clear_all.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
@@ -171,16 +170,15 @@ def test_before_append_receives_copy():
 
     HookRegistry.clear()
 
-    async def mutating_compact(items, result):
+    async def mutating_compact(items):
         items.clear()
-        result.append("x")
 
     mutating_compact.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = Memory(5, hooks=[mutating_compact])
         await mem.append("a", "b")
-        assert mem.items == ["x", "a", "b"]
+        assert mem.items == ["a", "b"]
 
     asyncio.run(_())
 
@@ -307,9 +305,8 @@ def test_branch_inherits_hooks():
     HookRegistry.clear()
     calls = []
 
-    async def spy(items, result):
+    async def spy(items):
         calls.append(list(items))
-        result.extend(items)
 
     spy.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
@@ -325,8 +322,8 @@ def test_branch_inherits_hooks():
 
 
 def test_branch_overrides_hooks():
-    async def keep_last(items, result):
-        result.extend(items[-1:] if items else [])
+    async def keep_last(items):
+        pass
 
     keep_last.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
@@ -341,11 +338,11 @@ def test_branch_overrides_hooks():
 
 
 def test_branch_with_explicit_hooks_uses_them():
-    async def parent_compact(items, result):
-        result.extend(items[-1:] if items else [])
+    async def parent_compact(items):
+        pass
 
-    async def child_compact(items, result):
-        result.extend(items[-2:] if len(items) >= 2 else items)
+    async def child_compact(items):
+        pass
 
     parent_compact.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
     child_compact.hook_type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
@@ -355,9 +352,9 @@ def test_branch_with_explicit_hooks_uses_them():
         await mem.append("a", "b", "c")
         child = mem.branch(hooks=[child_compact])
         await child.append("d")
-        assert child.items == ["b", "c", "d"]
+        assert child.items == ["a", "b", "c", "d"]
         await mem.append("x")
-        assert mem.items == ["c", "x"]
+        assert mem.items == ["a", "b", "c", "x"]
 
     asyncio.run(_())
 
@@ -450,19 +447,19 @@ def test_roundtrip_with_before_append_hook():
     HookRegistry.clear()
 
     @hook(MemoryHook.BEFORE_APPEND)
-    async def keep_last_two(items, result):
-        result.extend(items[-2:] if len(items) >= 2 else items)
+    async def keep_last_two(items):
+        pass
 
     async def _():
         mem = Memory(5, hooks=[keep_last_two])
         await mem.append("a", "b", "c", "d", "e")
         await mem.append("f")
-        assert mem.items == ["d", "e", "f"]
+        assert mem.items == ["b", "c", "d", "e", "f"]
         restored = Memory.from_dict(mem.to_dict())
         assert restored.limit == mem.limit
         assert restored.items == mem.items
         await restored.append("g")
-        assert restored.items == ["e", "f", "g"]
+        assert restored.items == ["c", "d", "e", "f", "g"]
 
     asyncio.run(_())
     HookRegistry.clear()

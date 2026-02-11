@@ -28,22 +28,25 @@ Memory supports two hook types. Pass `hooks` as a list; each hook must have `hoo
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_APPEND` | Before new items are inserted | `(items, result)` — fill `result` to replace the window, then new items are appended |
-| `AFTER_APPEND` | After new items have been added | `(items,)` — current items for notification/side effects |
+| `BEFORE_APPEND` | Before new items are inserted | `(items,)` — current items |
+| `AFTER_APPEND` | After new items have been added | `(items,)` — current items |
 
 ```python
 from pygents import Memory, hook, MemoryHook
 
 @hook(MemoryHook.BEFORE_APPEND)
-async def keep_recent(items, result):
-    result.extend(items[-2:] if len(items) >= 2 else items)
+async def log_before(items):
+    print(f"Current count: {len(items)}")
 
-mem = Memory(limit=20, hooks=[keep_recent])
-await mem.append("a", "b", "c", "d", "e")
-await mem.append("f")  # BEFORE_APPEND runs; window becomes last 2 + "f" → ["e", "f"]
+@hook(MemoryHook.AFTER_APPEND)
+async def log_after(items):
+    print(f"New count: {len(items)}")
+
+mem = Memory(limit=20, hooks=[log_before, log_after])
+await mem.append("a", "b", "c")
 ```
 
-The result from BEFORE_APPEND hooks is still subject to the window limit. If no hooks are provided, items are appended directly.
+If no hooks are provided, items are appended directly.
 
 ## Branching
 

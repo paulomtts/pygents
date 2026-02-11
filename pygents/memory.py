@@ -52,18 +52,13 @@ class Memory:
     async def append(self, *items: Any) -> None:
         """Add one or more items. Oldest items are evicted when full.
 
-        BEFORE_APPEND hooks are run with (items, result); then new items
-        are appended; then AFTER_APPEND hooks are run with final items.
+        BEFORE_APPEND hooks are run with (items,); then new items
+        are appended; then AFTER_APPEND hooks are run with (items,).
         """
         if before_append_hook := HookRegistry.get_by_type(
             MemoryHook.BEFORE_APPEND, self.hooks
         ):
-            current: list[Any] = list(self._items)
-            result: list[Any] = []
-            await before_append_hook(current, result)
-            self._items.clear()
-            for item in result:
-                self._items.append(item)
+            await before_append_hook(list(self._items))
         for item in items:
             self._items.append(item)
         if after_append_hook := HookRegistry.get_by_type(
