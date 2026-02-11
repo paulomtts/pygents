@@ -4,12 +4,17 @@ A turn is a unit of work: which tool to run with what arguments. Turns describe 
 
 ## Creating and running
 
+You can pass the tool by name (string) or by reference (the callable). The turn resolves the tool from `ToolRegistry` at construction time.
+
 ```python
 from pygents import Turn
 
-# single value
+# single value (tool by name)
 turn = Turn("fetch", kwargs={"url": "https://example.com"}, timeout=30)
 result = await turn.returning()
+
+# by callable
+turn = Turn(fetch, kwargs={"url": "https://example.com"}, timeout=30)
 
 # with positional args
 turn = Turn("fetch", args=["https://example.com"], timeout=30)
@@ -104,7 +109,7 @@ turn.hooks.append(log_start)
 Hooks are registered in `HookRegistry` at decoration time. Use named functions so they serialize by name.
 
 !!! warning "ValueError"
-    Registering a hook with a name that already exists in `HookRegistry` raises `ValueError`.
+    Registering a *different* hook with a name already in use in `HookRegistry` raises `ValueError`. Re-registering the same hook under the same name is allowed.
 
 ## Serialization
 

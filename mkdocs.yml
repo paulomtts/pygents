@@ -54,5 +54,6 @@ nav:
     - Turns: concepts/turns.md
     - Agents: concepts/agents.md
     - Memory: concepts/memory.md
+    - Hooks: concepts/hooks.md
   - Guides:
     - AI Agent: guides/ai-agent.md

@@ -104,7 +104,7 @@ agent.hooks.append(on_complete)
 Hooks are registered in `HookRegistry` at decoration time. Use named functions so they serialize by name.
 
 !!! warning "ValueError"
-    Registering a hook with a name that already exists in `HookRegistry` raises `ValueError`.
+    Registering a *different* hook with a name already in use in `HookRegistry` raises `ValueError`. Re-registering the same hook under the same name is allowed.
 
 ## Serialization
 

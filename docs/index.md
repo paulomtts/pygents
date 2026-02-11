@@ -5,7 +5,7 @@ Async agent orchestration for Python. Four abstractions:
 - **Tools** define _how_ — async functions decorated with `@tool`
 - **Turns** define _what_ — which tool to run with what arguments
 - **Agents** _orchestrate_ — process a queue of turns and stream results
-- **Working Memory** provides _context_ — bounded, branchable window of state
+- **Memory** provides _context_ — bounded, branchable window of state
 
 ## Install
 

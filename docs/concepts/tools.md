@@ -27,7 +27,8 @@ async def write_file(path: str, content: str) -> None:
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `lock` | `False` | If `True`, concurrent runs of this tool are serialized via `asyncio.Lock` |
-| `**kwargs` | — | Any other keyword arguments are passed to the decorated function on every invocation. Call-time kwargs override these (with a warning). |
+| `hooks` | `None` | Optional list of hooks (e.g. `@hook(ToolHook.BEFORE_INVOKE)`). Applied on every invocation. |
+| `**kwargs` | — | Any other keyword arguments are merged into every invocation. Call-time kwargs override these (with a warning). |
 
 !!! info "Opt-in Locking"
     Locking is opt-in because most tools are stateless and can run in parallel without contention. Use `lock=True` for tools that write to shared state (files, databases, external APIs with rate limits).
@@ -88,7 +89,8 @@ Tool hooks fire during invocation. Pass a list of hooks; each must have `hook_ty
 | Hook | When | Args |
 |------|------|------|
 | `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` |
-| `AFTER_INVOKE` | After tool returns/yields a value | `(value)` |
+| `ON_YIELD` | Before each yielded value (async generator tools only) | `(value)` |
+| `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` — the return value or last yielded value |
 
 ```python
 from pygents import tool, hook, ToolHook
