@@ -84,6 +84,9 @@ Define all three tools in the same module; `think` can reference `respond` and `
 `respond` generates a reply from the LLM using the recent conversation in memory, appends the assistant message to memory, and returns the reply text.
 
 ```python
+class ReplyText(BaseModel):
+    reply: str
+
 @tool()
 async def respond(memory: Memory) -> str:
     """Generate a reply from recent context and append it to memory."""
@@ -96,12 +99,9 @@ async def respond(memory: Memory) -> str:
     text = reply_response.content.reply
     await memory.append(f"Assistant: {text}")
     return text
-
-class ReplyText(BaseModel):
-    reply: str
 ```
 
-## The calendar tool
+## The create_event tool
 
 `create_event` reads the latest user message from memory — the most recent line that starts with `"User: "` — and extracts a structured event with `asend()`. If there is no such line, `_last_user_message` returns an empty string. It then appends the event to the calendar and a summary to memory, appends the follow-up user message, and queues **think**.
 
