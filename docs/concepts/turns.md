@@ -40,7 +40,7 @@ The agent's `run()` picks the right method automatically.
 |-----------|-----|------------------------|
 | `tool`, `args`, `kwargs`, `timeout` | init | No |
 | `metadata` | init (optional dict) | Yes |
-| `output`, `start_time`, `end_time`, `stop_reason` | by framework during/after run | Yes (by framework) |
+| `output`, `start_time`, `end_time`, `stop_reason` | by framework during/after run | Yes (by framework). `output` is the return value for coroutine tools, or a **list** of all yielded values for async generator tools. |
 
 `start_time`, `end_time`, and `stop_reason` are **not** constructor parameters — they are managed by the framework and set during execution. On a fresh turn they default to `None`. When deserializing with `from_dict()`, the class method restores them directly on the instance.
 
@@ -56,11 +56,14 @@ Every turn has a timeout (default: 60 seconds). This prevents unbounded executio
 
 For `returning()`, the timeout applies to the single await. For `yielding()`, it applies to the entire run including all yielded values.
 
+The `stop_reason` attribute is a `StopReason` enum (importable from `pygents`):
+
 | Outcome | `stop_reason` |
 |---------|---------------|
-| Success | `COMPLETED` |
-| Timeout | `TIMEOUT` |
-| Error | `ERROR` |
+| Success | `StopReason.COMPLETED` |
+| Timeout | `StopReason.TIMEOUT` |
+| Error | `StopReason.ERROR` |
+| Cancelled | `StopReason.CANCELLED` |
 
 !!! warning "TurnTimeoutError"
     When a turn exceeds its timeout, `TurnTimeoutError` is raised and `stop_reason` is set to `TIMEOUT`.
@@ -121,3 +124,14 @@ Datetimes are ISO strings. Hooks are serialized by name and resolved from `HookR
 
 !!! warning "UnregisteredHookError"
     `Turn.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.
+
+## Errors
+
+| Exception | When |
+|-----------|------|
+| `SafeExecutionError` | Changing immutable attributes or calling `returning()`/`yielding()` while running |
+| `WrongRunMethodError` | `returning()` on async generator or `yielding()` on coroutine |
+| `TurnTimeoutError` | Turn exceeds its timeout |
+| `UnregisteredToolError` | Tool name not found in `ToolRegistry` at construction |
+| `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |
+| `ValueError` | Duplicate hook name in `HookRegistry` |

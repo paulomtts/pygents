@@ -19,8 +19,7 @@ async def write_file(path: str, content: str) -> None:
 ```
 
 !!! warning "TypeError"
-    Only async functions are accepted — sync `def` raises `TypeError` at decoration time.
-
+    Only async functions are accepted — sync `def` raises `TypeError` at decoration time. Fixed kwargs that don't match the function's signature (and the function has no `**kwargs`) also raise `TypeError`.
 
 **Decorator parameters:**
 
@@ -66,22 +65,6 @@ The agent detects which type and calls the right method automatically.
 !!! warning "WrongRunMethodError"
     Using `returning()` on an async generator or `yielding()` on a coroutine raises `WrongRunMethodError`.
 
-## Registry
-
-Tools register globally when decorated. The function name becomes the tool's identifier. Turns resolve tools from the registry at construction time, so a tool must be decorated before any turn references it.
-
-```python
-from pygents import ToolRegistry
-
-my_tool = ToolRegistry.get("fetch")  # lookup by name
-```
-
-!!! warning "ValueError"
-    Decorating a tool with a name that already exists in the registry raises `ValueError`. Each tool name must be unique.
-
-!!! warning "UnregisteredToolError"
-    `ToolRegistry.get(name)` raises `UnregisteredToolError` if no tool is registered with that name.
-
 ## Hooks
 
 Tool hooks fire during invocation. Pass a list of hooks; each must have `type` (e.g. from `@hook(ToolHook.BEFORE_INVOKE)`):
@@ -108,13 +91,56 @@ async def my_tool(x: int) -> int:
     return x * 2
 ```
 
-Tool hooks are registered in `HookRegistry` and apply to **all** invocations of that tool. Exceptions in hooks propagate.
+Tool hooks are registered in `HookRegistry` and apply to **all** invocations of that tool. Hooks are also accessible at runtime via `tool_instance.hooks`. Exceptions in hooks propagate.
 
-## Metadata
+## Registry
 
-Access via `tool_instance.metadata`:
+Tools register globally when decorated. The function name becomes the tool's identifier. Turns resolve tools from the registry at construction time, so a tool must be decorated before any turn references it.
+
+```python
+from pygents import ToolRegistry
+
+my_tool = ToolRegistry.get("fetch")  # lookup by name
+all_tools = ToolRegistry.all()       # list of all registered tools
+```
+
+!!! warning "ValueError"
+    Decorating a tool with a name that already exists in the registry raises `ValueError`. Each tool name must be unique.
+
+!!! warning "UnregisteredToolError"
+    `ToolRegistry.get(name)` raises `UnregisteredToolError` if no tool is registered with that name.
+
+## Metadata and timing
+
+Each tool has a `metadata` attribute (`ToolMetadata`) with name, description, and execution timing:
 
 ```python
 fetch.metadata.name         # "fetch"
 fetch.metadata.description  # docstring
+fetch.metadata.start_time   # datetime — set on entry, None before first run
+fetch.metadata.end_time     # datetime — set in finally, None before first run
+fetch.metadata.dict()       # {"name": ..., "description": ..., "start_time": ..., "end_time": ...}
 ```
+
+Timing fields are set each time the tool runs (on the same metadata instance). `dict()` serializes datetimes to ISO strings.
+
+## Protocol
+
+The `Tool` protocol defines the shape every decorated tool conforms to:
+
+```python
+class Tool(Protocol):
+    metadata: ToolMetadata
+    fn: Callable[..., Coroutine | AsyncIterator]
+    lock: asyncio.Lock | None
+    def __call__(self, *args, **kwargs) -> Any: ...
+```
+
+## Errors
+
+| Exception | When |
+|-----------|------|
+| `TypeError` | Decorating a sync function, or fixed kwargs not in signature |
+| `ValueError` | Duplicate tool name in `ToolRegistry` |
+| `UnregisteredToolError` | `ToolRegistry.get()` with unknown name |
+| `WrongRunMethodError` | `returning()` on async generator or `yielding()` on coroutine |

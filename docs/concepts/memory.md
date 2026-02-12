@@ -12,9 +12,12 @@ await mem.append("user: hello")
 await mem.append("assistant: hi there")
 ```
 
-`limit` is the maximum number of items. When a new item is appended and the window is full, the oldest item is silently dropped. `append` is async.
+`limit` is the maximum number of items (must be >= 1). When a new item is appended and the window is full, the oldest item is silently dropped. `append` is async.
 
-## Appending multiple items
+!!! warning "ValueError"
+    `Memory(limit=0)` or any `limit < 1` raises `ValueError`.
+
+## Appending
 
 `append` accepts variadic positional arguments:
 
@@ -22,31 +25,22 @@ await mem.append("assistant: hi there")
 await mem.append("msg1", "msg2", "msg3")
 ```
 
-## Hooks (BEFORE_APPEND, AFTER_APPEND)
-
-Memory supports two hook types. Pass `hooks` as a list; each hook must have `type` (e.g. from `@hook(MemoryHook.BEFORE_APPEND)`).
-
-| Hook | When | Args |
-|------|------|------|
-| `BEFORE_APPEND` | Before new items are inserted | `(items,)` — current items |
-| `AFTER_APPEND` | After new items have been added | `(items,)` — current items |
+## Clearing
 
 ```python
-from pygents import Memory, hook, MemoryHook
-
-@hook(MemoryHook.BEFORE_APPEND)
-async def log_before(items):
-    print(f"Current count: {len(items)}")
-
-@hook(MemoryHook.AFTER_APPEND)
-async def log_after(items):
-    print(f"New count: {len(items)}")
-
-mem = Memory(limit=20, hooks=[log_before, log_after])
-await mem.append("a", "b", "c")
+mem.clear()  # remove all items
 ```
 
-If no hooks are provided, items are appended directly.
+## Reading items
+
+```python
+mem.items   # list copy of current items
+len(mem)    # number of items
+list(mem)   # iterable
+bool(mem)   # False when empty
+```
+
+`items` returns a copy — mutating it does not affect the memory.
 
 ## Branching
 
@@ -79,16 +73,31 @@ child = mem.branch(hooks=[])           # no hooks
 other = mem.branch(hooks=[other_hook]) # different hooks
 ```
 
-## Reading items
+## Hooks
+
+Memory supports two hook types. Pass `hooks` as a list; each hook must have `type` (e.g. from `@hook(MemoryHook.BEFORE_APPEND)`).
+
+| Hook | When | Args |
+|------|------|------|
+| `BEFORE_APPEND` | Before new items are inserted | `(items,)` — current items |
+| `AFTER_APPEND` | After new items have been added | `(items,)` — current items |
 
 ```python
-mem.items   # list copy of current items
-len(mem)    # number of items
-list(mem)   # iterable
-bool(mem)   # False when empty
+from pygents import Memory, hook, MemoryHook
+
+@hook(MemoryHook.BEFORE_APPEND)
+async def log_before(items):
+    print(f"Current count: {len(items)}")
+
+@hook(MemoryHook.AFTER_APPEND)
+async def log_after(items):
+    print(f"New count: {len(items)}")
+
+mem = Memory(limit=20, hooks=[log_before, log_after])
+await mem.append("a", "b", "c")
 ```
 
-`items` returns a copy — mutating it does not affect the memory.
+If no hooks are provided, items are appended directly.
 
 ## Serialization
 
@@ -98,3 +107,10 @@ restored = Memory.from_dict(data)
 ```
 
 Hooks are stored by type and name (same shape as Agent/Turn). `from_dict()` resolves hook names from `HookRegistry`. Use named functions for stable cross-session serialization. If a name is not found on load, `from_dict()` raises `UnregisteredHookError`.
+
+## Errors
+
+| Exception | When |
+|-----------|------|
+| `ValueError` | `limit < 1` at construction |
+| `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |

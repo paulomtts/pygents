@@ -1,6 +1,10 @@
 # pygents
 
-Async agent orchestration for Python. Four abstractions:
+A lightweight async framework for structuring and running AI agents in Python. pygents is a structural framework, not a batteries-included toolkit — it gives you the primitives for organizing and running agents (queues, turns, hooks, streaming) but leaves the concrete implementations to you. There are no built-in LLM clients, prompt templates, or retrieval pipelines. You bring your own. `Memory`, for example, provides a bounded, branchable window you can subclass or compose into working memory, semantic memory, episodic memory, or whatever your agent needs — pygents only manages the container and its lifecycle.
+
+This means zero external dependencies and full control over every layer of your agent's behavior.
+
+Four abstractions:
 
 - **Tools** define _how_ — async functions decorated with `@tool`
 - **Turns** define _what_ — which tool to run with what arguments
@@ -107,8 +111,32 @@ await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 | Dynamic arguments | Callable positional args and kwargs evaluated at invocation time |
 | Timeouts | Per-turn timeout (default 60s), raises `TurnTimeoutError` |
 | Per-tool locking | `@tool(lock=True)` serializes concurrent runs |
-| Hooks | Async callbacks at turn, agent, and tool level |
+| Hooks | Async callbacks at turn, agent, tool, and memory level |
 | Serialization | `to_dict()` / `from_dict()` for turns, agents, and memory |
-| Memory | Bounded context window with branching and optional compaction |
+| Memory | Bounded context window with branching |
+
+## Registries
+
+Three global registries manage named lookups. Registration is automatic (at decoration time for tools/hooks, at construction time for agents).
+
+| Registry | `get` | `all` | `clear` | `get_by_type` |
+|----------|-------|-------|---------|---------------|
+| `ToolRegistry` | by name | all tools | — | — |
+| `AgentRegistry` | by name | — | empties | — |
+| `HookRegistry` | by name | — | empties | first match by type |
+
+## Public API
+
+Everything importable from `pygents`:
+
+| Category | Symbols |
+|----------|---------|
+| Core classes | `Agent`, `Turn`, `Memory` |
+| Decorators | `@tool`, `@hook` |
+| Enums | `StopReason`, `TurnHook`, `AgentHook`, `ToolHook`, `MemoryHook` |
+| Protocols | `Tool`, `Hook` |
+| Metadata | `ToolMetadata`, `HookMetadata` |
+| Registries | `ToolRegistry`, `AgentRegistry`, `HookRegistry` |
+| Exceptions | `SafeExecutionError`, `WrongRunMethodError`, `TurnTimeoutError`, `UnregisteredToolError`, `UnregisteredAgentError`, `UnregisteredHookError` |
 
 Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), or [Memory](concepts/memory.md).

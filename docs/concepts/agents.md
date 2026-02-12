@@ -106,6 +106,20 @@ Hooks are registered in `HookRegistry` at decoration time. Use named functions s
 !!! warning "ValueError"
     Registering a *different* hook with a name already in use in `HookRegistry` raises `ValueError`. Re-registering the same hook under the same name is allowed.
 
+## Registry
+
+Agents **auto-register** with `AgentRegistry` on construction. `send_turn` and `from_dict` use the registry to resolve agents by name.
+
+```python
+from pygents import AgentRegistry
+
+agent = AgentRegistry.get("worker")  # lookup by name
+AgentRegistry.clear()                # empty the registry (useful in tests)
+```
+
+!!! warning "ValueError"
+    `AgentRegistry.register()` raises `ValueError` if an agent with the same name is already registered.
+
 ## Serialization
 
 ```python
@@ -117,3 +131,13 @@ Hooks are serialized by name and resolved from `HookRegistry` on deserialization
 
 !!! warning "UnregisteredHookError"
     `Agent.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.
+
+## Errors
+
+| Exception | When |
+|-----------|------|
+| `ValueError` | Tool instance mismatch, duplicate agent name, tool not in agent's set, or duplicate hook name |
+| `SafeExecutionError` | Changing attributes or calling `run()` while already running |
+| `UnregisteredAgentError` | `send_turn` target not found in `AgentRegistry` |
+| `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |
+| `TurnTimeoutError` | A turn exceeds its timeout (propagated from the turn) |

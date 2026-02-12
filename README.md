@@ -1,6 +1,6 @@
 # pygents
 
-Async agent orchestration for Python. Define tools, queue turns, stream results.
+A lightweight async framework for structuring and running AI agents in Python. Define tools, queue turns, stream results.
 
 ## Install
 
@@ -57,14 +57,12 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
       args=[...],
       kwargs={...},
       timeout=...,
-      start_time=...,
-      end_time=...,
-      stop_reason=...,
       metadata={...},
+      hooks=[...],
   )
   ```
 
-  This keeps positional arguments explicit while reserving `metadata` purely for user-level annotations.
+  This keeps positional arguments explicit while reserving `metadata` purely for user-level annotations. `start_time`, `end_time`, `stop_reason`, and `output` are set by the framework during execution—they are not constructor parameters.
 
 - **Agent serialization and current turn**: `Agent.to_dict()` includes a `current_turn` key when the agent is in the middle of `run()` (the turn being executed). That turn is already off the queue, so without it a snapshot would lose the in-flight work. `from_dict()` restores it; the next `run()` consumes the restored current turn first, then the queue. So you can save agent state at any time and get a faithful snapshot (config, queue, and current turn if any).
 

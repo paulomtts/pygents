@@ -1,5 +1,5 @@
 site_name: pygents
-site_description: Async agent orchestration for Python.
+site_description: A lightweight async framework for structuring and running AI agents in Python.
 repo_url: https://github.com/paulomtts/pygents
 repo_name: paulomtts/pygents
 
@@ -57,3 +57,4 @@ nav:
     - Hooks: concepts/hooks.md
   - Guides:
     - AI Agent: guides/ai-agent.md
+    - Claude Code Skill: guides/claude-code-skill.md

@@ -27,7 +27,10 @@ async def on_error(turn, exception):
 | `**kwargs` | — | Fixed keyword arguments merged into every invocation. Call-time kwargs override these (with a warning). |
 
 !!! warning "TypeError"
-    Only async functions are accepted — sync `def` is not valid for hooks.
+    Only async functions are accepted — sync `def` is not valid for hooks. Fixed kwargs that don't match the function's signature (and the function has no `**kwargs`) also raise `TypeError`.
+
+!!! warning "ValueError"
+    Passing an empty list as `type` raises `ValueError`.
 
 Hooks are registered in `HookRegistry` at decoration time. The function name is the hook's identifier for lookup and serialization.
 
@@ -66,7 +69,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `ON_YIELD` | Before each yielded value (async generator tools only) | `(value)` |
 | `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` |
 
-**Memory** — during append (see [Memory](memory.md#hooks-before_append-after_append)):
+**Memory** — during append (see [Memory](memory.md#hooks)):
 
 | Hook | When | Args |
 |------|------|------|
@@ -92,7 +95,9 @@ async def log_turn_events(*args, **kwargs):
     print(f"Event: {args}")
 ```
 
-Multi-type hooks **must** accept `*args, **kwargs` because different hook types receive different arguments (e.g. `BEFORE_TURN` gets `(agent,)`, `AFTER_TURN` gets `(agent, turn)`). You can inspect `args` to distinguish the event.
+Multi-type hooks **must** accept `*args, **kwargs` because different hook types receive different arguments (e.g. `BEFORE_TURN` gets `(agent,)`, `AFTER_TURN` gets `(agent, turn)`). You can inspect `args` to distinguish the event. For single-type hooks, the decorator provides **type-safe overloaded signatures** so your IDE can infer the exact callback shape (e.g. `(Turn) -> Awaitable[None]` for `BEFORE_RUN`).
+
+All hook types are members of the `HookType` union: `TurnHook | AgentHook | ToolHook | MemoryHook`.
 
 ## Fixed kwargs
 
@@ -141,9 +146,30 @@ Hooks register globally when decorated. Look up by name when deserializing or wh
 from pygents import HookRegistry
 
 my_hook = HookRegistry.get("log_start")
+HookRegistry.clear()  # empty the registry (useful in tests)
 ```
 
 !!! warning "UnregisteredHookError"
     `HookRegistry.get(name)` raises `UnregisteredHookError` if no hook is registered with that name.
 
 `get_by_type` is used internally: given a list of hooks (e.g. `turn.hooks`), it returns the first hook whose type matches. You typically don't call it directly; you attach hooks to turns, agents, tools, or memory and the framework invokes the right one at each event.
+
+## Protocol
+
+The `Hook` protocol defines the shape every decorated hook conforms to:
+
+```python
+class Hook(Protocol):
+    metadata: HookMetadata          # name, description, start_time, end_time
+    type: HookType | tuple[HookType, ...] | None
+    fn: Callable[..., Awaitable[None]]
+    lock: asyncio.Lock | None
+```
+
+## Errors
+
+| Exception | When |
+|-----------|------|
+| `TypeError` | Decorating a sync function, or fixed kwargs not in signature |
+| `ValueError` | Empty type list, or duplicate hook name in `HookRegistry` |
+| `UnregisteredHookError` | `HookRegistry.get()` with unknown name |
