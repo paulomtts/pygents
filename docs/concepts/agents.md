@@ -67,6 +67,45 @@ await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))
 !!! warning "UnregisteredAgentError"
     `send_turn` raises `UnregisteredAgentError` if the target agent name is not found in `AgentRegistry`.
 
+## Branching
+
+Like `Memory`, agents support branching. A child agent inherits the parent's configuration and queue, then diverges independently:
+
+```python
+parent = Agent("coordinator", "Main agent", [work, report])
+
+await parent.put(Turn("work", kwargs={"x": 5}))
+
+# Branch inherits description, tools, hooks, and queued turns
+child = parent.branch("worker-1")
+
+# Override any defaults
+child2 = parent.branch(
+    "worker-2",
+    description="Specialized worker",
+    tools=[work],       # subset of tools
+    hooks=[],           # no hooks
+)
+```
+
+| Parameter | Default | Behavior |
+|-----------|---------|----------|
+| `name` | required | Unique name for the child (registered in `AgentRegistry`) |
+| `description` | parent's | Override with a string |
+| `tools` | parent's | Override with a list |
+| `hooks` | parent's | Pass `hooks=[]` for no hooks, or a new list to override |
+
+The parent's queue is copied (non-destructively) to the child. Both agents are fully independent after branching — enqueueing or running turns on one does not affect the other.
+
+```python
+# Parent and child can run the same queued turns independently
+async for turn, value in child.run():
+    print(value)
+
+async for turn, value in parent.run():
+    print(value)
+```
+
 ## Immutability while running
 
 While `run()` is active, agent attributes cannot be changed. Calling `run()` again while already running is also not allowed.

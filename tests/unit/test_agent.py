@@ -31,6 +31,17 @@ run():
   R7  After: AFTER_TURN; if turn.output is Turn -> put(turn.output); clear _current_turn
   R8  finally: _is_running False, _current_turn None
 
+branch(name, description=None, tools=None, hooks=...):
+  B1  description None -> child inherits self.description
+  B2  description set -> child uses that
+  B3  tools None -> child inherits self.tools
+  B4  tools set -> child uses that
+  B5  hooks is ... -> child inherits self.hooks
+  B6  hooks=[] or hooks=[...] -> child uses that list
+  B7  Queue copied to child (non-destructive)
+  B8  Child is independent after creation
+  B9  Child is registered in AgentRegistry
+
 _queue_snapshot: non-destructive peek. to_dict/from_dict: queue, current_turn, hooks.
 """
 
@@ -526,3 +537,106 @@ def test_agent_from_dict_with_current_turn_processes_it_first():
     assert result_value == 10
     assert result_turn.tool.metadata.name == "add_agent"
     assert restored._queue.empty()
+
+
+# -- branch -------------------------------------------------------------------
+
+
+def test_branch_inherits_defaults():
+    AgentRegistry.clear()
+    parent = Agent("parent", "Parent agent", [add_agent])
+    child = parent.branch("child")
+    assert child.name == "child"
+    assert child.description == "Parent agent"
+    assert child._tool_names == parent._tool_names
+
+
+def test_branch_overrides_description():
+    AgentRegistry.clear()
+    parent = Agent("parent", "Parent agent", [add_agent])
+    child = parent.branch("child", description="Child agent")
+    assert child.description == "Child agent"
+
+
+def test_branch_overrides_tools():
+    AgentRegistry.clear()
+    parent = Agent("parent", "Desc", [add_agent, stream_agent])
+    child = parent.branch("child", tools=[add_agent])
+    assert child._tool_names == {"add_agent"}
+
+
+def test_branch_inherits_hooks():
+    from pygents.registry import HookRegistry
+
+    AgentRegistry.clear()
+    HookRegistry.clear()
+
+    @hook(AgentHook.BEFORE_TURN)
+    async def branch_before_turn(agent):
+        pass
+
+    parent = Agent("parent", "Desc", [add_agent])
+    parent.hooks.append(branch_before_turn)
+    child = parent.branch("child")
+    assert branch_before_turn in child.hooks
+
+
+def test_branch_overrides_hooks():
+    AgentRegistry.clear()
+
+    @hook(AgentHook.BEFORE_TURN)
+    async def parent_hook(agent):
+        pass
+
+    parent = Agent("parent", "Desc", [add_agent])
+    parent.hooks.append(parent_hook)
+    child = parent.branch("child", hooks=[])
+    assert child.hooks == []
+
+
+def test_branch_inherits_queue():
+    AgentRegistry.clear()
+    parent = Agent("parent", "Desc", [add_agent])
+
+    async def branch_and_run():
+        await parent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        await parent.put(Turn("add_agent", kwargs={"a": 10, "b": 20}))
+        child = parent.branch("child")
+        assert child._queue.qsize() == 2
+        # parent queue is unaffected
+        assert parent._queue.qsize() == 2
+        results = []
+        async for _, v in child.run():
+            results.append(v)
+        return results
+
+    results = asyncio.run(branch_and_run())
+    assert results == [3, 30]
+
+
+def test_branch_is_independent():
+    AgentRegistry.clear()
+    parent = Agent("parent", "Desc", [add_agent])
+
+    async def main():
+        await parent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        child = parent.branch("child")
+        await child.put(Turn("add_agent", kwargs={"a": 100, "b": 200}))
+        assert child._queue.qsize() == 2
+        assert parent._queue.qsize() == 1
+
+    asyncio.run(main())
+
+
+def test_branch_is_registered():
+    AgentRegistry.clear()
+    parent = Agent("parent", "Desc", [add_agent])
+    child = parent.branch("child")
+    assert AgentRegistry.get("child") is child
+
+
+def test_branch_empty_queue():
+    AgentRegistry.clear()
+    parent = Agent("parent", "Desc", [add_agent])
+    child = parent.branch("child")
+    assert child._queue.qsize() == 0

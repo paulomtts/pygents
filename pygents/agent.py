@@ -125,6 +125,45 @@ class Agent:
         target = AgentRegistry.get(agent_name)
         await target.put(turn)
 
+    # -- branching -------------------------------------------------------------
+
+    def branch(
+        self,
+        name: str,
+        description: str | None = None,
+        tools: list[Tool] | None = None,
+        hooks: list[Hook] | None = ...,  # type: ignore[assignment]
+    ) -> "Agent":
+        """
+        Create a child agent that inherits this agent's configuration.
+
+        The child is fully independent after creation. By default, it
+        inherits this agent's hooks; pass hooks=[] or a new list to
+        override. Queue and current turn are NOT copied.
+
+        Parameters
+        ----------
+        name : str
+            Name for the child agent (must be unique in AgentRegistry).
+        description : str | None
+            Description for the child. Defaults to this agent's description.
+        tools : list[Tool] | None
+            Tools for the child. Defaults to this agent's tools.
+        hooks : list[Hook] | None
+            Hooks for the child. Sentinel ``...`` (default) inherits this
+            agent's hooks; ``None`` or ``[]`` gives no hooks.
+        """
+        child_description = description if description is not None else self.description
+        child_tools = tools if tools is not None else list(self.tools)
+        child_hooks = (
+            self.hooks if hooks is ... else (hooks if hooks is not None else [])
+        )
+        child = Agent(name, child_description, child_tools)
+        child.hooks = list(child_hooks)
+        for turn in self._queue_snapshot():
+            child._queue.put_nowait(turn)
+        return child
+
     # -- run -------------------------------------------------------------------
 
     @safe_execution
