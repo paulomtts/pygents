@@ -47,6 +47,11 @@ class Memory:
     def items(self) -> list[Any]:
         return list(self._items)
 
+    @items.setter
+    def items(self, items: list[Any]) -> None:
+        self._items.clear()
+        self._items.extend(items)
+
     # -- mutation -------------------------------------------------------------
 
     async def append(self, *items: Any) -> None:
