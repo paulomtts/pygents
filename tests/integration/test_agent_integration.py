@@ -2,16 +2,16 @@
 Integration test: agent run with hooks at every level and shared memory.
 
 Exercises Agent (BEFORE_PUT, AFTER_PUT, BEFORE_TURN, ON_TURN_VALUE, AFTER_TURN),
-Turn (BEFORE_RUN, AFTER_RUN), Tool (BEFORE_INVOKE, AFTER_INVOKE), and Memory
-(BEFORE_APPEND, AFTER_APPEND) in one flow. The agent holds a Memory instance;
-agent hooks append to it so that memory hooks also fire.
+Turn (BEFORE_RUN, AFTER_RUN), Tool (BEFORE_INVOKE, AFTER_INVOKE), and ContextQueue
+(BEFORE_APPEND, AFTER_APPEND) in one flow. The agent holds a ContextQueue instance;
+agent hooks append to it so that context queue hooks also fire.
 """
 
 import asyncio
 
 from pygents.agent import Agent
-from pygents.hooks import AgentHook, MemoryHook, ToolHook, TurnHook, hook
-from pygents.memory import Memory
+from pygents.hooks import AgentHook, ContextQueueHook, ToolHook, TurnHook, hook
+from pygents.context_queue import ContextQueue
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
@@ -22,15 +22,15 @@ def test_agent_run_with_hooks_and_memory():
     HookRegistry.clear()
     events = []
 
-    @hook(MemoryHook.BEFORE_APPEND)
+    @hook(ContextQueueHook.BEFORE_APPEND)
     async def memory_before(items):
         events.append("memory_before_append")
 
-    @hook(MemoryHook.AFTER_APPEND)
+    @hook(ContextQueueHook.AFTER_APPEND)
     async def memory_after(items):
         events.append("memory_after_append")
 
-    memory = Memory(10, hooks=[memory_before, memory_after])
+    memory = ContextQueue(10, hooks=[memory_before, memory_after])
 
     @hook(ToolHook.BEFORE_INVOKE)
     async def tool_before(*args, **kwargs):
@@ -125,7 +125,7 @@ def test_agent_run_with_hooks_and_memory():
 
 def test_agent_context_pool_collects_pool_item_outputs():
     AgentRegistry.clear()
-    from pygents.context import ContextItem
+    from pygents.context_pool import ContextItem
 
     @tool()
     async def context_tool(key: str, val: int) -> ContextItem:
@@ -148,7 +148,7 @@ def test_agent_context_pool_collects_pool_item_outputs():
 
 def test_agent_context_pool_limit_evicts_oldest():
     AgentRegistry.clear()
-    from pygents.context import ContextItem, ContextPool
+    from pygents.context_pool import ContextItem, ContextPool
 
     @tool()
     async def bounded_context_tool(key: str, val: int) -> ContextItem:

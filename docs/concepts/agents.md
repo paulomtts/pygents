@@ -19,7 +19,7 @@ agent = Agent("worker", "Doubles numbers", [work])
 | `name` | required | Unique name; registered in `AgentRegistry` |
 | `description` | required | Free-text description |
 | `tools` | required | Tools the agent may run |
-| `context_pool` | `None` | Pre-configured `ContextPool` (or subclass) to use; creates a default `ContextPool()` if not provided (see [Context Pool](context.md)) |
+| `context_pool` | `None` | Pre-configured `ContextPool` (or subclass) to use; creates a default `ContextPool()` if not provided (see [Context Pool](context_pool.md)) |
 
 Each tool must be the same instance as in `ToolRegistry` — the constructor validates this.
 
@@ -77,7 +77,7 @@ await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))
 
 ## Branching
 
-Like `Memory`, agents support branching. A child agent inherits the parent's configuration and queue, then diverges independently:
+Like `ContextQueue`, agents support branching. A child agent inherits the parent's configuration and queue, then diverges independently:
 
 ```python
 parent = Agent("coordinator", "Main agent", [work, report])

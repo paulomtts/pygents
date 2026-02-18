@@ -1,6 +1,6 @@
 # Building an AI Agent
 
-This guide builds a small **calendar assistant** using **pygents** for orchestration, [py-ai-toolkit](https://paulomtts.github.io/py-ai-toolkit/) for LLM calls, and **Memory** for conversation context. You get:
+This guide builds a small **calendar assistant** using **pygents** for orchestration, [py-ai-toolkit](https://paulomtts.github.io/py-ai-toolkit/) for LLM calls, and **ContextQueue** for conversation context. You get:
 
 - Three tools: `think` (chooses what to do), `respond` (replies to the user), and `create_event` (saves an event and chains back to think)
 - A bounded **memory** of recent messages; the **user message is appended to memory as soon as it arrives** in the loop (before the turn runs), and every tool receives only **memory**
@@ -22,18 +22,18 @@ import logging
 from py_ai_toolkit import PyAIToolkit
 from py_ai_toolkit.core.domain.interfaces import LLMConfig
 
-from pygents import Memory, MemoryHook, hook
+from pygents import ContextQueue, ContextQueueHook, hook
 
 logger = logging.getLogger(__name__)
 
 # Uses LLM_MODEL, LLM_API_KEY, etc. from the environment if set
 toolkit = PyAIToolkit(main_model_config=LLMConfig())
 
-@hook(MemoryHook.AFTER_APPEND)
+@hook(ContextQueueHook.AFTER_APPEND)
 async def log_memory_append(items: list) -> None:
-    logger.debug("Memory: %d items", len(items))
+    logger.debug("ContextQueue: %d items", len(items))
 
-memory = Memory(limit=20, hooks=[log_memory_append])
+memory = ContextQueue(limit=20, hooks=[log_memory_append])
 ```
 
 !!! info "LLM configuration"
@@ -62,7 +62,7 @@ class ThinkResponse(BaseModel):
     action: Literal["respond", "create_event"]
 
 @tool()
-async def think(memory: Memory) -> Turn:
+async def think(memory: ContextQueue) -> Turn:
     """Choose how to respond: queue respond or create_event."""
     context = "\n".join(memory.items[-10:])
     response = await toolkit.asend(
@@ -88,7 +88,7 @@ class ReplyText(BaseModel):
     reply: str
 
 @tool()
-async def respond(memory: Memory) -> str:
+async def respond(memory: ContextQueue) -> str:
     """Generate a reply from recent context and append it to memory."""
     context = "\n".join(memory.items[-10:])
     reply_response = await toolkit.asend(
@@ -115,14 +115,14 @@ class CalendarEvent(BaseModel):
 
 calendar: list[CalendarEvent] = []
 
-def latest_user_message(memory: Memory) -> str:
+def latest_user_message(memory: ContextQueue) -> str:
     for item in reversed(memory.items):
         if isinstance(item, str) and item.startswith("User:"):
             return item.removeprefix("User:").strip()
     return ""
 
 @tool()
-async def create_event(memory: Memory) -> Turn:
+async def create_event(memory: ContextQueue) -> Turn:
     """Extract and save a calendar event from the last user message, then chain back to think."""
     user_message = latest_user_message(memory)
     response = await toolkit.asend(
@@ -172,6 +172,6 @@ Flow: **User message appended** → **think** runs (reads memory) → LLM return
 | **think** | Reads memory, chooses action, queues `respond` or `create_event` with `memory`. |
 | **respond** | Reads memory, generates reply via LLM, appends to memory, returns reply text. |
 | **create_event** | Reads last user message from memory, extracts event, saves, appends to memory, appends follow-up user message, queues think with `memory`. |
-| **Memory** | Single source of context; all tools receive only `memory`. |
+| **ContextQueue** | Single source of context; all tools receive only `memory`. |
 
-For more, see [Tools](../concepts/tools.md), [Turns](../concepts/turns.md), [Agents](../concepts/agents.md), and [Memory](../concepts/memory.md).
+For more, see [Tools](../concepts/tools.md), [Turns](../concepts/turns.md), [Agents](../concepts/agents.md), and [ContextQueue](../concepts/context_queue.md).

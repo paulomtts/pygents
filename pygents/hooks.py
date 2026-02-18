@@ -11,7 +11,7 @@ from pygents.utils import _null_lock
 
 if TYPE_CHECKING:
     from pygents.agent import Agent
-    from pygents.context import ContextItem, ContextPool
+    from pygents.context_pool import ContextItem, ContextPool
     from pygents.turn import Turn
 
 
@@ -39,7 +39,7 @@ class ToolHook(str, Enum):
     ON_YIELD = "on_yield"
 
 
-class MemoryHook(str, Enum):
+class ContextQueueHook(str, Enum):
     BEFORE_APPEND = "before_append"
     AFTER_APPEND = "after_append"
 
@@ -53,7 +53,7 @@ class ContextPoolHook(str, Enum):
     AFTER_CLEAR   = "after_clear"
 
 
-HookType = TurnHook | AgentHook | ToolHook | MemoryHook | ContextPoolHook
+HookType = TurnHook | AgentHook | ToolHook | ContextQueueHook | ContextPoolHook
 
 
 @dataclass
@@ -169,7 +169,7 @@ def hook(
 
 @overload
 def hook(
-    type: MemoryHook.BEFORE_APPEND | MemoryHook.AFTER_APPEND,
+    type: ContextQueueHook.BEFORE_APPEND | ContextQueueHook.AFTER_APPEND,
     *,
     lock: bool = False,
     **fixed_kwargs: Any,

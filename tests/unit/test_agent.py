@@ -125,14 +125,14 @@ def test_agent_init_accepts_context_pool_instance():
     async def pool_hook(pool, item):
         pass
 
-    from pygents.context import ContextPool
+    from pygents.context_pool import ContextPool
     agent = Agent("a", "desc", [add_agent], context_pool=ContextPool(hooks=[pool_hook]))
     assert pool_hook in agent.context_pool.hooks
 
 
 def test_agent_init_default_pool_when_none_provided():
     AgentRegistry.clear()
-    from pygents.context import ContextPool
+    from pygents.context_pool import ContextPool
     agent = Agent("a", "desc", [add_agent])
     assert isinstance(agent.context_pool, ContextPool)
     assert len(agent.context_pool) == 0
@@ -140,7 +140,7 @@ def test_agent_init_default_pool_when_none_provided():
 
 def test_agent_init_uses_provided_pool_instance():
     AgentRegistry.clear()
-    from pygents.context import ContextPool
+    from pygents.context_pool import ContextPool
     pool = ContextPool(limit=5)
     agent = Agent("a", "desc", [add_agent], context_pool=pool)
     assert agent.context_pool is pool
@@ -154,7 +154,7 @@ def test_agent_branch_child_pool_inherits_hooks():
     async def parent_pool_hook(pool, item):
         pass
 
-    from pygents.context import ContextPool
+    from pygents.context_pool import ContextPool
     parent = Agent("parent", "desc", [add_agent], context_pool=ContextPool(hooks=[parent_pool_hook]))
     child = parent.branch("child")
     assert parent_pool_hook in child.context_pool.hooks

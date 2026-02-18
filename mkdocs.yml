@@ -53,10 +53,12 @@ nav:
     - Tools: concepts/tools.md
     - Turns: concepts/turns.md
     - Agents: concepts/agents.md
-    - Memory: concepts/memory.md
-    - Context Pool: concepts/context.md
+    - ContextQueue: concepts/context_queue.md
+    - Context Pool: concepts/context_pool.md
     - Hooks: concepts/hooks.md
   - Guides:
     - AI Agent: guides/ai-agent.md
     - LLM-Driven Context Querying: guides/context-pool.md
     - Claude Code Skill: guides/claude-code-skill.md
+  - Zen:
+    - Manifesto: whitepaper.md

@@ -74,7 +74,7 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
 
 - **Tool lock in tool layer**: The tool lock is acquired inside the `@tool` wrapper, not in the turn. So the lock covers only the tool’s own execution (including its BEFORE_INVOKE / ON_YIELD / AFTER_INVOKE hooks). Turn-level hooks (BEFORE_RUN, AFTER_RUN, ON_TIMEOUT, ON_ERROR) run outside the tool lock; hooks that need serialization use their own `lock=True`.
 
-- **Memory hooks**: `Memory` has no compact callback. It supports `MemoryHook.BEFORE_APPEND` and `MemoryHook.AFTER_APPEND` only. Hooks are stored as `list[Hook]` (like Agent/Turn), filtered by type when running. BEFORE_APPEND and AFTER_APPEND hooks receive `(items,)` — the current items as a list (read-only). Serialization uses the same by-type-by-name shape as Agent/Turn; `from_dict()` resolves names from `HookRegistry`.
+- **ContextQueue hooks**: `ContextQueue` has no compact callback. It supports `ContextQueueHook.BEFORE_APPEND` and `ContextQueueHook.AFTER_APPEND` only. Hooks are stored as `list[Hook]` (like Agent/Turn), filtered by type when running. BEFORE_APPEND and AFTER_APPEND hooks receive `(items,)` — the current items as a list (read-only). Serialization uses the same by-type-by-name shape as Agent/Turn; `from_dict()` resolves names from `HookRegistry`.
 
 ## Docs
 

@@ -15,7 +15,7 @@ description: Reference for the pygents async agent orchestration library. Use wh
 
 A lightweight async framework for structuring and running AI agents in Python. Requires Python 3.12+. Zero dependencies.
 
-Four abstractions: **Tools** (how), **Turns** (what), **Agents** (orchestrate), **Memory** (context).
+Four abstractions: **Tools** (how), **Turns** (what), **Agents** (orchestrate), **ContextQueue** (context).
 
 ## Tools
 
@@ -120,14 +120,14 @@ Looks up target in `AgentRegistry`. Raises `UnregisteredAgentError` if not found
 
 Registry: `AgentRegistry.get(name)`, `.clear()`.
 
-## Memory
+## ContextQueue
 
 Bounded window backed by `collections.deque`. Evicts oldest when full.
 
 ```python
-from pygents import Memory
+from pygents import ContextQueue
 
-mem = Memory(limit=20)                    # limit must be >= 1
+mem = ContextQueue(limit=20)                    # limit must be >= 1
 await mem.append("msg1", "msg2")          # async, variadic
 mem.clear()                               # remove all items
 mem.items                                 # list copy
@@ -144,10 +144,10 @@ child = mem.branch(hooks=[])              # no hooks
 
 ## Hooks
 
-Async callbacks at four levels: Turn, Agent, Tool, Memory. Decorated with `@hook(type)`.
+Async callbacks at four levels: Turn, Agent, Tool, ContextQueue. Decorated with `@hook(type)`.
 
 ```python
-from pygents import hook, TurnHook, AgentHook, ToolHook, MemoryHook
+from pygents import hook, TurnHook, AgentHook, ToolHook, ContextQueueHook
 
 @hook(TurnHook.BEFORE_RUN)
 async def log_start(turn):
@@ -161,16 +161,16 @@ async def on_error(agent, turn, exception):
 async def log_result(value):
     print(f"Result: {value}")
 
-@hook(MemoryHook.AFTER_APPEND)
+@hook(ContextQueueHook.AFTER_APPEND)
 async def log_memory(items):
-    print(f"Memory now has {len(items)} items")
+    print(f"ContextQueue now has {len(items)} items")
 ```
 
 Attach hooks by appending to `.hooks` lists or passing in constructors:
 - Turns: `Turn(..., hooks=[h])` or `turn.hooks.append(h)`
 - Agents: `agent.hooks.append(h)`
 - Tools: `@tool(hooks=[h])`
-- Memory: `Memory(limit=N, hooks=[h])` or `mem.branch(hooks=[h])`
+- ContextQueue: `ContextQueue(limit=N, hooks=[h])` or `mem.branch(hooks=[h])`
 
 Hook decorator options: `@hook(type, lock=True, **fixed_kwargs)`.
 - `lock=True` serializes concurrent runs via `asyncio.Lock`
@@ -205,7 +205,7 @@ async def log_events(*args, **kwargs): ...
 - `ON_YIELD(value)` — each yielded value (generators)
 - `AFTER_INVOKE(value)` — after return/last yield
 
-**MemoryHook:**
+**ContextQueueHook:**
 - `BEFORE_APPEND(items)` — current items (read-only)
 - `AFTER_APPEND(items)` — current items after append
 
@@ -215,14 +215,14 @@ The core pattern: tools return `Turn` objects to control what runs next.
 
 ```python
 @tool()
-async def think(memory: Memory) -> Turn:
+async def think(memory: ContextQueue) -> Turn:
     # Decide next step, then queue it
     if should_respond:
         return Turn(respond, kwargs={"memory": memory})
     return Turn(gather_info, kwargs={"memory": memory})
 
 @tool()
-async def respond(memory: Memory) -> str:
+async def respond(memory: ContextQueue) -> str:
     return "Final answer"
 ```
 
@@ -230,7 +230,7 @@ The agent auto-enqueues any `Turn` returned as output. Chain as many steps as ne
 
 ## Serialization
 
-`to_dict()` / `from_dict()` on Turn, Agent, and Memory. Hooks serialize by name, resolved from `HookRegistry` on load.
+`to_dict()` / `from_dict()` on Turn, Agent, and ContextQueue. Hooks serialize by name, resolved from `HookRegistry` on load.
 
 ```python
 data = agent.to_dict()        # includes queue, current_turn, hooks
@@ -240,7 +240,7 @@ data = turn.to_dict()
 turn = Turn.from_dict(data)
 
 data = mem.to_dict()
-mem = Memory.from_dict(data)
+mem = ContextQueue.from_dict(data)
 ```
 
 ## Common errors

@@ -1,6 +1,6 @@
 # pygents
 
-A lightweight async framework for structuring and running AI agents in Python. pygents is a structural framework, not a batteries-included toolkit — it gives you the primitives for organizing and running agents (queues, turns, hooks, streaming) but leaves the concrete implementations to you. There are no built-in LLM clients, prompt templates, or retrieval pipelines. You bring your own. `Memory`, for example, provides a bounded, branchable window you can subclass or compose into working memory, semantic memory, episodic memory, or whatever your agent needs — pygents only manages the container and its lifecycle.
+A lightweight async framework for structuring and running AI agents in Python. pygents is a structural framework, not a batteries-included toolkit — it gives you the primitives for organizing and running agents (queues, turns, hooks, streaming) but leaves the concrete implementations to you. There are no built-in LLM clients, prompt templates, or retrieval pipelines. You bring your own. `ContextQueue`, for example, provides a bounded, branchable window you can subclass or compose into working memory, semantic memory, episodic memory, or whatever your agent needs — pygents only manages the container and its lifecycle.
 
 This means zero external dependencies and full control over every layer of your agent's behavior.
 
@@ -9,7 +9,7 @@ Five abstractions:
 - **Tools** define _how_ — async functions decorated with `@tool`
 - **Turns** define _what_ — which tool to run with what arguments
 - **Agents** _orchestrate_ — process a queue of turns and stream results
-- **Memory** provides _working context_ — bounded, branchable window of raw items
+- **ContextQueue** provides _working context_ — bounded, branchable window of raw items
 - **ContextPool** accumulates _tool outputs_ — keyed, bounded collection of `ContextItem` objects
 
 ## Install
@@ -114,7 +114,7 @@ await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 | Per-tool locking | `@tool(lock=True)` serializes concurrent runs |
 | Hooks | Async callbacks at turn, agent, tool, memory, and context pool level |
 | Serialization | `to_dict()` / `from_dict()` for turns, agents, and memory |
-| Memory | Bounded context window with branching |
+| ContextQueue | Bounded context window with branching |
 
 ## Registries
 
@@ -132,15 +132,15 @@ Everything importable from `pygents`:
 
 | Category | Symbols |
 |----------|---------|
-| Core classes | `Agent`, `Turn`, `Memory` |
-| Context | `ContextPool`, `ContextItem` (from `pygents.context`) |
+| Core classes | `Agent`, `Turn`, `ContextQueue` |
+| Context | `ContextPool`, `ContextItem` (from `pygents.context_pool`) |
 | Decorators | `@tool`, `@hook` |
-| Enums | `StopReason`, `TurnHook`, `AgentHook`, `ToolHook`, `MemoryHook`, `ContextPoolHook` |
+| Enums | `StopReason`, `TurnHook`, `AgentHook`, `ToolHook`, `ContextQueueHook`, `ContextPoolHook` |
 | Protocols | `Tool`, `Hook` |
 | Metadata | `ToolMetadata`, `HookMetadata` |
 | Registries | `ToolRegistry`, `AgentRegistry`, `HookRegistry` |
 | Exceptions | `SafeExecutionError`, `WrongRunMethodError`, `TurnTimeoutError`, `UnregisteredToolError`, `UnregisteredAgentError`, `UnregisteredHookError` |
 
-Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), [Memory](concepts/memory.md), or [Context Pool](concepts/context.md).
+Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), [ContextQueue](concepts/context_queue.md), or [Context Pool](concepts/context_pool.md).
 
 Guides: [Building an AI Agent](guides/ai-agent.md), [LLM-Driven Context Querying](guides/context-pool.md).

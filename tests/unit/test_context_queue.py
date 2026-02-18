@@ -1,7 +1,7 @@
 """
-Tests for pygents.memory, driven by the following decision table.
+Tests for pygents.context_queue, driven by the following decision table.
 
-Decision table for pygents/memory.py
+Decision table for pygents/context_queue.py
 ------------------------------------
 __init__(limit, hooks=None):
   I1  limit < 1 -> ValueError "limit must be >= 1"
@@ -31,21 +31,21 @@ import asyncio
 
 import pytest
 
-from pygents.hooks import MemoryHook, hook
-from pygents.memory import Memory
+from pygents.hooks import ContextQueueHook, hook
+from pygents.context_queue import ContextQueue
 
 
 # -- construction -------------------------------------------------------------
 
 
 def test_init_sets_limit():
-    mem = Memory(5)
+    mem = ContextQueue(5)
     assert mem.limit == 5
     assert len(mem) == 0
 
 
 def test_init_with_empty_hooks():
-    mem = Memory(5, hooks=[])
+    mem = ContextQueue(5, hooks=[])
     assert mem.hooks == []
     assert mem.limit == 5
 
@@ -53,7 +53,7 @@ def test_init_with_empty_hooks():
 @pytest.mark.parametrize("invalid_limit", [0, -1, -3])
 def test_init_rejects_limit_below_one(invalid_limit):
     with pytest.raises(ValueError, match="limit must be >= 1"):
-        Memory(invalid_limit)
+        ContextQueue(invalid_limit)
 
 
 # -- append -------------------------------------------------------------------
@@ -61,7 +61,7 @@ def test_init_rejects_limit_below_one(invalid_limit):
 
 def test_append_single_item():
     async def _():
-        mem = Memory(3)
+        mem = ContextQueue(3)
         await mem.append("a")
         assert mem.items == ["a"]
 
@@ -70,7 +70,7 @@ def test_append_single_item():
 
 def test_append_multiple_items():
     async def _():
-        mem = Memory(5)
+        mem = ContextQueue(5)
         await mem.append("a", "b", "c")
         assert mem.items == ["a", "b", "c"]
 
@@ -79,7 +79,7 @@ def test_append_multiple_items():
 
 def test_append_evicts_oldest_when_full():
     async def _():
-        mem = Memory(3)
+        mem = ContextQueue(3)
         await mem.append("a", "b", "c", "d")
         assert mem.items == ["b", "c", "d"]
 
@@ -88,7 +88,7 @@ def test_append_evicts_oldest_when_full():
 
 def test_append_successive_eviction():
     async def _():
-        mem = Memory(2)
+        mem = ContextQueue(2)
         await mem.append("a")
         await mem.append("b")
         await mem.append("c")
@@ -109,10 +109,10 @@ def test_before_append_is_called_on_every_append():
     async def spy(items):
         calls.append(list(items))
 
-    spy.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    spy.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(5, hooks=[spy])
+        mem = ContextQueue(5, hooks=[spy])
         await mem.append("a")
         await mem.append("b")
         assert calls == [[], ["a"]]
@@ -125,10 +125,10 @@ def test_before_append_does_not_replace_items():
     async def keep_last_two(items):
         pass
 
-    keep_last_two.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    keep_last_two.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(5, hooks=[keep_last_two])
+        mem = ContextQueue(5, hooks=[keep_last_two])
         await mem.append("a", "b", "c", "d", "e")
         assert mem.items == ["a", "b", "c", "d", "e"]
         await mem.append("f")
@@ -141,10 +141,10 @@ def test_before_append_observes_only():
     async def four_items(items):
         pass
 
-    four_items.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    four_items.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(3, hooks=[four_items])
+        mem = ContextQueue(3, hooks=[four_items])
         await mem.append("a")
         assert mem.items == ["a"]
 
@@ -155,10 +155,10 @@ def test_before_append_can_be_no_op():
     async def clear_all(items):
         pass
 
-    clear_all.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    clear_all.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(3, hooks=[clear_all])
+        mem = ContextQueue(3, hooks=[clear_all])
         await mem.append("a", "b")
         assert mem.items == ["a", "b"]
 
@@ -173,10 +173,10 @@ def test_before_append_receives_copy():
     async def mutating_compact(items):
         items.clear()
 
-    mutating_compact.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    mutating_compact.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(5, hooks=[mutating_compact])
+        mem = ContextQueue(5, hooks=[mutating_compact])
         await mem.append("a", "b")
         assert mem.items == ["a", "b"]
 
@@ -185,7 +185,7 @@ def test_before_append_receives_copy():
 
 def test_no_hooks_does_not_compact():
     async def _():
-        mem = Memory(5)
+        mem = ContextQueue(5)
         await mem.append("a", "b", "c")
         await mem.append("d")
         assert mem.items == ["a", "b", "c", "d"]
@@ -199,10 +199,10 @@ def test_after_append_hook_called():
     async def after_spy(items):
         seen.append(list(items))
 
-    after_spy.type = MemoryHook.AFTER_APPEND  # type: ignore[attr-defined]
+    after_spy.type = ContextQueueHook.AFTER_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(5, hooks=[after_spy])
+        mem = ContextQueue(5, hooks=[after_spy])
         await mem.append("a")
         assert seen == [["a"]]
         await mem.append("b", "c")
@@ -216,7 +216,7 @@ def test_after_append_hook_called():
 
 def test_clear_empties_memory():
     async def _():
-        mem = Memory(3)
+        mem = ContextQueue(3)
         await mem.append("a", "b")
         mem.clear()
         assert len(mem) == 0
@@ -230,7 +230,7 @@ def test_clear_empties_memory():
 
 def test_branch_inherits_items():
     async def _():
-        mem = Memory(5)
+        mem = ContextQueue(5)
         await mem.append("a", "b", "c")
         child = mem.branch()
         assert child.items == ["a", "b", "c"]
@@ -241,7 +241,7 @@ def test_branch_inherits_items():
 
 def test_branch_is_independent_from_parent():
     async def _():
-        mem = Memory(5)
+        mem = ContextQueue(5)
         await mem.append("a", "b")
         child = mem.branch()
         await child.append("c")
@@ -254,7 +254,7 @@ def test_branch_is_independent_from_parent():
 
 def test_branch_with_smaller_limit_truncates():
     async def _():
-        mem = Memory(5)
+        mem = ContextQueue(5)
         await mem.append("a", "b", "c", "d", "e")
         child = mem.branch(limit=3)
         assert child.limit == 3
@@ -265,7 +265,7 @@ def test_branch_with_smaller_limit_truncates():
 
 def test_branch_with_larger_limit():
     async def _():
-        mem = Memory(3)
+        mem = ContextQueue(3)
         await mem.append("a", "b")
         child = mem.branch(limit=10)
         assert child.limit == 10
@@ -276,7 +276,7 @@ def test_branch_with_larger_limit():
 
 def test_branch_of_empty_memory():
     async def _():
-        mem = Memory(3)
+        mem = ContextQueue(3)
         child = mem.branch()
         assert child.items == []
         assert child.limit == 3
@@ -286,7 +286,7 @@ def test_branch_of_empty_memory():
 
 def test_nested_branch():
     async def _():
-        root = Memory(5)
+        root = ContextQueue(5)
         await root.append("a")
         child = root.branch()
         await child.append("b")
@@ -308,10 +308,10 @@ def test_branch_inherits_hooks():
     async def spy(items):
         calls.append(list(items))
 
-    spy.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    spy.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(5, hooks=[spy])
+        mem = ContextQueue(5, hooks=[spy])
         await mem.append("a")
         child = mem.branch()
         await child.append("b")
@@ -325,10 +325,10 @@ def test_branch_overrides_hooks():
     async def keep_last(items):
         pass
 
-    keep_last.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    keep_last.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(5, hooks=[keep_last])
+        mem = ContextQueue(5, hooks=[keep_last])
         child = mem.branch(hooks=[])
         await child.append("a")
         await child.append("b")
@@ -344,11 +344,11 @@ def test_branch_with_explicit_hooks_uses_them():
     async def child_compact(items):
         pass
 
-    parent_compact.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
-    child_compact.type = MemoryHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    parent_compact.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    child_compact.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = Memory(5, hooks=[parent_compact])
+        mem = ContextQueue(5, hooks=[parent_compact])
         await mem.append("a", "b", "c")
         child = mem.branch(hooks=[child_compact])
         await child.append("d")
@@ -364,7 +364,7 @@ def test_branch_with_explicit_hooks_uses_them():
 
 def test_len():
     async def _():
-        mem = Memory(5)
+        mem = ContextQueue(5)
         assert len(mem) == 0
         await mem.append("a", "b")
         assert len(mem) == 2
@@ -374,7 +374,7 @@ def test_len():
 
 def test_iter():
     async def _():
-        mem = Memory(5)
+        mem = ContextQueue(5)
         await mem.append("a", "b", "c")
         assert list(mem) == ["a", "b", "c"]
 
@@ -382,13 +382,13 @@ def test_iter():
 
 
 def test_bool_empty():
-    mem = Memory(3)
+    mem = ContextQueue(3)
     assert not mem
 
 
 def test_bool_non_empty():
     async def _():
-        mem = Memory(3)
+        mem = ContextQueue(3)
         await mem.append("a")
         assert mem
 
@@ -397,9 +397,9 @@ def test_bool_non_empty():
 
 def test_repr():
     async def _():
-        mem = Memory(4)
+        mem = ContextQueue(4)
         await mem.append("a", "b")
-        assert repr(mem) == "Memory(limit=4, len=2)"
+        assert repr(mem) == "ContextQueue(limit=4, len=2)"
 
     asyncio.run(_())
 
@@ -409,7 +409,7 @@ def test_repr():
 
 def test_to_dict():
     async def _():
-        mem = Memory(3)
+        mem = ContextQueue(3)
         await mem.append("a", "b")
         assert mem.to_dict() == {"limit": 3, "items": ["a", "b"], "hooks": {}}
 
@@ -418,23 +418,23 @@ def test_to_dict():
 
 def test_from_dict():
     data = {"limit": 4, "items": [1, 2, 3]}
-    mem = Memory.from_dict(data)
+    mem = ContextQueue.from_dict(data)
     assert mem.limit == 4
     assert mem.items == [1, 2, 3]
 
 
 def test_from_dict_empty_items():
     data = {"limit": 2}
-    mem = Memory.from_dict(data)
+    mem = ContextQueue.from_dict(data)
     assert mem.limit == 2
     assert mem.items == []
 
 
 def test_roundtrip():
     async def _():
-        mem = Memory(5)
+        mem = ContextQueue(5)
         await mem.append("a", "b", "c")
-        restored = Memory.from_dict(mem.to_dict())
+        restored = ContextQueue.from_dict(mem.to_dict())
         assert restored.limit == mem.limit
         assert restored.items == mem.items
 
@@ -446,16 +446,16 @@ def test_roundtrip_with_before_append_hook():
 
     HookRegistry.clear()
 
-    @hook(MemoryHook.BEFORE_APPEND)
+    @hook(ContextQueueHook.BEFORE_APPEND)
     async def keep_last_two(items):
         pass
 
     async def _():
-        mem = Memory(5, hooks=[keep_last_two])
+        mem = ContextQueue(5, hooks=[keep_last_two])
         await mem.append("a", "b", "c", "d", "e")
         await mem.append("f")
         assert mem.items == ["b", "c", "d", "e", "f"]
-        restored = Memory.from_dict(mem.to_dict())
+        restored = ContextQueue.from_dict(mem.to_dict())
         assert restored.limit == mem.limit
         assert restored.items == mem.items
         await restored.append("g")

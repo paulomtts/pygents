@@ -1,5 +1,5 @@
 """
-Tests for pygents.context (ContextItem and ContextPool).
+Tests for pygents.context_pool (ContextItem and ContextPool).
 
 Decision table
 --------------
@@ -65,7 +65,7 @@ import asyncio
 
 import pytest
 
-from pygents.context import ContextItem, ContextPool
+from pygents.context_pool import ContextItem, ContextPool
 from pygents.hooks import ContextPoolHook, hook
 from pygents.registry import HookRegistry
 

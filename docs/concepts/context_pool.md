@@ -4,10 +4,10 @@
 
 The `description` field is designed to support selective retrieval: your code can inspect descriptions to decide which items' `content` to load, without pulling everything at once. How you implement that selection is entirely up to you. The [LLM-Driven Context Querying](../guides/context-pool.md) guide shows one approach using an LLM.
 
-`ContextPool` is distinct from `Memory`:
+`ContextPool` is distinct from `ContextQueue`:
 
-| | `Memory` | `ContextPool` |
-|-|----------|---------------|
+| | `ContextQueue` | `ContextPool` |
+|-|----------------|---------------|
 | Items | Raw values (strings, dicts, etc.) | `ContextItem` objects with `id`, `description`, `content` |
 | Access | Sequential window | Keyed lookup by `id` |
 | Selection | Always included (bounded window) | Application-defined: query descriptions, fetch relevant content |
@@ -16,7 +16,7 @@ The `description` field is designed to support selective retrieval: your code ca
 ## ContextItem
 
 ```python
-from pygents.context import ContextItem
+from pygents.context_pool import ContextItem
 
 item = ContextItem(id="doc-1", description="Q3 earnings report — revenue, margins, guidance", content={"text": "..."})
 ```
@@ -38,7 +38,7 @@ When a tool returns a `ContextItem`, the agent automatically stores it in its `c
 
 ```python
 from pygents import Agent, Turn, tool
-from pygents.context import ContextItem
+from pygents.context_pool import ContextItem
 
 @tool()
 async def fetch_doc(doc_id: str) -> ContextItem:
@@ -67,7 +67,7 @@ This is the only way items enter the pool from tool code. Tools that need to rea
 You can also construct and use `ContextPool` standalone:
 
 ```python
-from pygents.context import ContextItem, ContextPool
+from pygents.context_pool import ContextItem, ContextPool
 
 pool = ContextPool(limit=50)
 await pool.add(ContextItem(id="a", description="First", content=1))
@@ -117,7 +117,7 @@ The simplest way to attach hooks to an agent's pool is via the constructor:
 
 ```python
 from pygents import Agent, ContextPoolHook, hook
-from pygents.context import ContextPool
+from pygents.context_pool import ContextPool
 
 @hook(ContextPoolHook.AFTER_ADD)
 async def on_item_added(pool, item):
@@ -129,7 +129,7 @@ agent = Agent("reader", "Reads documents", [fetch_doc], context_pool=ContextPool
 You can also assign a new pool directly after construction:
 
 ```python
-from pygents.context import ContextPool
+from pygents.context_pool import ContextPool
 
 agent.context_pool = ContextPool(limit=100, hooks=[on_item_added])
 ```
@@ -149,7 +149,7 @@ ContextPool supports six hook events. Pass `hooks` as a list to `ContextPool(...
 
 ```python
 from pygents import ContextPoolHook, hook
-from pygents.context import ContextPool
+from pygents.context_pool import ContextPool
 
 @hook(ContextPoolHook.BEFORE_ADD)
 async def log_before(pool, item):
@@ -171,7 +171,7 @@ data = pool.to_dict()         # {"limit": ..., "items": [...], "hooks": {...}}
 restored = ContextPool.from_dict(data)
 ```
 
-Hooks are stored by type and name (same shape as `Memory`/`Agent`/`Turn`). `from_dict()` resolves hook names from `HookRegistry`. Items are restored directly without triggering hooks or eviction.
+Hooks are stored by type and name (same shape as `ContextQueue`/`Agent`/`Turn`). `from_dict()` resolves hook names from `HookRegistry`. Items are restored directly without triggering hooks or eviction.
 
 !!! warning "UnregisteredHookError"
     `ContextPool.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.

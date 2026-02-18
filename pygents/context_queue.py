@@ -3,12 +3,12 @@ from __future__ import annotations
 from collections import deque
 from typing import Any, Iterator
 
-from pygents.hooks import Hook, MemoryHook
+from pygents.hooks import Hook, ContextQueueHook
 from pygents.registry import HookRegistry
 from pygents.utils import rebuild_hooks_from_serialization, serialize_hooks_by_type
 
 
-class Memory:
+class ContextQueue:
     """
     A bounded, branchable memory window.
 
@@ -24,7 +24,7 @@ class Memory:
         appended and the window is full, the oldest item is evicted.
     hooks : list[Hook] | None
         Optional list of hooks (BEFORE_APPEND and/or AFTER_APPEND). Each
-        must have type set (e.g. via @hook(MemoryHook.BEFORE_APPEND)).
+        must have type set (e.g. via @hook(ContextQueueHook.BEFORE_APPEND)).
     """
 
     def __init__(
@@ -61,13 +61,13 @@ class Memory:
         are appended; then AFTER_APPEND hooks are run with (items,).
         """
         if before_append_hook := HookRegistry.get_by_type(
-            MemoryHook.BEFORE_APPEND, self.hooks
+            ContextQueueHook.BEFORE_APPEND, self.hooks
         ):
             await before_append_hook(list(self._items))
         for item in items:
             self._items.append(item)
         if after_append_hook := HookRegistry.get_by_type(
-            MemoryHook.AFTER_APPEND, self.hooks
+            ContextQueueHook.AFTER_APPEND, self.hooks
         ):
             await after_append_hook(list(self._items))
 
@@ -80,19 +80,19 @@ class Memory:
         self,
         limit: int | None = None,
         hooks: list[Hook] | None = ...,  # type: ignore[assignment]
-    ) -> Memory:
+    ) -> ContextQueue:
         """
-        Create a child memory that starts with a snapshot of this
-        memory's current state.
+        Create a child context queue that starts with a snapshot of this
+        context queue's current state.
 
         The child is fully independent. By default the child inherits
-        this memory's hooks; pass hooks=[] or a new list to override.
+        this context queue's hooks; pass hooks=[] or a new list to override.
         """
         child_limit = limit if limit is not None else self.limit
         child_hooks = (
             self.hooks if hooks is ... else (hooks if hooks is not None else [])
         )
-        child = Memory(child_limit, hooks=child_hooks)
+        child = ContextQueue(child_limit, hooks=child_hooks)
         for item in self._items:
             child._items.append(item)
         return child
@@ -109,7 +109,7 @@ class Memory:
         return len(self._items) > 0
 
     def __repr__(self) -> str:
-        return f"Memory(limit={self.limit}, len={len(self)})"
+        return f"ContextQueue(limit={self.limit}, len={len(self)})"
 
     # -- serialization --------------------------------------------------------
 
@@ -122,9 +122,9 @@ class Memory:
         return out
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Memory:
-        memory = cls(limit=data["limit"])
+    def from_dict(cls, data: dict[str, Any]) -> ContextQueue:
+        cq = cls(limit=data["limit"])
         for item in data.get("items", []):
-            memory._items.append(item)
-        memory.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
-        return memory
+            cq._items.append(item)
+        cq.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
+        return cq

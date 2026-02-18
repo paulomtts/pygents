@@ -25,8 +25,8 @@ from datetime import datetime
 import pytest
 
 from pygents.agent import Agent
-from pygents.context import ContextItem, ContextPool
-from pygents.hooks import AgentHook, ContextPoolHook, HookMetadata, MemoryHook, ToolHook, TurnHook, hook
+from pygents.context_pool import ContextItem, ContextPool
+from pygents.hooks import AgentHook, ContextPoolHook, ContextQueueHook, HookMetadata, ToolHook, TurnHook, hook
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
@@ -135,11 +135,11 @@ def test_hook_get_by_type_returns_first_match():
 def test_hook_memory_hook_type_accepted():
     HookRegistry.clear()
 
-    @hook(MemoryHook.BEFORE_APPEND)
+    @hook(ContextQueueHook.BEFORE_APPEND)
     async def before_append(items):
         pass
 
-    assert before_append.type == MemoryHook.BEFORE_APPEND
+    assert before_append.type == ContextQueueHook.BEFORE_APPEND
     assert HookRegistry.get("before_append") is before_append
 
 

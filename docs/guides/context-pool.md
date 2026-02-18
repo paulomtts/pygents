@@ -41,17 +41,17 @@ import logging
 from py_ai_toolkit import PyAIToolkit
 from py_ai_toolkit.core.domain.interfaces import LLMConfig
 
-from pygents import Memory, MemoryHook, hook
+from pygents import ContextQueue, ContextQueueHook, hook
 
 logger = logging.getLogger(__name__)
 
 toolkit = PyAIToolkit(main_model_config=LLMConfig())
 
-@hook(MemoryHook.AFTER_APPEND)
+@hook(ContextQueueHook.AFTER_APPEND)
 async def log_memory(items: list) -> None:
-    logger.debug("Memory: %d items", len(items))
+    logger.debug("ContextQueue: %d items", len(items))
 
-memory = Memory(limit=30, hooks=[log_memory])
+memory = ContextQueue(limit=30, hooks=[log_memory])
 ```
 
 ## Document store
@@ -95,7 +95,7 @@ Returns a `ContextItem`. The tool has no knowledge of — or interaction with �
 
 ```python
 from pygents import tool, Turn
-from pygents.context import ContextItem, ContextPool
+from pygents.context_pool import ContextItem, ContextPool
 
 @tool()
 async def fetch_document(doc_id: str) -> ContextItem:
@@ -130,7 +130,7 @@ class Answer(BaseModel):
 
 ```python
 @tool()
-async def think(pool: ContextPool, memory: Memory) -> Turn:
+async def think(pool: ContextPool, memory: ContextQueue) -> Turn:
     """Read pool descriptions, decide if enough context exists, route to select_context."""
     if not pool:
         # Nothing in the pool — answer directly from memory
@@ -150,7 +150,7 @@ async def think(pool: ContextPool, memory: Memory) -> Turn:
 
 ```python
 @tool()
-async def select_context(pool: ContextPool, memory: Memory) -> Turn:
+async def select_context(pool: ContextPool, memory: ContextQueue) -> Turn:
     """Send descriptions to the LLM, collect relevant ids, hand off to answer."""
     question = latest_user_message(memory)
 
@@ -183,7 +183,7 @@ async def select_context(pool: ContextPool, memory: Memory) -> Turn:
 
 ```python
 @tool()
-async def answer(pool: ContextPool, relevant_ids: list[str], memory: Memory) -> str:
+async def answer(pool: ContextPool, relevant_ids: list[str], memory: ContextQueue) -> str:
     """Read selected item content from the pool and generate the final answer."""
     question = latest_user_message(memory)
 
@@ -218,7 +218,7 @@ async def answer(pool: ContextPool, relevant_ids: list[str], memory: Memory) -> 
 ## Helper
 
 ```python
-def latest_user_message(memory: Memory) -> str:
+def latest_user_message(memory: ContextQueue) -> str:
     for item in reversed(memory.items):
         if isinstance(item, str) and item.startswith("User:"):
             return item.removeprefix("User:").strip()
@@ -232,7 +232,7 @@ The user queues fetch turns for the documents they want available, then queues t
 ```python
 import asyncio
 from pygents import Agent, Turn
-from pygents.context import ContextPool
+from pygents.context_pool import ContextPool
 
 pool = ContextPool(limit=50)
 
@@ -295,4 +295,4 @@ Descriptions are typically 1–2 sentences. A pool of 200 items with 20-word des
 | `answer` | **Read only** — reads `item.content` of selected ids | Injects and generates |
 | **Agent** | **Write** — stores `ContextItem` outputs automatically | Owns the pool |
 
-For the `ContextPool` API reference, see [Context Pool](../concepts/context.md).
+For the `ContextPool` API reference, see [Context Pool](../concepts/context_pool.md).
