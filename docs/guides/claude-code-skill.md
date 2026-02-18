@@ -8,14 +8,14 @@ Create the file `.claude/commands/pygents.md` at the root of your project and pa
 
 ````markdown
 ---
-description: Reference for the pygents async agent orchestration library. Use when writing tools, turns, agents, memory, or hooks with pygents.
+description: Reference for the pygents async agent orchestration library. Use when writing tools, turns, agents, context queues, context pools, or hooks with pygents.
 ---
 
 # pygents
 
 A lightweight async framework for structuring and running AI agents in Python. Requires Python 3.12+. Zero dependencies.
 
-Four abstractions: **Tools** (how), **Turns** (what), **Agents** (orchestrate), **ContextQueue** (context).
+Five abstractions: **Tools** (how), **Turns** (what), **Agents** (orchestrate), **ContextQueue** (memory-like context always passed to tools), **ContextPool** (large tool outputs retrieved selectively).
 
 ## Tools
 
@@ -76,9 +76,9 @@ async for value in turn.yielding():      # async generator tools
     ...
 ```
 
-Constructor: `Turn(tool, args=[], kwargs={}, timeout=60, metadata={}, hooks=[])`.
+Constructor: `Turn(tool, timeout=60, args=[], kwargs={}, hooks=[])`.
 
-After execution the framework sets: `output` (value or list of yielded values for generators), `start_time`, `end_time`, `stop_reason` (`StopReason.COMPLETED | TIMEOUT | ERROR | CANCELLED`).
+After execution the framework sets: `output` (value or list of yielded values for generators), `metadata.start_time`, `metadata.end_time`, `metadata.stop_reason` (`StopReason.COMPLETED | TIMEOUT | ERROR | CANCELLED`).
 
 Dynamic arguments — callables in `args`/`kwargs` are evaluated at run time:
 ```python
@@ -96,6 +96,9 @@ from pygents import Agent, Turn
 
 agent = Agent("worker", "Doubles numbers", [double, add])
 
+# Optional: pre-configured context pool
+agent = Agent("worker", "Doubles numbers", [double, add], context_pool=ContextPool(limit=50))
+
 # Enqueue turns
 await agent.put(Turn("double", kwargs={"x": 5}))
 
@@ -107,7 +110,7 @@ async for turn, value in agent.run():
 
 Key behaviors:
 - `put(turn)` validates the tool is in the agent's set
-- After each turn, if `turn.output` is a `Turn`, the agent auto-enqueues it (tool-driven flow control)
+- After each turn: if output is a `Turn` → auto-enqueued; if output is a `ContextItem` → stored in `agent.context_pool`
 - Coroutine tools yield one `(turn, value)`. Generator tools yield per value.
 - Attributes are immutable while `run()` is active (`SafeExecutionError`)
 - `run()` cannot be called again while already running (`SafeExecutionError`)
@@ -118,36 +121,86 @@ await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))
 ```
 Looks up target in `AgentRegistry`. Raises `UnregisteredAgentError` if not found.
 
+Branching:
+```python
+child = agent.branch("worker-2")                          # inherits tools, hooks, queue
+child = agent.branch("worker-2", tools=[t1], hooks=[])   # override
+```
+
 Registry: `AgentRegistry.get(name)`, `.clear()`.
 
 ## ContextQueue
 
-Bounded window backed by `collections.deque`. Evicts oldest when full.
+Bounded window backed by `collections.deque`. Evicts oldest when full. Use for context that should **always be present** when a tool runs — conversation history, system instructions, recent events. Pass it explicitly as a tool argument; every tool that needs it receives the same instance.
 
 ```python
 from pygents import ContextQueue
 
-mem = ContextQueue(limit=20)                    # limit must be >= 1
-await mem.append("msg1", "msg2")          # async, variadic
-mem.clear()                               # remove all items
-mem.items                                 # list copy
-len(mem)                                  # count
-bool(mem)                                 # False when empty
+cq = ContextQueue(limit=20)                 # limit must be >= 1
+await cq.append("msg1", "msg2")            # async, variadic
+cq.clear()                                  # remove all items
+cq.items                                    # list copy
+len(cq)                                     # count
+bool(cq)                                    # False when empty
 ```
 
 Branching — child gets a snapshot, then diverges independently:
 ```python
-child = mem.branch()                      # inherits limit and hooks
-child = mem.branch(limit=5)               # smaller window
-child = mem.branch(hooks=[])              # no hooks
+child = cq.branch()                         # inherits limit and hooks
+child = cq.branch(limit=5)                  # smaller window
+child = cq.branch(hooks=[])                 # no hooks
+```
+
+Serialization:
+```python
+data = cq.to_dict()
+cq = ContextQueue.from_dict(data)
+```
+
+## ContextPool
+
+Keyed, bounded store for `ContextItem` objects. Use for **potentially large tool outputs** — documents, records, fetched data — that accumulate over a session and are retrieved selectively. Dumping everything into a prompt is expensive; instead, tools read descriptions to decide what's relevant, then pull only that content. Items are retrieved by `id`, not by position.
+
+```python
+from pygents.context_pool import ContextItem, ContextPool
+
+pool = ContextPool(limit=50)               # limit=None for unbounded
+item = ContextItem(id="doc-1", description="Q3 earnings — revenue, margins", content={"text": "..."})
+await pool.add(item)
+pool.get("doc-1")                          # lookup by id (sync)
+await pool.remove("doc-1")                 # remove by id
+await pool.clear()                         # remove all
+pool.catalogue()                           # "- [id] description" string, one line per item
+pool.items                                 # list of all ContextItems
+```
+
+**The agent owns writes.** When a tool returns a `ContextItem`, the agent stores it in `agent.context_pool` automatically. Tools only read from the pool.
+
+```python
+@tool()
+async def fetch_doc(doc_id: str) -> ContextItem:
+    return ContextItem(id=doc_id, description="...", content=fetch(doc_id))
+
+@tool()
+async def answer(pool: ContextPool, question: str) -> str:
+    catalogue = pool.catalogue()           # descriptions only — cheap
+    selected_id = pick_relevant(catalogue, question)
+    content = pool.get(selected_id).content
+    return generate_answer(question, content)
+```
+
+Branching:
+```python
+child = pool.branch()           # inherits limit, items snapshot, hooks
+child = pool.branch(limit=10)   # override limit
 ```
 
 ## Hooks
 
-Async callbacks at four levels: Turn, Agent, Tool, ContextQueue. Decorated with `@hook(type)`.
+Async callbacks at five levels: Turn, Agent, Tool, ContextQueue, ContextPool. Decorated with `@hook(type)`.
 
 ```python
-from pygents import hook, TurnHook, AgentHook, ToolHook, ContextQueueHook
+from pygents import hook, TurnHook, AgentHook, ToolHook, ContextQueueHook, ContextPoolHook
 
 @hook(TurnHook.BEFORE_RUN)
 async def log_start(turn):
@@ -162,19 +215,24 @@ async def log_result(value):
     print(f"Result: {value}")
 
 @hook(ContextQueueHook.AFTER_APPEND)
-async def log_memory(items):
+async def log_cq(items):
     print(f"ContextQueue now has {len(items)} items")
+
+@hook(ContextPoolHook.AFTER_ADD)
+async def log_pool(pool, item):
+    print(f"Pool gained {item.id!r}: {item.description}")
 ```
 
-Attach hooks by appending to `.hooks` lists or passing in constructors:
-- Turns: `Turn(..., hooks=[h])` or `turn.hooks.append(h)`
+Attach hooks:
+- Turns: `Turn(..., hooks=[h])` or `turn._hooks.append(h)`
 - Agents: `agent.hooks.append(h)`
 - Tools: `@tool(hooks=[h])`
-- ContextQueue: `ContextQueue(limit=N, hooks=[h])` or `mem.branch(hooks=[h])`
+- ContextQueue: `ContextQueue(limit=N, hooks=[h])` or `cq.branch(hooks=[h])`
+- ContextPool: `ContextPool(hooks=[h])` or via `Agent(..., context_pool=ContextPool(hooks=[h]))`
 
 Hook decorator options: `@hook(type, lock=True, **fixed_kwargs)`.
 - `lock=True` serializes concurrent runs via `asyncio.Lock`
-- Fixed kwargs merge into every call (call-time overrides with warning)
+- Fixed kwargs merge into every call (call-time overrides)
 
 Multi-type hooks — one hook for several events (must accept `*args, **kwargs`):
 ```python
@@ -209,20 +267,27 @@ async def log_events(*args, **kwargs): ...
 - `BEFORE_APPEND(items)` — current items (read-only)
 - `AFTER_APPEND(items)` — current items after append
 
+**ContextPoolHook:**
+- `BEFORE_ADD(pool, item)` — before item inserted
+- `AFTER_ADD(pool, item)` — after item inserted
+- `BEFORE_REMOVE(pool, item)` — before item deleted
+- `AFTER_REMOVE(pool, item)` — after item deleted
+- `BEFORE_CLEAR(pool)` — before all items cleared
+- `AFTER_CLEAR(pool)` — after all items cleared
+
 ## Tool-driven flow control
 
 The core pattern: tools return `Turn` objects to control what runs next.
 
 ```python
 @tool()
-async def think(memory: ContextQueue) -> Turn:
-    # Decide next step, then queue it
-    if should_respond:
-        return Turn(respond, kwargs={"memory": memory})
-    return Turn(gather_info, kwargs={"memory": memory})
+async def think(cq: ContextQueue, pool: ContextPool) -> Turn:
+    if not pool:
+        return Turn(respond, kwargs={"cq": cq})
+    return Turn(select_and_answer, kwargs={"cq": cq, "pool": pool})
 
 @tool()
-async def respond(memory: ContextQueue) -> str:
+async def respond(cq: ContextQueue) -> str:
     return "Final answer"
 ```
 
@@ -230,17 +295,17 @@ The agent auto-enqueues any `Turn` returned as output. Chain as many steps as ne
 
 ## Serialization
 
-`to_dict()` / `from_dict()` on Turn, Agent, and ContextQueue. Hooks serialize by name, resolved from `HookRegistry` on load.
+`to_dict()` / `from_dict()` on `Turn`, `Agent`, `ContextQueue`, and `ContextPool`. Hooks serialize by name, resolved from `HookRegistry` on load.
 
 ```python
-data = agent.to_dict()        # includes queue, current_turn, hooks
+data = agent.to_dict()         # includes queue, current_turn, hooks, context_pool
 agent = Agent.from_dict(data)  # rebuilds from ToolRegistry, AgentRegistry, HookRegistry
 
 data = turn.to_dict()
 turn = Turn.from_dict(data)
 
-data = mem.to_dict()
-mem = ContextQueue.from_dict(data)
+data = cq.to_dict()
+cq = ContextQueue.from_dict(data)
 ```
 
 ## Common errors
