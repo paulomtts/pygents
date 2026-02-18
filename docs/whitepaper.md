@@ -8,7 +8,7 @@ Orchestrating large language model-based agents requires making a set of foundat
 
 ---
 
-## 1. Core Thesis
+## Core Thesis
 
 A well-designed agent system provides structure — primitives with clear invariants and enforced separation of concerns — and nothing more. The framework's scope is coordination; the application's scope is everything else.
 
@@ -24,31 +24,31 @@ The three concerns are individually justifiable, but their value is relational. 
 
 ---
 
-## 2. Primitive Decomposition
+## Primitive Decomposition
 
 Structural separation is only possible if the primitives that enforce it are well-defined. The following five primitives constitute the minimal necessary vocabulary for a conforming agent system. Each has exactly one responsibility.
 
-### 2.1 The Recipe
+### The Recipe
 
 An recipe is a pure, stateless unit of implementation. It receives arguments and produces a result. It has no knowledge of the context it will be invoked in, the queue it was drawn from, or the state stores that surround it. It has one job
 
-### 2.2 The Work Unit
+### The Work Unit
 
 A work unit is a declaration of intent. It references a specific recipe and binds it to a set of arguments and constraints — specifying what should be invoked, with what inputs, and under what conditions. It has no behavior of its own. It is the object that travels through the system, can be serialized, and can be replayed.
 
 The output of one work unit may itself be another work unit. This is the sanctioned mechanism for dynamic task creation: an implementation that determines further work is needed returns a declaration, and the orchestrator handles the enqueueing. The implementation remains unaware of the queue.
 
-### 2.3 The Orchestrator
+### The Orchestrator
 
 The orchestrator owns a queue of work units and processes them in order. It resolves each work unit's named action, dispatches execution, and routes the output. Its job is coordination; it does not interpret outputs or make domain decisions.
 
 The orchestrator is the sole writer to the context store. When an action produces a result intended for storage, it signals that intent in its output. The orchestrator recognizes the intent and performs the write. This arrangement means the store's contents are entirely determined by the orchestrator's processing history: every item has a corresponding work unit that produced it, and the provenance of any item is visible without inspecting any action's implementation.
 
-### 2.4 Working Context
+### Working Context
 
 Working context is a bounded, ordered sequence of recent items — the immediate history that makes an agent's current task coherent. The capacity limit is a property of the primitive, not a policy applied at the application layer. A session operates within a defined window, and the window is maintained automatically as new items are appended. Working context is sequential — appended to and read in order — which is a different access pattern from accumulated context. Keeping them separate preserves the efficiency of both.
 
-### 2.5 Accumulated Context
+### Accumulated Context
 
 Accumulated context is the structured record of what a session has produced — results, observations, and items the agent has gathered and may need to reference. It is keyed: items are retrieved by identifier, not by position.
 
@@ -58,7 +58,7 @@ The framework provides the structural separation. What the application puts in t
 
 ---
 
-## 3. Conclusion
+## Conclusion
 
 Structural discipline is what allows an agent system to remain coherent as it grows. When declaration, implementation, and orchestration are kept separate — by the design of the primitives, not by convention — each concern can be reasoned about, tested, and replaced independently. The system's composability is a direct consequence of the separation, not an incidental property of good implementation.
 
