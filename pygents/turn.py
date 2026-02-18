@@ -35,7 +35,7 @@ class TurnMetadata:
     end_time: datetime | None = None
     stop_reason: StopReason | None = None
 
-    def dict(self) -> dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "start_time": self.start_time.isoformat() if self.start_time else None,
             "end_time": self.end_time.isoformat() if self.end_time else None,
@@ -251,7 +251,7 @@ class Turn[T]:
             "args": eval_args(self.args),
             "kwargs": eval_kwargs(self.kwargs),
             "timeout": self.timeout,
-            "metadata": self.metadata.dict(),
+            "metadata": self.metadata.to_dict(),
             "output": self.output,
             "hooks": serialize_hooks_by_type(self._hooks),
         }
