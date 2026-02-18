@@ -1,12 +1,8 @@
 # Context Pool
 
-## Design intent
+`ContextPool` is a keyed, bounded store for `ContextItem` objects. Each item carries an `id`, a short `description`, and an arbitrary `content` payload. The agent owns writes — tools only read.
 
-A long-running agent accumulates a lot of context — fetched documents, database records, code snippets, prior tool outputs. The naive approach is to serialize all of it into every prompt, but this quickly hits token limits and increases cost even when most of the context is irrelevant to the current step.
-
-`ContextPool` is a specialized container that solves this problem. It stores items out-of-prompt and allows the agent to **query the pool with the LLM** — presenting only the lightweight `description` of each item, asking the model which ones are relevant, and fetching only those items' `content` to include in the actual prompt. The full payloads never leave the pool unless the LLM says they're needed.
-
-This keeps every prompt tight: the LLM sees descriptions (a sentence or two each) rather than full content until it explicitly selects items. The pattern scales gracefully — a pool of 200 items adds only a handful of description lines to a selection prompt, not 200 pages of content.
+The `description` field is designed to support selective retrieval: your code can inspect descriptions to decide which items' `content` to load, without pulling everything at once. How you implement that selection is entirely up to you. The [LLM-Driven Context Querying](../guides/context-pool.md) guide shows one approach using an LLM.
 
 `ContextPool` is distinct from `Memory`:
 
@@ -14,10 +10,8 @@ This keeps every prompt tight: the LLM sees descriptions (a sentence or two each
 |-|----------|---------------|
 | Items | Raw values (strings, dicts, etc.) | `ContextItem` objects with `id`, `description`, `content` |
 | Access | Sequential window | Keyed lookup by `id` |
-| Selection | Always included (bounded window) | LLM-driven: query descriptions, fetch relevant content |
+| Selection | Always included (bounded window) | Application-defined: query descriptions, fetch relevant content |
 | Use case | Conversation history, recent events | Documents, records, tool outputs accumulated over time |
-
----
 
 ## ContextItem
 
@@ -30,49 +24,13 @@ item = ContextItem(id="doc-1", description="Q3 earnings report — revenue, marg
 | Field | Type | Meaning |
 |-------|------|---------|
 | `id` | `str` | Unique key in the pool |
-| `description` | `str` | Compact summary the LLM reads during selection — keep it one or two sentences |
-| `content` | `T` | The full payload, injected into prompts only when selected |
+| `description` | `str` | Compact summary used by your selection logic to decide relevance — keep it one or two sentences |
+| `content` | `T` | The full payload, retrieved only for items that pass selection |
 
 `ContextItem` is a frozen dataclass — it is immutable after creation.
 
-!!! tip "Write descriptions for the LLM, not for humans"
-    The `description` is the only part of an item the LLM sees during context selection. Make it dense and specific enough that the model can decide whether the item is relevant without seeing the content. `"Q3 earnings report — revenue, margins, guidance"` works; `"A document"` does not.
-
-## The query pattern
-
-Tools never write to the pool — that is the agent's job (via auto-pooling from tools that return `ContextItem`). Tools that need context receive `pool` as a parameter and **read** from it.
-
-The canonical read pattern is two steps:
-
-1. **Selection** — build a prompt listing `id + description` for every item in the pool (descriptions only, no content), call the LLM with a response model that returns `list[str]` (selected ids).
-2. **Injection** — fetch the `content` of selected items with `pool.get(id)` and include it in the actual working prompt.
-
-```python
-from pydantic import BaseModel
-from pygents.context import ContextPool
-
-class ContextSelection(BaseModel):
-    """IDs of the context items relevant to the current task."""
-    relevant_ids: list[str]
-
-# In a @tool function that receives `pool` and `memory` as parameters:
-catalogue = pool.catalogue()        # descriptions only — no content sent here
-selection = await llm.asend(
-    response_model=ContextSelection,
-    template="Task: {{ task }}\n\nAvailable context:\n{{ catalogue }}\n\n"
-             "Return the IDs of the items that are relevant to this task.",
-    task=task,
-    catalogue=catalogue,
-)
-
-# Fetch content only for selected items
-pool_ids = {item.id for item in pool.items}
-selected = [pool.get(id) for id in selection.relevant_ids if id in pool_ids]
-```
-
-Only the selected items' `content` is then passed to the tool that generates the final answer. See the [LLM-Driven Context Querying](../guides/context-pool.md) guide for a complete, runnable example.
-
----
+!!! tip "Write descriptions that support selection"
+    `description` is what your selection logic sees before deciding whether to fetch `content`. For LLM-driven querying that means a dense, specific summary the model can reason about. `"Q3 earnings report — revenue, margins, guidance"` works; `"A document"` does not. For non-LLM selection (keyword match, similarity search, etc.) the same principle applies: the description should be informative enough to make the decision without loading the full content.
 
 ## How the agent uses ContextPool
 
@@ -87,8 +45,8 @@ async def fetch_doc(doc_id: str) -> ContextItem:
     content = ...  # fetch from API, DB, etc.
     return ContextItem(
         id=doc_id,
-        description=f"Report {doc_id} — quarterly financials",  # LLM reads this during selection
-        content=content,                                          # LLM reads this only when selected
+        description=f"Report {doc_id} — quarterly financials",  # shown to selection logic
+        content=content,                                          # retrieved only when selected
     )
 
 agent = Agent("reader", "Reads documents", [fetch_doc])
@@ -102,7 +60,7 @@ item = agent.context_pool.get("report-2024")
 print(item.content)
 ```
 
-This is the only way items enter the pool from tool code. Tools that need to use pooled items receive `pool` as a parameter and **read** from it — they never call `pool.add()`, `pool.remove()`, or `pool.clear()`.
+This is the only way items enter the pool from tool code. Tools that need to read pooled items receive `pool` as a parameter — they use `pool.catalogue()`, `pool.get(id)`, or `pool.items` to access items, and never call `pool.add()`, `pool.remove()`, or `pool.clear()`.
 
 ## Creating a pool directly
 
