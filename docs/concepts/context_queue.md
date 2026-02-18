@@ -1,4 +1,4 @@
-# ContextQueue
+# Context Queue
 
 `ContextQueue` is a bounded, branchable window of context items. Use it as a building block for agent memory — e.g. working, semantic, episodic, or procedural — by passing one or more `ContextQueue` instances (or subclasses) to your agent. It holds items in a fixed-size window and automatically evicts the oldest when full.
 
