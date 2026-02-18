@@ -14,6 +14,13 @@ async def work(x: int) -> int:
 agent = Agent("worker", "Doubles numbers", [work])
 ```
 
+| Parameter | Default | Meaning |
+|-----------|---------|---------|
+| `name` | required | Unique name; registered in `AgentRegistry` |
+| `description` | required | Free-text description |
+| `tools` | required | Tools the agent may run |
+| `context_pool` | `None` | Pre-configured `ContextPool` (or subclass) to use; creates a default `ContextPool()` if not provided (see [Context Pool](context.md)) |
+
 Each tool must be the same instance as in `ToolRegistry` — the constructor validates this.
 
 !!! warning "ValueError"
@@ -44,6 +51,7 @@ async for turn, value in agent.run():
 |-----------|----------|
 | Queue is empty | Exit loop |
 | Output is a `Turn` instance | Enqueue it, continue |
+| Output is a `ContextItem` | Store in `agent.context_pool`, continue |
 | Otherwise | Continue to next turn |
 
 ## Streaming
@@ -95,7 +103,7 @@ child2 = parent.branch(
 | `tools` | parent's | Override with a list |
 | `hooks` | parent's | Pass `hooks=[]` for no hooks, or a new list to override |
 
-The parent's queue is copied (non-destructively) to the child. Both agents are fully independent after branching — enqueueing or running turns on one does not affect the other.
+The parent's queue is copied (non-destructively) to the child. The parent's `context_pool` is branched into the child — the child starts with a snapshot of the parent's context items and a copy of the parent's pool hooks. Both agents are fully independent after branching — enqueueing or running turns on one does not affect the other.
 
 ```python
 # Parent and child can run the same queued turns independently
@@ -162,11 +170,11 @@ AgentRegistry.clear()                # empty the registry (useful in tests)
 ## Serialization
 
 ```python
-data = agent.to_dict()       # name, description, tool_names, queue, hooks
-agent = Agent.from_dict(data)  # rebuilds from registries, repopulates queue
+data = agent.to_dict()       # name, description, tool_names, queue, hooks, context_pool
+agent = Agent.from_dict(data)  # rebuilds from registries, repopulates queue and pool
 ```
 
-Hooks are serialized by name and resolved from `HookRegistry` on deserialization.
+Hooks (both agent-level and context pool) are serialized by name and resolved from `HookRegistry` on deserialization. Context pool items and hooks are included in the serialized form.
 
 !!! warning "UnregisteredHookError"
     `Agent.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.

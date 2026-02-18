@@ -11,6 +11,7 @@ from pygents.utils import _null_lock
 
 if TYPE_CHECKING:
     from pygents.agent import Agent
+    from pygents.context import ContextItem, ContextPool
     from pygents.turn import Turn
 
 
@@ -43,7 +44,16 @@ class MemoryHook(str, Enum):
     AFTER_APPEND = "after_append"
 
 
-HookType = TurnHook | AgentHook | ToolHook | MemoryHook
+class ContextPoolHook(str, Enum):
+    BEFORE_ADD    = "before_add"
+    AFTER_ADD     = "after_add"
+    BEFORE_REMOVE = "before_remove"
+    AFTER_REMOVE  = "after_remove"
+    BEFORE_CLEAR  = "before_clear"
+    AFTER_CLEAR   = "after_clear"
+
+
+HookType = TurnHook | AgentHook | ToolHook | MemoryHook | ContextPoolHook
 
 
 @dataclass
@@ -164,6 +174,27 @@ def hook(
     lock: bool = False,
     **fixed_kwargs: Any,
 ) -> Callable[[Callable[[list[Any]], Awaitable[None]]], Hook]: ...
+
+
+@overload
+def hook(
+    type: ContextPoolHook.BEFORE_ADD
+    | ContextPoolHook.AFTER_ADD
+    | ContextPoolHook.BEFORE_REMOVE
+    | ContextPoolHook.AFTER_REMOVE,
+    *,
+    lock: bool = False,
+    **fixed_kwargs: Any,
+) -> Callable[[Callable[["ContextPool", "ContextItem[Any]"], Awaitable[None]]], Hook]: ...
+
+
+@overload
+def hook(
+    type: ContextPoolHook.BEFORE_CLEAR | ContextPoolHook.AFTER_CLEAR,
+    *,
+    lock: bool = False,
+    **fixed_kwargs: Any,
+) -> Callable[[Callable[["ContextPool"], Awaitable[None]]], Hook]: ...
 
 
 @overload

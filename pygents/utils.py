@@ -23,6 +23,17 @@ log = logging.getLogger("pygents")
 
 
 def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
+    if inspect.isasyncgenfunction(func):
+        async def asyncgen_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            if getattr(self, "_is_running", False):
+                raise SafeExecutionError(
+                    f"Skipped <{func.__name__}> call because {self} is running."
+                )
+            async for item in func(self, *args, **kwargs):
+                yield item
+
+        return asyncgen_wrapper  # type: ignore[return-value]
+
     def wrapper(self: Any, *args: Any, **kwargs: Any) -> R:
         if not getattr(self, "_is_running", False):
             return func(self, *args, **kwargs)

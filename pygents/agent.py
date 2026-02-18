@@ -2,6 +2,7 @@ import asyncio
 import inspect
 from typing import Any, AsyncIterator
 
+from pygents.context import ContextItem, ContextPool
 from pygents.errors import SafeExecutionError, TurnTimeoutError
 from pygents.hooks import AgentHook, Hook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
@@ -37,6 +38,7 @@ class Agent:
 
     _is_running: bool = False
     _current_turn: Turn | None = None
+    context_pool: ContextPool
 
     # -- mutation guard -------------------------------------------------------
 
@@ -49,7 +51,13 @@ class Agent:
             )
         super().__setattr__(name, value)
 
-    def __init__(self, name: str, description: str, tools: list[Tool]):
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        tools: list[Tool],
+        context_pool: ContextPool | None = None,
+    ):
         for t in tools:
             registered = ToolRegistry.get(t.metadata.name)
             if registered is not t:
@@ -59,32 +67,28 @@ class Agent:
         self.name = name
         self.description = description
         self.tools = tools
+        self.hooks: list[Hook] = []
+
         self._tool_names = {t.metadata.name for t in tools}
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
-        self.hooks: list[Hook] = []
-        self._is_running = False
-        self._current_turn = None
+        self.context_pool = context_pool if context_pool is not None else ContextPool()
+
         AgentRegistry.register(self)
 
     def __repr__(self) -> str:
         tool_names = [t.metadata.name for t in self.tools]
         return f"Agent(name={self.name!r}, tools={tool_names})"
 
-    # -- queue snapshot -------------------------------------------------------
-
-    def _queue_snapshot(self) -> list[Turn]:
-        items = []
-        for _ in range(self._queue.qsize()):
-            turn = self._queue.get_nowait()
-            items.append(turn)
-            self._queue.put_nowait(turn)
-        return items
-
-    # -- hooks -----------------------------------------------------------------
+    # -- utils -----------------------------------------------------------------
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
         if h := HookRegistry.get_by_type(name, self.hooks):
             await h(*args, **kwargs)
+
+    async def _add_context(self, turn: Turn) -> None:
+        if not isinstance(turn.output, ContextItem):
+            return
+        await self.context_pool.add(turn.output)
 
     # -- queue -----------------------------------------------------------------
 
@@ -127,6 +131,14 @@ class Agent:
 
     # -- branching -------------------------------------------------------------
 
+    def _queue_snapshot(self) -> list[Turn]:
+        items = []
+        for _ in range(self._queue.qsize()):
+            turn = self._queue.get_nowait()
+            items.append(turn)
+            self._queue.put_nowait(turn)
+        return items
+
     def branch(
         self,
         name: str,
@@ -160,6 +172,7 @@ class Agent:
         )
         child = Agent(name, child_description, child_tools)
         child.hooks = list(child_hooks)
+        child.context_pool = self.context_pool.branch()
         for turn in self._queue_snapshot():
             child._queue.put_nowait(turn)
         return child
@@ -196,6 +209,7 @@ class Agent:
                             AgentHook.ON_TURN_VALUE, self, turn, output
                         )
                         yield (turn, output)
+                    await self._add_context(turn)
                 except TurnTimeoutError:
                     await self._run_hooks(AgentHook.ON_TURN_TIMEOUT, self, turn)
                     raise
@@ -222,6 +236,7 @@ class Agent:
             if self._current_turn
             else None,
             "hooks": serialize_hooks_by_type(self.hooks),
+            "context_pool": self.context_pool.to_dict(),
         }
 
     @classmethod
@@ -233,4 +248,5 @@ class Agent:
         if data.get("current_turn") is not None:
             agent._current_turn = Turn.from_dict(data["current_turn"])
         agent.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
+        agent.context_pool = ContextPool.from_dict(data.get("context_pool", {}))
         return agent

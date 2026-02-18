@@ -22,7 +22,7 @@ async def on_error(turn, exception):
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `type` | required | One or more of `TurnHook`, `AgentHook`, `ToolHook`, `MemoryHook`. Stored on the hook for filtering. Pass a list (e.g. `@hook([TurnHook.BEFORE_RUN, AgentHook.AFTER_TURN])`) to register for several events. |
+| `type` | required | One or more of `TurnHook`, `AgentHook`, `ToolHook`, `MemoryHook`, `ContextPoolHook`. Stored on the hook for filtering. Pass a list (e.g. `@hook([TurnHook.BEFORE_RUN, AgentHook.AFTER_TURN])`) to register for several events. |
 | `lock` | `False` | If `True`, concurrent runs of this hook are serialized via `asyncio.Lock`. |
 | `**kwargs` | — | Fixed keyword arguments merged into every invocation. Call-time kwargs override these (with a warning). |
 
@@ -76,12 +76,24 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `BEFORE_APPEND` | Before new items are inserted | `(items,)` — current items (read-only; does not clear or replace the window) |
 | `AFTER_APPEND` | After new items have been added | `(items,)` — current items |
 
+**ContextPool** — during pool mutation (see [Context Pool](context.md#hooks)):
+
+| Hook | When | Args |
+|------|------|------|
+| `BEFORE_ADD` | Before item inserted (after eviction if any) | `(pool, item)` |
+| `AFTER_ADD` | After item inserted | `(pool, item)` |
+| `BEFORE_REMOVE` | Before item deleted | `(pool, item)` |
+| `AFTER_REMOVE` | After item deleted | `(pool, item)` |
+| `BEFORE_CLEAR` | Before all items cleared | `(pool)` |
+| `AFTER_CLEAR` | After all items cleared | `(pool)` |
+
 ## Where hooks attach
 
-- **Turns** — `turn.hooks.append(my_hook)`; serialized with the turn by name.
+- **Turns** — `turn._hooks.append(my_hook)`; serialized with the turn by name.
 - **Agents** — `agent.hooks.append(my_hook)`; serialized with the agent by name.
 - **Tools** — `@tool(hooks=[...])`; applied on every invocation of that tool.
 - **Memory** — `Memory(limit=..., hooks=[...])` or `mem.branch(hooks=[...])`; serialized by name.
+- **ContextPool** — `Agent(..., context_pool=ContextPool(hooks=[...]))` or `ContextPool(hooks=[...])`; serialized by name.
 
 The framework selects which hook to run via `HookRegistry.get_by_type(type, list_of_hooks)`. Only hooks whose type matches the event are invoked. Exceptions in hooks propagate.
 
@@ -97,7 +109,7 @@ async def log_turn_events(*args, **kwargs):
 
 Multi-type hooks **must** accept `*args, **kwargs` because different hook types receive different arguments (e.g. `BEFORE_TURN` gets `(agent,)`, `AFTER_TURN` gets `(agent, turn)`). You can inspect `args` to distinguish the event. For single-type hooks, the decorator provides **type-safe overloaded signatures** so your IDE can infer the exact callback shape (e.g. `(Turn) -> Awaitable[None]` for `BEFORE_RUN`).
 
-All hook types are members of the `HookType` union: `TurnHook | AgentHook | ToolHook | MemoryHook`.
+All hook types are members of the `HookType` union: `TurnHook | AgentHook | ToolHook | MemoryHook | ContextPoolHook`.
 
 ## Fixed kwargs
 

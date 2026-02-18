@@ -9,6 +9,7 @@ from pygents.errors import (
 )
 from pygents.hooks import (
     AgentHook,
+    ContextPoolHook,
     Hook,
     HookMetadata,
     MemoryHook,
@@ -25,6 +26,7 @@ __all__ = [
     "Agent",
     "AgentHook",
     "AgentRegistry",
+    "ContextPoolHook",
     "hook",
     "Hook",
     "HookMetadata",

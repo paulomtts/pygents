@@ -4,12 +4,13 @@ A lightweight async framework for structuring and running AI agents in Python. p
 
 This means zero external dependencies and full control over every layer of your agent's behavior.
 
-Four abstractions:
+Five abstractions:
 
 - **Tools** define _how_ — async functions decorated with `@tool`
 - **Turns** define _what_ — which tool to run with what arguments
 - **Agents** _orchestrate_ — process a queue of turns and stream results
-- **Memory** provides _context_ — bounded, branchable window of state
+- **Memory** provides _working context_ — bounded, branchable window of raw items
+- **ContextPool** accumulates _tool outputs_ — keyed, bounded collection of `ContextItem` objects
 
 ## Install
 
@@ -111,7 +112,7 @@ await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 | Dynamic arguments | Callable positional args and kwargs evaluated at invocation time |
 | Timeouts | Per-turn timeout (default 60s), raises `TurnTimeoutError` |
 | Per-tool locking | `@tool(lock=True)` serializes concurrent runs |
-| Hooks | Async callbacks at turn, agent, tool, and memory level |
+| Hooks | Async callbacks at turn, agent, tool, memory, and context pool level |
 | Serialization | `to_dict()` / `from_dict()` for turns, agents, and memory |
 | Memory | Bounded context window with branching |
 
@@ -132,11 +133,14 @@ Everything importable from `pygents`:
 | Category | Symbols |
 |----------|---------|
 | Core classes | `Agent`, `Turn`, `Memory` |
+| Context | `ContextPool`, `ContextItem` (from `pygents.context`) |
 | Decorators | `@tool`, `@hook` |
-| Enums | `StopReason`, `TurnHook`, `AgentHook`, `ToolHook`, `MemoryHook` |
+| Enums | `StopReason`, `TurnHook`, `AgentHook`, `ToolHook`, `MemoryHook`, `ContextPoolHook` |
 | Protocols | `Tool`, `Hook` |
 | Metadata | `ToolMetadata`, `HookMetadata` |
 | Registries | `ToolRegistry`, `AgentRegistry`, `HookRegistry` |
 | Exceptions | `SafeExecutionError`, `WrongRunMethodError`, `TurnTimeoutError`, `UnregisteredToolError`, `UnregisteredAgentError`, `UnregisteredHookError` |
 
-Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), or [Memory](concepts/memory.md).
+Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), [Memory](concepts/memory.md), or [Context Pool](concepts/context.md).
+
+Guides: [Building an AI Agent](guides/ai-agent.md), [LLM-Driven Context Querying](guides/context-pool.md).

@@ -13,7 +13,7 @@ class Memory:
     A bounded, branchable memory window.
 
     Intended as a building block for agent memory (working, semantic,
-    episodic, procedural, etc.). Holds context items in a fixed-size window;
+    episodic, etc.). Holds context items in a fixed-size window;
     supports branching so child scopes inherit the parent's state and
     diverge independently.
 

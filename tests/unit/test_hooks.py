@@ -25,12 +25,15 @@ from datetime import datetime
 import pytest
 
 from pygents.agent import Agent
-from pygents.hooks import AgentHook, HookMetadata, MemoryHook, ToolHook, TurnHook, hook
+from pygents.context import ContextItem, ContextPool
+from pygents.hooks import AgentHook, ContextPoolHook, HookMetadata, MemoryHook, ToolHook, TurnHook, hook
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
 
-# --- Fixtures: tools used by hook integration tests ---------------------------------
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @tool()
@@ -45,7 +48,9 @@ async def tool_for_hook_test_gen():
     yield 3
 
 
-# --- HookMetadata (M1, M2, M3) -------------------------------------------------------
+# ---------------------------------------------------------------------------
+# M1–M3 – HookMetadata
+# ---------------------------------------------------------------------------
 
 
 def test_hook_metadata_construction():
@@ -81,7 +86,9 @@ def test_hook_metadata_dict_after_run_returns_isoformat_times():
     datetime.fromisoformat(data["end_time"])
 
 
-# --- hook() decorator: registration, metadata, type (H1, H7, H8) ---------------------
+# ---------------------------------------------------------------------------
+# H1, H7–H8 – hook() decorator: registration, metadata, type
+# ---------------------------------------------------------------------------
 
 
 def test_hook_sets_type_metadata_and_registers():
@@ -205,7 +212,9 @@ def test_hook_empty_list_raises():
             pass
 
 
-# --- hook() decorator: lock (H2, H3) --------------------------------------------------
+# ---------------------------------------------------------------------------
+# H2–H3 – hook() decorator: lock
+# ---------------------------------------------------------------------------
 
 
 def test_hook_lock_default_none():
@@ -240,7 +249,9 @@ def test_hook_lock_true_serializes_invocation():
     assert order == ["start", "end", "start", "end"]
 
 
-# --- hook() decorator: fixed_kwargs (H4, H5) -----------------------------------------
+# ---------------------------------------------------------------------------
+# H4–H5 – hook() decorator: fixed_kwargs
+# ---------------------------------------------------------------------------
 
 
 def test_hook_fixed_kwargs_merged_into_invocation():
@@ -290,7 +301,9 @@ def test_hook_fixed_kwargs_allowed_with_kwargs():
     assert received == ["fixed"]
 
 
-# --- hook() decorator: timing (H6) ----------------------------------------------------
+# ---------------------------------------------------------------------------
+# H6 – hook() decorator: timing
+# ---------------------------------------------------------------------------
 
 
 def test_hook_start_time_end_time_set_on_run():
@@ -308,7 +321,9 @@ def test_hook_start_time_end_time_set_on_run():
     assert timed_hook.metadata.start_time <= timed_hook.metadata.end_time
 
 
-# --- Tool hooks integration ----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Tool hooks integration
+# ---------------------------------------------------------------------------
 
 
 def test_tool_hooks_before_and_after_invoke():
@@ -381,7 +396,9 @@ def test_tool_with_decorated_hook_registered_in_registry():
     assert HookRegistry.get("registered_tool_hook") is registered_tool_hook
 
 
-# --- Turn hooks integration ----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Turn hooks integration
+# ---------------------------------------------------------------------------
 
 
 def test_turn_hook_append_and_registered():
@@ -392,8 +409,8 @@ def test_turn_hook_append_and_registered():
         pass
 
     turn = Turn("tool_for_hook_test", kwargs={"x": 5})
-    turn.hooks.append(turn_hook)
-    assert turn_hook in turn.hooks
+    turn._hooks.append(turn_hook)
+    assert turn_hook in turn._hooks
     assert HookRegistry.get("turn_hook") is turn_hook
 
 
@@ -408,7 +425,7 @@ def test_turn_hook_custom_registry_name():
         another_turn_hook, "custom_turn_hook", hook_type=TurnHook.AFTER_RUN
     )
     turn = Turn("tool_for_hook_test", kwargs={"x": 5})
-    turn.hooks.append(another_turn_hook)
+    turn._hooks.append(another_turn_hook)
     assert HookRegistry.get("custom_turn_hook") is another_turn_hook
 
 
@@ -420,7 +437,7 @@ def test_turn_to_dict_includes_hooks():
         pass
 
     turn = Turn("tool_for_hook_test", kwargs={"x": 10})
-    turn.hooks.append(serializable_turn_hook)
+    turn._hooks.append(serializable_turn_hook)
     data = turn.to_dict()
     assert data["hooks"] == {"before_run": ["serializable_turn_hook"]}
 
@@ -438,8 +455,8 @@ def test_turn_from_dict_restores_hooks():
         "hooks": {"before_run": ["restorable_turn_hook"]},
     }
     turn = Turn.from_dict(data)
-    assert len(turn.hooks) == 1
-    assert turn.hooks[0] is restorable_turn_hook
+    assert len(turn._hooks) == 1
+    assert turn._hooks[0] is restorable_turn_hook
 
 
 def test_turn_roundtrip_with_hooks():
@@ -451,17 +468,19 @@ def test_turn_roundtrip_with_hooks():
         events.append(id(turn))
 
     turn = Turn("tool_for_hook_test", kwargs={"x": 7})
-    turn.hooks.append(roundtrip_hook)
+    turn._hooks.append(roundtrip_hook)
     data = turn.to_dict()
     restored = Turn.from_dict(data)
-    assert len(restored.hooks) == 1
-    assert restored.hooks[0] is roundtrip_hook
+    assert len(restored._hooks) == 1
+    assert restored._hooks[0] is roundtrip_hook
     asyncio.run(restored.returning())
     assert events == [id(restored)]
     assert restored.output == 14
 
 
-# --- Agent hooks integration ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Agent hooks integration
+# ---------------------------------------------------------------------------
 
 
 def test_agent_hook_append_and_registered():
@@ -582,3 +601,34 @@ def _collect_async(agen):
         return [x async for x in agen]
 
     return asyncio.run(run())
+
+
+# ---------------------------------------------------------------------------
+# ContextPool hooks integration
+# ---------------------------------------------------------------------------
+
+
+def test_context_pool_before_add_hook_fires():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextPoolHook.BEFORE_ADD)
+    async def cp_before_add(pool, item):
+        fired.append(("before_add", item.id, item.id not in pool._items))
+
+    pool = ContextPool(hooks=[cp_before_add])
+    asyncio.run(pool.add(ContextItem(id="hello", description="d", content=1)))
+    assert fired == [("before_add", "hello", True)]
+
+
+def test_context_pool_after_add_hook_fires():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextPoolHook.AFTER_ADD)
+    async def cp_after_add(pool, item):
+        fired.append(("after_add", item.id, item.id in pool._items))
+
+    pool = ContextPool(hooks=[cp_after_add])
+    asyncio.run(pool.add(ContextItem(id="world", description="d", content=2)))
+    assert fired == [("after_add", "world", True)]

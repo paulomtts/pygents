@@ -89,7 +89,7 @@ def test_agent_run_with_hooks_and_memory():
     )
 
     turn = Turn("integration_compute", kwargs={"a": 3, "b": 5})
-    turn.hooks.extend([turn_before_run, turn_after_run])
+    turn._hooks.extend([turn_before_run, turn_after_run])
 
     async def run():
         await agent.put(turn)
@@ -121,6 +121,52 @@ def test_agent_run_with_hooks_and_memory():
         "memory_after_append",
     ]
     assert events == expected_sequence
+
+
+def test_agent_context_pool_collects_pool_item_outputs():
+    AgentRegistry.clear()
+    from pygents.context import ContextItem
+
+    @tool()
+    async def context_tool(key: str, val: int) -> ContextItem:
+        return ContextItem(id=key, description=f"Result for {key}", content=val)
+
+    agent = Agent("ctx_agent", "Context pool agent", [context_tool])
+
+    async def run():
+        await agent.put(Turn("context_tool", kwargs={"key": "a", "val": 1}))
+        await agent.put(Turn("context_tool", kwargs={"key": "b", "val": 2}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+
+    assert len(agent.context_pool) == 2
+    assert agent.context_pool.get("a").content == 1
+    assert agent.context_pool.get("b").content == 2
+
+
+def test_agent_context_pool_limit_evicts_oldest():
+    AgentRegistry.clear()
+    from pygents.context import ContextItem, ContextPool
+
+    @tool()
+    async def bounded_context_tool(key: str, val: int) -> ContextItem:
+        return ContextItem(id=key, description="", content=val)
+
+    agent = Agent("bounded_ctx_agent", "Bounded pool", [bounded_context_tool])
+    agent.context_pool = ContextPool(limit=1)
+
+    async def run():
+        await agent.put(Turn("bounded_context_tool", kwargs={"key": "x", "val": 10}))
+        await agent.put(Turn("bounded_context_tool", kwargs={"key": "y", "val": 20}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+
+    assert len(agent.context_pool) == 1
+    assert agent.context_pool.get("y").content == 20
 
 
 def test_agent_multi_type_hook_invoked_for_each_event():

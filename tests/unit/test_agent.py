@@ -55,8 +55,8 @@ from pygents.errors import (
     UnregisteredAgentError,
     UnregisteredToolError,
 )
-from pygents.hooks import AgentHook, hook
-from pygents.registry import AgentRegistry
+from pygents.hooks import AgentHook, ContextPoolHook, hook
+from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
 from pygents.agent import Agent
@@ -90,6 +90,11 @@ async def raising_tool_agent() -> None:
     raise ValueError("tool error")
 
 
+# ---------------------------------------------------------------------------
+# I1–I3 – __init__
+# ---------------------------------------------------------------------------
+
+
 def test_agent_rejects_tool_not_in_registry():
     unregistered = type(
         "FakeTool",
@@ -110,6 +115,54 @@ def test_agent_init_rejects_tool_wrong_instance():
     )()
     with pytest.raises(ValueError, match="not the instance given"):
         Agent("b", "desc", [fake_same_name])
+
+
+def test_agent_init_accepts_context_pool_instance():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+
+    @hook(ContextPoolHook.BEFORE_ADD)
+    async def pool_hook(pool, item):
+        pass
+
+    from pygents.context import ContextPool
+    agent = Agent("a", "desc", [add_agent], context_pool=ContextPool(hooks=[pool_hook]))
+    assert pool_hook in agent.context_pool.hooks
+
+
+def test_agent_init_default_pool_when_none_provided():
+    AgentRegistry.clear()
+    from pygents.context import ContextPool
+    agent = Agent("a", "desc", [add_agent])
+    assert isinstance(agent.context_pool, ContextPool)
+    assert len(agent.context_pool) == 0
+
+
+def test_agent_init_uses_provided_pool_instance():
+    AgentRegistry.clear()
+    from pygents.context import ContextPool
+    pool = ContextPool(limit=5)
+    agent = Agent("a", "desc", [add_agent], context_pool=pool)
+    assert agent.context_pool is pool
+
+
+def test_agent_branch_child_pool_inherits_hooks():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+
+    @hook(ContextPoolHook.AFTER_ADD)
+    async def parent_pool_hook(pool, item):
+        pass
+
+    from pygents.context import ContextPool
+    parent = Agent("parent", "desc", [add_agent], context_pool=ContextPool(hooks=[parent_pool_hook]))
+    child = parent.branch("child")
+    assert parent_pool_hook in child.context_pool.hooks
+
+
+# ---------------------------------------------------------------------------
+# P1–P3 – put()
+# ---------------------------------------------------------------------------
 
 
 def test_put_rejects_turn_with_no_tool():
@@ -171,6 +224,11 @@ def test_put_then_run_yields_turn_and_result():
     assert result_value == 3
     assert result_turn is turn
     assert turn.output == 3
+
+
+# ---------------------------------------------------------------------------
+# R1–R8 – run()
+# ---------------------------------------------------------------------------
 
 
 def test_run_processes_turn_and_stops_when_queue_empty():
@@ -398,6 +456,11 @@ def test_run_puts_turn_output_when_turn_returns_turn():
     assert items[1][1] == 3
 
 
+# ---------------------------------------------------------------------------
+# T1–T2 – send_turn()
+# ---------------------------------------------------------------------------
+
+
 def test_send_turn_enqueues_on_target_agent():
     AgentRegistry.clear()
     agent_a = Agent("alice", "First", [add_agent])
@@ -428,6 +491,11 @@ def test_send_turn_to_unregistered_agent_raises():
         asyncio.run(main())
 
 
+# ---------------------------------------------------------------------------
+# to_dict / from_dict
+# ---------------------------------------------------------------------------
+
+
 def test_agent_to_dict():
     AgentRegistry.clear()
     agent = Agent("serial", "Serializable agent", [add_agent])
@@ -443,7 +511,7 @@ def test_agent_to_dict_includes_queued_turns():
     agent = Agent("q", "With queue", [add_agent])
 
     async def put_then_serialize():
-        await agent.put(Turn("add_agent", kwargs={"a": 2, "b": 3}, metadata={"m": 1}))
+        await agent.put(Turn("add_agent", kwargs={"a": 2, "b": 3}))
         await agent.put(Turn("add_agent", kwargs={"a": 10, "b": 20}))
         return agent.to_dict()
 
@@ -451,7 +519,6 @@ def test_agent_to_dict_includes_queued_turns():
     assert len(data["queue"]) == 2
     assert data["queue"][0]["tool_name"] == "add_agent"
     assert data["queue"][0]["kwargs"] == {"a": 2, "b": 3}
-    assert data["queue"][0]["metadata"] == {"m": 1}
     assert data["queue"][1]["tool_name"] == "add_agent"
 
     async def run_after_snapshot():
@@ -539,7 +606,9 @@ def test_agent_from_dict_with_current_turn_processes_it_first():
     assert restored._queue.empty()
 
 
-# -- branch -------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# B1–B9 – branch()
+# ---------------------------------------------------------------------------
 
 
 def test_branch_inherits_defaults():

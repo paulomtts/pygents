@@ -103,7 +103,7 @@ async def respond(memory: Memory) -> str:
 
 ## The create_event tool
 
-`create_event` reads the latest user message from memory — the most recent line that starts with `"User: "` — and extracts a structured event with `asend()`. If there is no such line, `_last_user_message` returns an empty string. It then appends the event to the calendar and a summary to memory, appends the follow-up user message, and queues **think**.
+`create_event` reads the latest user message from memory — the most recent line that starts with `"User: "` — and extracts a structured event with `asend()`. If there is no such line, `latest_user_message` returns an empty string. It then appends the event to the calendar and a summary to memory, appends the follow-up user message, and queues **think**.
 
 ```python
 from datetime import datetime
@@ -115,7 +115,7 @@ class CalendarEvent(BaseModel):
 
 calendar: list[CalendarEvent] = []
 
-def _last_user_message(memory: Memory) -> str:
+def latest_user_message(memory: Memory) -> str:
     for item in reversed(memory.items):
         if isinstance(item, str) and item.startswith("User:"):
             return item.removeprefix("User:").strip()
@@ -124,7 +124,7 @@ def _last_user_message(memory: Memory) -> str:
 @tool()
 async def create_event(memory: Memory) -> Turn:
     """Extract and save a calendar event from the last user message, then chain back to think."""
-    user_message = _last_user_message(memory)
+    user_message = latest_user_message(memory)
     response = await toolkit.asend(
         response_model=CalendarEvent,
         template="Extract a calendar event from this request: {{ user_message }}. "

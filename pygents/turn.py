@@ -1,10 +1,12 @@
 import asyncio
 import inspect
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, Iterable, TypeVar
 
+from pygents.context import ContextItem
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from pygents.hooks import Hook, TurnHook
 from pygents.registry import HookRegistry, ToolRegistry
@@ -27,6 +29,34 @@ class StopReason(str, Enum):
     CANCELLED = "cancelled"
 
 
+@dataclass
+class TurnMetadata:
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    stop_reason: StopReason | None = None
+
+    def dict(self) -> dict[str, Any]:
+        return {
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "stop_reason": self.stop_reason.value if self.stop_reason else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "TurnMetadata":
+        return cls(
+            start_time=datetime.fromisoformat(data.get("start_time"))
+            if data.get("start_time")
+            else None,
+            end_time=datetime.fromisoformat(data.get("end_time"))
+            if data.get("end_time")
+            else None,
+            stop_reason=StopReason(data.get("stop_reason"))
+            if data.get("stop_reason")
+            else None,
+        )
+
+
 class Turn[T]:
     """
     Single conceptual unit of work: what should happen, not how.
@@ -41,22 +71,19 @@ class Turn[T]:
         Keyword arguments for the tool. Callables are evaluated at run time.
     timeout : int
         Max seconds for the turn to run. Default 60.
-    metadata : dict[str, Any] | None
-        Optional metadata.
     hooks : list[Hook] | None
         Optional list of hooks (e.g. TurnHook). Applied during turn execution.
     """
 
     tool: Tool | None = None
-    args: list[Any] = []
-    kwargs: dict[str, Any] = {}
-    metadata: dict[str, Any] = {}
-    output: Any | None = None
+    args: list[Any]
+    kwargs: dict[str, Any]
     timeout: int = 60
-    start_time: datetime | None = None
-    end_time: datetime | None = None
-    stop_reason: StopReason | None = None
 
+    output: Any | ContextItem[Any] | None
+    metadata: TurnMetadata
+
+    _hooks: list[Hook]
     _is_running: bool = False
 
     # -- mutation guard -------------------------------------------------------
@@ -79,10 +106,9 @@ class Turn[T]:
     def __init__(
         self,
         tool: str | Callable,
+        timeout: int = 60,
         args: Iterable[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
-        timeout: int = 60,
-        metadata: dict[str, Any] | None = None,
         hooks: list[Hook] | None = None,
     ):
         if isinstance(tool, str):
@@ -92,22 +118,21 @@ class Turn[T]:
         self.tool = resolved
         self.args = list(args) if args is not None else []
         self.kwargs = kwargs if kwargs is not None else {}
-        self.metadata = metadata if metadata is not None else {}
         self.timeout = timeout
-        self.start_time = None
-        self.end_time = None
-        self.stop_reason = None
+        self.output = None
+        self.metadata = TurnMetadata()
+
+        self._hooks: list[Hook] = list(hooks) if hooks else []
         self._is_running = False
-        self.hooks: list[Hook] = list(hooks) if hooks else []
 
     def __repr__(self) -> str:
         tool_name = self.tool.metadata.name if self.tool else None
-        return f"Turn(tool={tool_name!r}, timeout={self.timeout})"
+        return f"Turn(tool={tool_name!r}, timeout={self.timeout}, metadata={self.metadata})"
 
     # -- hooks -----------------------------------------------------------------
 
     async def _run_hook(self, hook_type: TurnHook, *args: Any) -> None:
-        if h := HookRegistry.get_by_type(hook_type, self.hooks):
+        if h := HookRegistry.get_by_type(hook_type, self._hooks):
             await h(self, *args)
 
     # -- execution ------------------------------------------------------------
@@ -120,7 +145,7 @@ class Turn[T]:
         """
         try:
             self._is_running = True
-            self.start_time = datetime.now()
+            self.metadata.start_time = datetime.now()
             await self._run_hook(TurnHook.BEFORE_RUN)
             if inspect.isasyncgenfunction(self.tool.fn):
                 raise WrongRunMethodError(
@@ -131,19 +156,19 @@ class Turn[T]:
             self.output = await asyncio.wait_for(
                 self.tool(*runtime_args, **runtime_kwargs), timeout=self.timeout
             )
-            self.stop_reason = StopReason.COMPLETED
+            self.metadata.stop_reason = StopReason.COMPLETED
             await self._run_hook(TurnHook.AFTER_RUN)
             return self.output
         except (asyncio.TimeoutError, TimeoutError):
-            self.stop_reason = StopReason.TIMEOUT
+            self.metadata.stop_reason = StopReason.TIMEOUT
             await self._run_hook(TurnHook.ON_TIMEOUT)
             raise TurnTimeoutError(f"Turn timed out after {self.timeout}s") from None
         except Exception as e:
-            self.stop_reason = StopReason.ERROR
+            self.metadata.stop_reason = StopReason.ERROR
             await self._run_hook(TurnHook.ON_ERROR, e)
             raise
         finally:
-            self.end_time = datetime.now()
+            self.metadata.end_time = datetime.now()
             self._is_running = False
 
     @safe_execution
@@ -154,7 +179,7 @@ class Turn[T]:
         """
         try:
             self._is_running = True
-            self.start_time = datetime.now()
+            self.metadata.start_time = datetime.now()
             await self._run_hook(TurnHook.BEFORE_RUN)
             if not inspect.isasyncgenfunction(self.tool.fn):
                 raise WrongRunMethodError(
@@ -183,7 +208,7 @@ class Turn[T]:
                             await producer
                         except asyncio.CancelledError:
                             pass
-                        self.stop_reason = StopReason.TIMEOUT
+                        self.metadata.stop_reason = StopReason.TIMEOUT
                         await self._run_hook(TurnHook.ON_TIMEOUT)
                         raise TurnTimeoutError(
                             f"Turn timed out after {self.timeout}s"
@@ -201,22 +226,22 @@ class Turn[T]:
                     await producer
                 except asyncio.CancelledError:
                     pass
-                self.stop_reason = StopReason.TIMEOUT
+                self.metadata.stop_reason = StopReason.TIMEOUT
                 await self._run_hook(TurnHook.ON_TIMEOUT)
                 raise TurnTimeoutError(
                     f"Turn timed out after {self.timeout}s"
                 ) from None
             self.output = aggregated
-            self.stop_reason = StopReason.COMPLETED
+            self.metadata.stop_reason = StopReason.COMPLETED
             await self._run_hook(TurnHook.AFTER_RUN)
         except TurnTimeoutError:
             raise
         except Exception as e:
-            self.stop_reason = StopReason.ERROR
+            self.metadata.stop_reason = StopReason.ERROR
             await self._run_hook(TurnHook.ON_ERROR, e)
             raise
         finally:
-            self.end_time = datetime.now()
+            self.metadata.end_time = datetime.now()
             self._is_running = False
 
     # -- serialization --------------------------------------------------------
@@ -225,13 +250,10 @@ class Turn[T]:
             "tool_name": self.tool.metadata.name,
             "args": eval_args(self.args),
             "kwargs": eval_kwargs(self.kwargs),
-            "metadata": self.metadata,
             "timeout": self.timeout,
-            "start_time": self.start_time.isoformat() if self.start_time else None,
-            "end_time": self.end_time.isoformat() if self.end_time else None,
-            "stop_reason": self.stop_reason.value if self.stop_reason else None,
+            "metadata": self.metadata.dict(),
             "output": self.output,
-            "hooks": serialize_hooks_by_type(self.hooks),
+            "hooks": serialize_hooks_by_type(self._hooks),
         }
 
     @classmethod
@@ -241,15 +263,9 @@ class Turn[T]:
             args=data.get("args", []),
             kwargs=data.get("kwargs", {}),
             timeout=data.get("timeout", 60),
-            metadata=data.get("metadata", {}),
         )
-        start_time = data.get("start_time")
-        end_time = data.get("end_time")
-        stop_reason = data.get("stop_reason")
-        turn.start_time = datetime.fromisoformat(start_time) if start_time else None
-        turn.end_time = datetime.fromisoformat(end_time) if end_time else None
-        turn.stop_reason = StopReason(stop_reason) if stop_reason else None
+        turn.metadata = TurnMetadata.from_dict(data.get("metadata", {}))
         if "output" in data:
             turn.output = data["output"]
-        turn.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
+        turn._hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return turn
