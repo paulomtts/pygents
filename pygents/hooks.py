@@ -31,6 +31,8 @@ class AgentHook(str, Enum):
     ON_TURN_TIMEOUT = "on_turn_timeout"
     BEFORE_PUT = "before_put"
     AFTER_PUT = "after_put"
+    ON_PAUSE  = "on_pause"
+    ON_RESUME = "on_resume"
 
 
 class ToolHook(str, Enum):
@@ -113,6 +115,15 @@ def hook(
 @overload
 def hook(
     type: AgentHook.BEFORE_TURN,
+    *,
+    lock: bool = False,
+    **fixed_kwargs: Any,
+) -> Callable[[Callable[["Agent"], Awaitable[None]]], Hook]: ...
+
+
+@overload
+def hook(
+    type: AgentHook.ON_PAUSE | AgentHook.ON_RESUME,
     *,
     lock: bool = False,
     **fixed_kwargs: Any,
