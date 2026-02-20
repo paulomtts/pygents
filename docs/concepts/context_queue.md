@@ -108,6 +108,41 @@ restored = ContextQueue.from_dict(data)
 
 Hooks are stored by type and name (same shape as Agent/Turn). `from_dict()` resolves hook names from `HookRegistry`. Use named functions for stable cross-session serialization. If a name is not found on load, `from_dict()` raises `UnregisteredHookError`.
 
+## Agent integration
+
+Every agent owns a `context_queue` attribute. If you do not pass one at construction, a default `ContextQueue(limit=10)` is created automatically.
+
+When a tool returns a `ContextItem` without an `id` (i.e. `id=None`), the agent automatically appends it to `agent.context_queue` after the turn completes. Items with an `id` set are routed to `agent.context_pool` instead.
+
+```python
+from pygents import Agent, Turn, tool
+from pygents.context_pool import ContextItem
+
+@tool()
+async def summarize(text: str) -> ContextItem:
+    result = ...  # call an LLM, compute a summary, etc.
+    return ContextItem(content=result)  # no id → goes to context_queue
+
+agent = Agent("summarizer", "Summarizes text", [summarize])
+await agent.put(Turn("summarize", kwargs={"text": "..."}))
+
+async for _ in agent.run():
+    pass
+
+# The summary ContextItem is now in agent.context_queue
+print(agent.context_queue.items[0].content)
+```
+
+You can also pass a pre-configured queue:
+
+```python
+from pygents.context_queue import ContextQueue
+
+agent = Agent("summarizer", "Summarizes text", [summarize], context_queue=ContextQueue(limit=20))
+```
+
+The `context_queue` is branched alongside `context_pool` when calling `agent.branch()`. It is also included in `agent.to_dict()` and restored by `Agent.from_dict()`.
+
 ## Errors
 
 | Exception | When |

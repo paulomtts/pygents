@@ -3,6 +3,7 @@ import inspect
 from typing import Any, AsyncIterator
 
 from pygents.context_pool import ContextItem, ContextPool
+from pygents.context_queue import ContextQueue
 from pygents.errors import SafeExecutionError, TurnTimeoutError
 from pygents.hooks import AgentHook, Hook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
@@ -39,6 +40,7 @@ class Agent:
     _is_running: bool = False
     _current_turn: Turn | None = None
     context_pool: ContextPool
+    context_queue: ContextQueue
 
     # -- mutation guard -------------------------------------------------------
 
@@ -57,6 +59,7 @@ class Agent:
         description: str,
         tools: list[Tool],
         context_pool: ContextPool | None = None,
+        context_queue: ContextQueue | None = None,
     ):
         for t in tools:
             registered = ToolRegistry.get(t.metadata.name)
@@ -72,6 +75,7 @@ class Agent:
         self._tool_names = {t.metadata.name for t in tools}
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
         self.context_pool = context_pool if context_pool is not None else ContextPool()
+        self.context_queue = context_queue if context_queue is not None else ContextQueue(limit=10)
 
         AgentRegistry.register(self)
 
@@ -88,7 +92,10 @@ class Agent:
     async def _add_context(self, turn: Turn) -> None:
         if not isinstance(turn.output, ContextItem):
             return
-        await self.context_pool.add(turn.output)
+        if turn.output.id is None:
+            await self.context_queue.append(turn.output)
+        else:
+            await self.context_pool.add(turn.output)
 
     # -- queue -----------------------------------------------------------------
 
@@ -173,6 +180,7 @@ class Agent:
         child = Agent(name, child_description, child_tools)
         child.hooks = list(child_hooks)
         child.context_pool = self.context_pool.branch()
+        child.context_queue = self.context_queue.branch()
         for turn in self._queue_snapshot():
             child._queue.put_nowait(turn)
         return child
@@ -237,6 +245,7 @@ class Agent:
             else None,
             "hooks": serialize_hooks_by_type(self.hooks),
             "context_pool": self.context_pool.to_dict(),
+            "context_queue": self.context_queue.to_dict(),
         }
 
     @classmethod
@@ -249,4 +258,5 @@ class Agent:
             agent._current_turn = Turn.from_dict(data["current_turn"])
         agent.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         agent.context_pool = ContextPool.from_dict(data.get("context_pool", {}))
+        agent.context_queue = ContextQueue.from_dict(data.get("context_queue", {"limit": 10, "items": [], "hooks": {}}))
         return agent

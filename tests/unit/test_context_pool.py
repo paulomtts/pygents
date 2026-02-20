@@ -75,7 +75,7 @@ from pygents.registry import HookRegistry
 
 
 def _item(id: str, content=None) -> ContextItem:
-    return ContextItem(id=id, description=f"desc-{id}", content=content or id)
+    return ContextItem(content=content or id, description=f"desc-{id}", id=id)
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +117,20 @@ def test_context_pool_limit_below_one_raises():
 # ---------------------------------------------------------------------------
 # A1-A3 – add()
 # ---------------------------------------------------------------------------
+
+
+def test_context_pool_add_rejects_item_with_none_id():
+    pool = ContextPool()
+    item = ContextItem(content="x", description="desc")
+    with pytest.raises(ValueError, match="'id' and 'description'"):
+        asyncio.run(pool.add(item))
+
+
+def test_context_pool_add_rejects_item_with_none_description():
+    pool = ContextPool()
+    item = ContextItem(content="x", id="key")
+    with pytest.raises(ValueError, match="'id' and 'description'"):
+        asyncio.run(pool.add(item))
 
 
 def test_add_no_limit_grows_freely():
