@@ -11,6 +11,8 @@ __init__:
   I1  Tool not in ToolRegistry -> UnregisteredToolError (from get)
   I2  Tool in registry but different instance -> ValueError "not the instance given"
   I3  Ok: name, description, tools, _tool_names, _queue, hooks [], _is_running False, _current_turn None; AgentRegistry.register
+  I4  context_queue=None -> default ContextQueue(limit=10) created
+  I5  context_queue=<instance> -> used as-is
 
 put(turn):
   P1  turn.tool is None -> ValueError "Turn has no tool"
@@ -41,6 +43,7 @@ branch(name, description=None, tools=None, hooks=...):
   B7  Queue copied to child (non-destructive)
   B8  Child is independent after creation
   B9  Child is registered in AgentRegistry
+  B10 child's context_queue is a branch of the parent's
 
 _queue_snapshot: non-destructive peek. to_dict/from_dict: queue, current_turn, hooks.
 """
@@ -60,6 +63,7 @@ from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
 from pygents.agent import Agent
+from pygents.context_queue import ContextQueue
 
 
 @tool()
@@ -88,6 +92,18 @@ async def returns_turn_agent(turn: Turn) -> Turn:
 @tool()
 async def raising_tool_agent() -> None:
     raise ValueError("tool error")
+
+
+@tool()
+async def returns_context_item_no_id():
+    from pygents.context_pool import ContextItem
+    return ContextItem(content=42)
+
+
+@tool()
+async def returns_context_item_with_id():
+    from pygents.context_pool import ContextItem
+    return ContextItem(content=99, description="result", id="x")
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +174,66 @@ def test_agent_branch_child_pool_inherits_hooks():
     parent = Agent("parent", "desc", [add_agent], context_pool=ContextPool(hooks=[parent_pool_hook]))
     child = parent.branch("child")
     assert parent_pool_hook in child.context_pool.hooks
+
+
+def test_agent_init_accepts_context_queue_instance():
+    AgentRegistry.clear()
+    queue = ContextQueue(limit=5)
+    agent = Agent("a", "desc", [add_agent], context_queue=queue)
+    assert agent.context_queue is queue
+
+
+def test_agent_init_default_queue_when_none_provided():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    assert isinstance(agent.context_queue, ContextQueue)
+    assert agent.context_queue.limit == 10
+
+
+def test_agent_init_uses_provided_queue_instance():
+    AgentRegistry.clear()
+    queue = ContextQueue(limit=20)
+    agent = Agent("a", "desc", [add_agent], context_queue=queue)
+    assert agent.context_queue is queue
+
+
+def test_agent_branch_child_queue_inherits_hooks():
+    AgentRegistry.clear()
+    queue = ContextQueue(limit=5)
+    parent = Agent("parent", "desc", [add_agent], context_queue=queue)
+    child = parent.branch("child")
+    assert child.context_queue is not parent.context_queue
+    assert child.context_queue.limit == parent.context_queue.limit
+
+
+def test_agent_add_context_routes_to_queue_when_id_is_none():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [returns_context_item_no_id])
+
+    async def run():
+        await agent.put(Turn("returns_context_item_no_id", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(agent.context_queue) == 1
+    assert len(agent.context_pool) == 0
+    assert agent.context_queue.items[0].content == 42
+
+
+def test_agent_add_context_routes_to_pool_when_id_provided():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [returns_context_item_with_id])
+
+    async def run():
+        await agent.put(Turn("returns_context_item_with_id", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(agent.context_pool) == 1
+    assert len(agent.context_queue) == 0
+    assert agent.context_pool.get("x").content == 99
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +580,7 @@ def test_agent_to_dict():
     assert data["description"] == "Serializable agent"
     assert data["tool_names"] == ["add_agent"]
     assert data["queue"] == []
+    assert "context_queue" in data
 
 
 def test_agent_to_dict_includes_queued_turns():
@@ -558,6 +635,8 @@ def test_agent_from_dict_roundtrip():
     assert len(results) == 2
     assert results[0][1] == 15
     assert results[1][1] == 2
+    assert isinstance(restored.context_queue, ContextQueue)
+    assert restored.context_queue.limit == 10
 
 
 def test_agent_from_dict_empty_queue():

@@ -129,7 +129,7 @@ def test_agent_context_pool_collects_pool_item_outputs():
 
     @tool()
     async def context_tool(key: str, val: int) -> ContextItem:
-        return ContextItem(id=key, description=f"Result for {key}", content=val)
+        return ContextItem(content=val, description=f"Result for {key}", id=key)
 
     agent = Agent("ctx_agent", "Context pool agent", [context_tool])
 
@@ -146,13 +146,35 @@ def test_agent_context_pool_collects_pool_item_outputs():
     assert agent.context_pool.get("b").content == 2
 
 
+def test_agent_context_queue_collects_items_without_id():
+    AgentRegistry.clear()
+    from pygents.context_pool import ContextItem
+
+    @tool()
+    async def queue_tool() -> ContextItem:
+        return ContextItem(content=42)
+
+    agent = Agent("queue_agent", "Context queue agent", [queue_tool])
+
+    async def run():
+        await agent.put(Turn("queue_tool", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+
+    assert len(agent.context_queue) == 1
+    assert agent.context_queue.items[0].content == 42
+    assert len(agent.context_pool) == 0
+
+
 def test_agent_context_pool_limit_evicts_oldest():
     AgentRegistry.clear()
     from pygents.context_pool import ContextItem, ContextPool
 
     @tool()
     async def bounded_context_tool(key: str, val: int) -> ContextItem:
-        return ContextItem(id=key, description="", content=val)
+        return ContextItem(content=val, description="", id=key)
 
     agent = Agent("bounded_ctx_agent", "Bounded pool", [bounded_context_tool])
     agent.context_pool = ContextPool(limit=1)
