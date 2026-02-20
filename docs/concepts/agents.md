@@ -46,15 +46,18 @@ async for turn, value in agent.run():
 !!! warning "ValueError"
     `put(turn)` raises `ValueError` if the turn has no tool or the tool is not in the agent's set.
 
-**After each turn:**
+**Value routing:**
 
-| Condition | Behavior |
-|-----------|----------|
-| Queue is empty | Exit loop |
-| Output is a `Turn` instance | Enqueue it, continue |
-| Output is a `ContextItem` with `id=None` | Append to `agent.context_queue`, continue |
-| Output is a `ContextItem` with `id` set | Store in `agent.context_pool`, continue |
-| Otherwise | Continue to next turn |
+Each value produced by a turn is routed before the next value (or the next turn) is started:
+
+| Value type | Behavior |
+|------------|----------|
+| `Turn` | Enqueued via `put()` and executed in the same `run()` call |
+| `ContextItem` with `id=None` | Appended to `agent.context_queue` |
+| `ContextItem` with `id` set | Stored in `agent.context_pool` |
+| Anything else | Passed through to the caller; no side-effect |
+
+For single-value tools, the returned value is routed once after the turn completes. For async generator tools, each yielded value is routed individually at the moment the consumer resumes — so a generator can yield a mix of `ContextItem`, `Turn`, and plain values in a single turn.
 
 ## Streaming
 

@@ -26,12 +26,18 @@ send_turn(agent_name, turn):
 run():
   R1  Already running -> SafeExecutionError
   R2  Loop: get turn from _current_turn or queue; BEFORE_TURN
-  R3  Async gen tool -> yielding(), ON_TURN_VALUE per value, yield (turn, value)
-  R4  Coroutine tool -> returning(), ON_TURN_VALUE, yield (turn, output)
+  R3  Async gen tool -> yielding(), ON_TURN_VALUE per value, yield (turn, value), _route_value(value) per value
+  R4  Coroutine tool -> returning(), ON_TURN_VALUE, yield (turn, output), _route_value(turn.output)
   R5  TurnTimeoutError -> ON_TURN_TIMEOUT, re-raise
   R6  Other exception -> ON_TURN_ERROR, re-raise
-  R7  After: AFTER_TURN; if turn.output is Turn -> put(turn.output); clear _current_turn
+  R7  After: AFTER_TURN; clear _current_turn
   R8  finally: _is_running False, _current_turn None
+
+_route_value(value):
+  RV1  value is ContextItem with id None -> context_queue.append
+  RV2  value is ContextItem with id set -> context_pool.add
+  RV3  value is Turn -> put(value)
+  RV4  value is anything else -> no-op
 
 branch(name, description=None, tools=None, hooks=...):
   B1  description None -> child inherits self.description
@@ -282,6 +288,72 @@ def test_agent_add_context_queue_evicts_when_limit_exceeded():
 
     asyncio.run(run())
     assert len(agent.context_queue) == 2
+
+
+# ---------------------------------------------------------------------------
+# RV1–RV4 – _route_value()
+# ---------------------------------------------------------------------------
+
+
+def test_route_value_adds_to_queue_when_no_id():
+    # RV1
+    AgentRegistry.clear()
+    from pygents.context import ContextItem
+    agent = Agent("a", "desc", [add_agent])
+
+    async def run():
+        await agent._route_value(ContextItem(content=7))
+
+    asyncio.run(run())
+    assert len(agent.context_queue) == 1
+    assert agent.context_queue.items[0].content == 7
+    assert len(agent.context_pool) == 0
+
+
+def test_route_value_adds_to_pool_when_id_present():
+    # RV2
+    AgentRegistry.clear()
+    from pygents.context import ContextItem
+    agent = Agent("a", "desc", [add_agent])
+
+    async def run():
+        await agent._route_value(ContextItem(content=42, description="desc", id="mykey"))
+
+    asyncio.run(run())
+    assert len(agent.context_pool) == 1
+    assert agent.context_pool.get("mykey").content == 42
+    assert len(agent.context_queue) == 0
+
+
+def test_route_value_enqueues_turn():
+    # RV3
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    inner = Turn("add_agent", kwargs={"a": 3, "b": 4})
+
+    async def run():
+        await agent._route_value(inner)
+
+    asyncio.run(run())
+    assert agent._queue.qsize() == 1
+    assert agent._queue.get_nowait() is inner
+
+
+def test_route_value_ignores_plain_value():
+    # RV4
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+
+    async def run():
+        await agent._route_value("just a string")
+        await agent._route_value(42)
+        await agent._route_value(None)
+        await agent._route_value([1, 2, 3])
+
+    asyncio.run(run())
+    assert len(agent.context_queue) == 0
+    assert len(agent.context_pool) == 0
+    assert agent._queue.empty()
 
 
 # ---------------------------------------------------------------------------

@@ -114,13 +114,14 @@ class Agent:
         if h := HookRegistry.get_by_type(name, self.hooks):
             await h(*args, **kwargs)
 
-    async def _add_context(self, turn: Turn) -> None:
-        if not isinstance(turn.output, ContextItem):
-            return
-        if turn.output.id is None:
-            await self.context_queue.append(turn.output)
-        else:
-            await self.context_pool.add(turn.output)
+    async def _route_value(self, value: Any) -> None:
+        if isinstance(value, ContextItem):
+            if value.id is None:
+                await self.context_queue.append(value)
+            else:
+                await self.context_pool.add(value)
+        elif isinstance(value, Turn):
+            await self.put(value)
 
     # -- queue -----------------------------------------------------------------
 
@@ -240,13 +241,14 @@ class Agent:
                                 AgentHook.ON_TURN_VALUE, self, turn, value
                             )
                             yield (turn, value)
+                            await self._route_value(value)
                     else:
                         output = await turn.returning()
                         await self._run_hooks(
                             AgentHook.ON_TURN_VALUE, self, turn, output
                         )
                         yield (turn, output)
-                    await self._add_context(turn)
+                    await self._route_value(turn.output)
                 except TurnTimeoutError:
                     await self._run_hooks(AgentHook.ON_TURN_TIMEOUT, self, turn)
                     raise
@@ -254,9 +256,6 @@ class Agent:
                     await self._run_hooks(AgentHook.ON_TURN_ERROR, self, turn, e)
                     raise
                 await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
-
-                if isinstance(turn.output, Turn):
-                    await self.put(turn.output)
                 self._current_turn = None
         finally:
             self._is_running = False

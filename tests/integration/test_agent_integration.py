@@ -191,6 +191,125 @@ def test_agent_context_pool_limit_evicts_oldest():
     assert agent.context_pool.get("y").content == 20
 
 
+def test_generator_tool_yielding_context_item_routes_to_queue():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    from pygents.context import ContextItem
+
+    @tool()
+    async def gen_queue_tool():
+        yield ContextItem(content="hello")
+        yield ContextItem(content="world")
+
+    agent = Agent("gen_queue_agent", "desc", [gen_queue_tool])
+
+    async def run():
+        await agent.put(Turn("gen_queue_tool", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(agent.context_queue) == 2
+    assert agent.context_queue.items[0].content == "hello"
+    assert agent.context_queue.items[1].content == "world"
+    assert len(agent.context_pool) == 0
+
+
+def test_generator_tool_yielding_context_item_routes_to_pool():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    from pygents.context import ContextItem
+
+    @tool()
+    async def gen_pool_tool():
+        yield ContextItem(content=1, description="first", id="k1")
+        yield ContextItem(content=2, description="second", id="k2")
+
+    agent = Agent("gen_pool_agent", "desc", [gen_pool_tool])
+
+    async def run():
+        await agent.put(Turn("gen_pool_tool", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(agent.context_pool) == 2
+    assert agent.context_pool.get("k1").content == 1
+    assert agent.context_pool.get("k2").content == 2
+    assert len(agent.context_queue) == 0
+
+
+def test_generator_tool_yielding_turn_enqueues_and_executes():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+
+    @tool()
+    async def turn_adder(a: int, b: int) -> int:
+        return a + b
+
+    @tool()
+    async def gen_turn_tool():
+        yield Turn("turn_adder", kwargs={"a": 10, "b": 20})
+
+    agent = Agent("gen_turn_agent", "desc", [gen_turn_tool, turn_adder])
+
+    async def run():
+        await agent.put(Turn("gen_turn_tool", kwargs={}))
+        results = []
+        async for t, v in agent.run():
+            results.append((t.tool.metadata.name, v))
+        return results
+
+    results = asyncio.run(run())
+    tool_names = [name for name, _ in results]
+    values = [v for _, v in results]
+    assert "gen_turn_tool" in tool_names
+    assert "turn_adder" in tool_names
+    assert 30 in values
+
+
+def test_generator_tool_yielding_mixed_values_routes_correctly():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    from pygents.context import ContextItem
+
+    @tool()
+    async def mixed_adder(a: int, b: int) -> int:
+        return a + b
+
+    @tool()
+    async def gen_mixed_tool():
+        yield ContextItem(content="ctx")
+        yield Turn("mixed_adder", kwargs={"a": 1, "b": 2})
+        yield 99  # plain value — no routing
+
+    agent = Agent("gen_mixed_agent", "desc", [gen_mixed_tool, mixed_adder])
+
+    async def run():
+        await agent.put(Turn("gen_mixed_tool", kwargs={}))
+        results = []
+        async for t, v in agent.run():
+            results.append((t.tool.metadata.name, v))
+        return results
+
+    results = asyncio.run(run())
+
+    # gen_mixed_tool yielded 3 values; simple_add yielded 1
+    gen_values = [v for name, v in results if name == "gen_mixed_tool"]
+    add_values = [v for name, v in results if name == "mixed_adder"]
+
+    assert len(gen_values) == 3
+    assert len(add_values) == 1
+    assert add_values[0] == 3
+
+    # ContextItem routed to queue, not duplicated
+    assert len(agent.context_queue) == 1
+    assert agent.context_queue.items[0].content == "ctx"
+
+    # turn.output for gen_mixed_tool is a list → no double-routing
+    assert len(agent.context_pool) == 0
+
+
 def test_agent_multi_type_hook_invoked_for_each_event():
     AgentRegistry.clear()
     HookRegistry.clear()

@@ -93,6 +93,20 @@ DOCUMENTS = {
 
 Returns a `ContextItem`. The tool has no knowledge of — or interaction with — the pool. The agent stores the item automatically when the turn completes.
 
+!!! tip "Streaming ingestion with async generators"
+    If you need to fetch many documents in one turn, use an async generator instead. Each yielded `ContextItem` is stored immediately as it's produced — the pool is populated incrementally rather than all at once:
+
+    ```python
+    @tool()
+    async def fetch_documents(doc_ids: list[str]):
+        for doc_id in doc_ids:
+            doc = DOCUMENTS.get(doc_id)
+            if doc:
+                yield ContextItem(id=doc_id, description=doc["description"], content=doc["body"])
+    ```
+
+    The routing rules are the same: `id=None` → `context_queue`, `id` set → `context_pool`. Plain yielded values pass through to the caller with no side-effect.
+
 ```python
 from pygents import tool, Turn
 from pygents.context import ContextItem, ContextPool
