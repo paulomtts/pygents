@@ -39,18 +39,24 @@ class Agent:
 
     _is_running: bool = False
     _current_turn: Turn | None = None
+    _pause_event: asyncio.Event
     context_pool: ContextPool
     context_queue: ContextQueue
 
     # -- mutation guard -------------------------------------------------------
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name not in ("_is_running", "_current_turn") and getattr(
-            self, "_is_running", False
-        ):
-            raise SafeExecutionError(
-                f"Cannot change property '{name}' while the agent is running."
-            )
+        if name not in ("_is_running", "_current_turn"):
+            _is_running = getattr(self, "_is_running", False)
+            _is_paused = (not self._pause_event.is_set()) if hasattr(self, "_pause_event") else False
+            if _is_running:
+                raise SafeExecutionError(
+                    f"Cannot change property '{name}' while the agent is running."
+                )
+            if _is_paused:
+                raise SafeExecutionError(
+                    f"Cannot change property '{name}' while the agent is paused."
+                )
         super().__setattr__(name, value)
 
     def __init__(
@@ -75,6 +81,8 @@ class Agent:
         self._tool_names = {t.metadata.name for t in tools}
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
         self.context_pool = context_pool if context_pool is not None else ContextPool()
+        self._pause_event: asyncio.Event = asyncio.Event()
+        self._pause_event.set()  # unpaused by default
         self.context_queue = context_queue if context_queue is not None else ContextQueue(limit=10)
 
         AgentRegistry.register(self)
@@ -84,6 +92,24 @@ class Agent:
         return f"Agent(name={self.name!r}, tools={tool_names})"
 
     # -- utils -----------------------------------------------------------------
+
+    @property
+    def is_paused(self) -> bool:
+        """True when the agent will not start a new turn until resumed."""
+        return not self._pause_event.is_set()
+
+    def pause(self) -> None:
+        """Signal the agent to pause before its next turn.
+
+        Safe to call while running. The current turn completes normally;
+        the next is blocked until resume(). While paused, agent properties
+        cannot be changed. Idempotent.
+        """
+        self._pause_event.clear()
+
+    def resume(self) -> None:
+        """Release a pause, unblocking the agent and property mutation. Idempotent."""
+        self._pause_event.set()
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
         if h := HookRegistry.get_by_type(name, self.hooks):
@@ -198,6 +224,10 @@ class Agent:
         try:
             self._is_running = True
             while self._current_turn is not None or not self._queue.empty():
+                if not self._pause_event.is_set():
+                    await self._run_hooks(AgentHook.ON_PAUSE, self)
+                    await self._pause_event.wait()
+                    await self._run_hooks(AgentHook.ON_RESUME, self)
                 await self._run_hooks(AgentHook.BEFORE_TURN, self)
                 turn = self._current_turn
                 self._current_turn = None
@@ -245,6 +275,7 @@ class Agent:
             else None,
             "hooks": serialize_hooks_by_type(self.hooks),
             "context_pool": self.context_pool.to_dict(),
+            "is_paused": self.is_paused,
             "context_queue": self.context_queue.to_dict(),
         }
 
@@ -259,4 +290,6 @@ class Agent:
         agent.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         agent.context_pool = ContextPool.from_dict(data.get("context_pool", {}))
         agent.context_queue = ContextQueue.from_dict(data.get("context_queue", {"limit": 10, "items": [], "hooks": {}}))
+        if data.get("is_paused", False):
+            agent.pause()
         return agent

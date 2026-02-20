@@ -116,12 +116,54 @@ async for turn, value in parent.run():
     print(value)
 ```
 
-## Immutability while running
+## Immutability while running or paused
 
-While `run()` is active, agent attributes cannot be changed. Calling `run()` again while already running is also not allowed.
+While `run()` is active, agent attributes cannot be changed. Calling `run()` again while already running is also not allowed. The same restriction applies while the agent is paused — attributes are locked until `resume()` is called.
 
 !!! warning "SafeExecutionError"
-    Changing agent attributes or calling `run()` while the agent is already running raises `SafeExecutionError`.
+    Changing agent attributes or calling `run()` while the agent is running or paused raises `SafeExecutionError`.
+
+## Pausing and resuming
+
+An agent can be paused between turns. When paused, the run loop waits at the top of its iteration — the current turn always completes normally. `pause()` and `resume()` are safe to call at any time (including before or during `run()`), and both are idempotent.
+
+```python
+agent = Agent("worker", "Processes jobs", [work])
+
+await agent.put(Turn("work", kwargs={"x": 1}))
+await agent.put(Turn("work", kwargs={"x": 2}))
+
+agent.pause()  # can be called before run() starts
+
+async def collect():
+    async for turn, value in agent.run():
+        print(value)
+        agent.pause()  # pause after each turn
+
+task = asyncio.create_task(collect())
+await asyncio.sleep(0.1)   # first turn finishes, loop is now gated
+
+agent.resume()             # unblock next turn
+await task
+```
+
+| Method / Property | Description |
+|---|---|
+| `agent.pause()` | Clear the gate; the run loop will block before its next turn |
+| `agent.resume()` | Set the gate; the run loop resumes immediately |
+| `agent.is_paused` | `True` while the gate is cleared |
+
+A paused agent can be serialized and restored. `to_dict()` includes `is_paused`; `from_dict()` restores the paused state so the reconstructed agent will wait at the gate until `resume()` is called.
+
+```python
+agent.pause()
+data = agent.to_dict()
+
+restored = Agent.from_dict(data)
+assert restored.is_paused        # still paused after round-trip
+
+restored.resume()                # now it will run
+```
 
 ## Hooks
 
@@ -136,6 +178,8 @@ Agent hooks fire at specific points during the run loop. Hooks are stored as a l
 | `ON_TURN_TIMEOUT` | Turn timed out | `(agent, turn)` |
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
 | `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
+| `ON_PAUSE` | When the run loop hits a paused gate | `(agent)` |
+| `ON_RESUME` | After the gate is released and before the next turn | `(agent)` |
 
 Use the `@hook(type)` decorator so the hook is registered and carries its type, then append it to `agent.hooks`:
 
@@ -172,11 +216,11 @@ AgentRegistry.clear()                # empty the registry (useful in tests)
 ## Serialization
 
 ```python
-data = agent.to_dict()       # name, description, tool_names, queue, hooks, context_pool, context_queue
-agent = Agent.from_dict(data)  # rebuilds from registries, repopulates queue, pool, and context_queue
+data = agent.to_dict()       # name, description, tool_names, queue, hooks, context_pool, context_queue, is_paused
+agent = Agent.from_dict(data)  # rebuilds from registries, repopulates queue, pool, context_queue, and pause state
 ```
 
-Hooks (agent-level, context pool, and context queue) are serialized by name and resolved from `HookRegistry` on deserialization. Context pool items, context queue items, and their hooks are all included in the serialized form.
+Hooks (agent-level, context pool, and context queue) are serialized by name and resolved from `HookRegistry` on deserialization. Context pool items, context queue items, and their hooks are all included in the serialized form. The `is_paused` field is also preserved — a paused agent reconstructed via `from_dict()` stays paused until `resume()` is called.
 
 !!! warning "UnregisteredHookError"
     `Agent.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.
@@ -186,7 +230,7 @@ Hooks (agent-level, context pool, and context queue) are serialized by name and 
 | Exception | When |
 |-----------|------|
 | `ValueError` | Tool instance mismatch, duplicate agent name, tool not in agent's set, or duplicate hook name |
-| `SafeExecutionError` | Changing attributes or calling `run()` while already running |
+| `SafeExecutionError` | Changing attributes or calling `run()` while already running or paused |
 | `UnregisteredAgentError` | `send_turn` target not found in `AgentRegistry` |
 | `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |
 | `TurnTimeoutError` | A turn exceeds its timeout (propagated from the turn) |

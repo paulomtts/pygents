@@ -788,3 +788,319 @@ def test_branch_empty_queue():
     parent = Agent("parent", "Desc", [add_agent])
     child = parent.branch("child")
     assert child._queue.qsize() == 0
+
+
+# ---------------------------------------------------------------------------
+# PR1–PR20 – pause() / resume() / is_paused
+# ---------------------------------------------------------------------------
+
+
+def test_is_paused_false_after_init():
+    # PR1
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    assert agent.is_paused is False
+
+
+def test_pause_sets_is_paused():
+    # PR2
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()
+    assert agent.is_paused is True
+
+
+def test_resume_clears_is_paused():
+    # PR3
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()
+    agent.resume()
+    assert agent.is_paused is False
+
+
+def test_pause_before_run_does_not_raise():
+    # PR4
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()  # no run() active — must not raise
+
+
+def test_resume_before_run_does_not_raise():
+    # PR5
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.resume()  # already unpaused — must not raise
+
+
+def test_pause_is_idempotent():
+    # PR6
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()
+    agent.pause()
+    assert agent.is_paused is True
+
+
+def test_resume_is_idempotent():
+    # PR7
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.resume()
+    assert agent.is_paused is False
+
+
+def test_run_waits_at_gate_when_pre_paused():
+    # PR8 – agent paused before run() starts; resumes via external task
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()
+
+    async def main():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+
+        async def collect():
+            out = []
+            async for _, v in agent.run():
+                out.append(v)
+            return out
+
+        task = asyncio.create_task(collect())
+        await asyncio.sleep(0.05)        # gate should be hit by now
+        assert agent.is_paused is True
+        agent.resume()
+        return await task
+
+    results = asyncio.run(main())
+    assert results == [3]
+
+
+def test_run_pauses_between_turns():
+    # PR9 – pause after first turn; second turn waits
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+
+    async def main():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 1}))
+        await agent.put(Turn("add_agent", kwargs={"a": 2, "b": 2}))
+
+        results = []
+
+        async def collect():
+            async for _, v in agent.run():
+                results.append(v)
+                agent.pause()            # pause after first yield
+
+        task = asyncio.create_task(collect())
+        await asyncio.sleep(0.1)
+        assert results == [2]
+        assert agent.is_paused is True
+        agent.resume()
+        await task
+        assert results == [2, 4]
+
+    asyncio.run(main())
+
+
+def test_on_pause_hook_fires_on_pause_entry():
+    # PR10
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    events = []
+
+    @hook(AgentHook.ON_PAUSE)
+    async def on_pause(agent):
+        events.append("on_pause")
+
+    agent = Agent("a", "desc", [add_agent])
+    agent.hooks.append(on_pause)
+    agent.pause()
+
+    async def main():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        task = asyncio.create_task(_consume(agent.run()))
+        await asyncio.sleep(0.05)
+        agent.resume()
+        await task
+
+    async def _consume(gen):
+        async for _ in gen:
+            pass
+
+    asyncio.run(main())
+    assert events.count("on_pause") == 1
+
+
+def test_on_resume_hook_fires_on_resume():
+    # PR11
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    events = []
+
+    @hook(AgentHook.ON_RESUME)
+    async def on_resume(agent):
+        events.append("on_resume")
+
+    agent = Agent("a", "desc", [add_agent])
+    agent.hooks.append(on_resume)
+    agent.pause()
+
+    async def main():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        task = asyncio.create_task(_consume(agent.run()))
+        await asyncio.sleep(0.05)
+        agent.resume()
+        await task
+
+    async def _consume(gen):
+        async for _ in gen:
+            pass
+
+    asyncio.run(main())
+    assert events.count("on_resume") == 1
+
+
+def test_on_pause_fires_before_before_turn():
+    # PR12 – order: ON_PAUSE → ON_RESUME → BEFORE_TURN
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    events = []
+
+    @hook(AgentHook.ON_PAUSE)
+    async def on_pause(agent):
+        events.append("on_pause")
+
+    @hook(AgentHook.ON_RESUME)
+    async def on_resume(agent):
+        events.append("on_resume")
+
+    @hook(AgentHook.BEFORE_TURN)
+    async def before_turn(agent):
+        events.append("before_turn")
+
+    agent = Agent("a", "desc", [add_agent])
+    agent.hooks.extend([on_pause, on_resume, before_turn])
+    agent.pause()
+
+    async def main():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        task = asyncio.create_task(_consume(agent.run()))
+        await asyncio.sleep(0.05)
+        agent.resume()
+        await task
+
+    async def _consume(gen):
+        async for _ in gen:
+            pass
+
+    asyncio.run(main())
+    assert events == ["on_pause", "on_resume", "before_turn"]
+
+
+def test_pause_does_not_interrupt_running_turn():
+    # PR13 – pause() mid-turn; tool still completes normally
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [slow_tool_agent])
+    completed = []
+
+    async def main():
+        await agent.put(Turn("slow_tool_agent", kwargs={"duration": 0.2}))
+
+        async def collect():
+            async for _, v in agent.run():
+                completed.append(v)
+
+        task = asyncio.create_task(collect())
+        await asyncio.sleep(0.05)        # tool is running
+        agent.pause()                    # must not abort the turn
+        await task
+        assert completed == ["done"]
+
+    asyncio.run(main())
+
+
+def test_to_dict_is_paused_true_when_paused():
+    # PR14
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()
+    assert agent.to_dict()["is_paused"] is True
+
+
+def test_to_dict_is_paused_false_when_not_paused():
+    # PR15
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    assert agent.to_dict()["is_paused"] is False
+
+
+def test_from_dict_restores_paused_state():
+    # PR16
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()
+    data = agent.to_dict()
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+    assert restored.is_paused is True
+
+
+def test_from_dict_restores_unpaused_state():
+    # PR17
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    data = agent.to_dict()
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+    assert restored.is_paused is False
+
+
+def test_paused_agent_round_trips_and_resumes():
+    # PR18 – pause → serialize → restore → resume → runs correctly
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+
+    async def put():
+        await agent.put(Turn("add_agent", kwargs={"a": 5, "b": 5}))
+
+    asyncio.run(put())
+    agent.pause()
+    data = agent.to_dict()
+
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+    assert restored.is_paused is True
+
+    async def main():
+        task = asyncio.create_task(_collect(restored.run()))
+        await asyncio.sleep(0.05)
+        restored.resume()
+        return await task
+
+    async def _collect(gen):
+        out = []
+        async for _, v in gen:
+            out.append(v)
+        return out
+
+    results = asyncio.run(main())
+    assert results == [10]
+
+
+def test_setattr_raises_while_paused():
+    # PR19 – mutation guard blocks property changes when paused (not just running)
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()
+    with pytest.raises(SafeExecutionError, match="Cannot change property .* while the agent is paused"):
+        agent.name = "other"
+
+
+def test_setattr_allowed_after_resume():
+    # PR20 – resume() unblocks the mutation guard
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    agent.pause()
+    agent.resume()
+    agent.name = "new_name"   # must not raise
+    assert agent.name == "new_name"
