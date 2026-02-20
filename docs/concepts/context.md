@@ -46,23 +46,27 @@ A bounded, branchable window of items. Oldest items are evicted automatically wh
 
 ```python
 from pygents import ContextQueue
+from pygents.context import ContextItem
 
 cq = ContextQueue(limit=10)
-await cq.append("user: hello")
-await cq.append("assistant: hi there")
+await cq.append(ContextItem(content="user: hello"))
+await cq.append(ContextItem(content="assistant: hi there"))
 ```
 
-`limit` is the maximum number of items (must be >= 1).
+`limit` is the maximum number of items (must be >= 1). `ContextQueue` only accepts `ContextItem` instances.
 
 !!! warning "ValueError"
     `ContextQueue(limit=0)` or any `limit < 1` raises `ValueError`.
 
+!!! warning "TypeError"
+    `append` raises `TypeError` if any argument is not a `ContextItem` instance.
+
 ### Appending
 
-`append` accepts variadic positional arguments:
+`append` accepts variadic `ContextItem` positional arguments:
 
 ```python
-await cq.append("msg1", "msg2", "msg3")
+await cq.append(ContextItem(content="msg1"), ContextItem(content="msg2"))
 ```
 
 ### Clearing
@@ -87,18 +91,20 @@ bool(cq)   # False when empty
 A child scope inherits the parent's state via `branch()` and then diverges independently:
 
 ```python
+from pygents.context import ContextItem
+
 agent_cq = ContextQueue(limit=20)
-await agent_cq.append("system context", "user message")
+await agent_cq.append(ContextItem(content="system context"), ContextItem(content="user message"))
 
 turn_cq = agent_cq.branch()
-await turn_cq.append("tool call result")
+await turn_cq.append(ContextItem(content="tool call result"))
 
 tool_cq = turn_cq.branch(limit=5)
-await tool_cq.append("sub-step output")
+await tool_cq.append(ContextItem(content="sub-step output"))
 
 # Parent is unaffected
-assert "tool call result" not in agent_cq
-assert "sub-step output" not in turn_cq
+assert ContextItem(content="tool call result") not in agent_cq.items
+assert ContextItem(content="sub-step output") not in turn_cq.items
 ```
 
 When a child branches with a smaller `limit`, only the most recent items that fit are kept. By default, the child inherits the parent's hooks:
@@ -130,7 +136,7 @@ async def log_after(items):
     print(f"New count: {len(items)}")
 
 cq = ContextQueue(limit=20, hooks=[log_before, log_after])
-await cq.append("a", "b", "c")
+await cq.append(ContextItem(content="a"), ContextItem(content="b"), ContextItem(content="c"))
 ```
 
 If no hooks are provided, items are appended directly.
@@ -184,6 +190,7 @@ The `context_queue` is branched alongside `context_pool` when calling `agent.bra
 | Exception | When |
 |-----------|------|
 | `ValueError` | `limit < 1` at construction |
+| `TypeError` | `append` receives a non-`ContextItem` argument |
 | `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |
 
 ---

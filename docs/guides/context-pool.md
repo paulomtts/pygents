@@ -211,7 +211,7 @@ async def answer(pool: ContextPool, relevant_ids: list[str], memory: ContextQueu
     )
 
     text = response.content.answer
-    await memory.append(f"Assistant: {text}")
+    await memory.append(ContextItem(content=f"Assistant: {text}"))
     return text
 ```
 
@@ -220,8 +220,8 @@ async def answer(pool: ContextPool, relevant_ids: list[str], memory: ContextQueu
 ```python
 def latest_user_message(memory: ContextQueue) -> str:
     for item in reversed(memory.items):
-        if isinstance(item, str) and item.startswith("User:"):
-            return item.removeprefix("User:").strip()
+        if isinstance(item.content, str) and item.content.startswith("User:"):
+            return item.content.removeprefix("User:").strip()
     return ""
 ```
 
@@ -244,7 +244,7 @@ agent = Agent(
 )
 
 async def ask(question: str, doc_ids: list[str]) -> None:
-    await memory.append(f"User: {question}")
+    await memory.append(ContextItem(content=f"User: {question}"))
 
     # Pre-load documents — the agent stores each ContextItem automatically
     for doc_id in doc_ids:

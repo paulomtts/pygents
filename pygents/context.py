@@ -56,7 +56,7 @@ class ContextQueue:
     ) -> None:
         if limit < 1:
             raise ValueError("limit must be >= 1")
-        self._items: deque[Any] = deque(maxlen=limit)
+        self._items: deque[ContextItem[Any]] = deque(maxlen=limit)
         self.hooks: list[Hook] = list(hooks) if hooks else []
 
     # -- properties ----------------------------------------------------------
@@ -66,22 +66,28 @@ class ContextQueue:
         return self._items.maxlen  # type: ignore[return-value]
 
     @property
-    def items(self) -> list[Any]:
+    def items(self) -> list[ContextItem[Any]]:
         return list(self._items)
 
     @items.setter
-    def items(self, items: list[Any]) -> None:
+    def items(self, items: list[ContextItem[Any]]) -> None:
         self._items.clear()
         self._items.extend(items)
 
     # -- mutation -------------------------------------------------------------
 
-    async def append(self, *items: Any) -> None:
-        """Add one or more items. Oldest items are evicted when full.
+    async def append(self, *items: ContextItem[Any]) -> None:
+        """Add one or more ContextItems. Oldest items are evicted when full.
 
-        BEFORE_APPEND hooks are run with (items,); then new items
-        are appended; then AFTER_APPEND hooks are run with (items,).
+        Raises TypeError if any item is not a ContextItem. BEFORE_APPEND
+        hooks are run with (items,); then new items are appended; then
+        AFTER_APPEND hooks are run with (items,).
         """
+        for item in items:
+            if not isinstance(item, ContextItem):
+                raise TypeError(
+                    f"ContextQueue only accepts ContextItem instances, got {type(item).__name__!r}"
+                )
         from pygents.hooks import ContextQueueHook
         from pygents.registry import HookRegistry
         if before_append_hook := HookRegistry.get_by_type(
@@ -126,7 +132,7 @@ class ContextQueue:
     def __len__(self) -> int:
         return len(self._items)
 
-    def __iter__(self) -> Iterator[Any]:
+    def __iter__(self) -> Iterator[ContextItem[Any]]:
         return iter(self._items)
 
     def __bool__(self) -> bool:
@@ -138,28 +144,19 @@ class ContextQueue:
     # -- serialization --------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        def _serialize_item(item: Any) -> Any:
-            if isinstance(item, ContextItem):
-                return {"__type__": "ContextItem", **item.to_dict()}
-            return item
-
         from pygents.utils import serialize_hooks_by_type
-        out: dict[str, Any] = {
+        return {
             "limit": self.limit,
-            "items": [_serialize_item(i) for i in self._items],
+            "items": [item.to_dict() for item in self._items],
             "hooks": serialize_hooks_by_type(self.hooks),
         }
-        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ContextQueue:
         from pygents.utils import rebuild_hooks_from_serialization
         cq = cls(limit=data["limit"])
         for raw in data.get("items", []):
-            if isinstance(raw, dict) and raw.get("__type__") == "ContextItem":
-                cq._items.append(ContextItem.from_dict(raw))
-            else:
-                cq._items.append(raw)
+            cq._items.append(ContextItem.from_dict(raw))
         cq.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return cq
 

@@ -23,6 +23,7 @@ from py_ai_toolkit import PyAIToolkit
 from py_ai_toolkit.core.domain.interfaces import LLMConfig
 
 from pygents import ContextQueue, ContextQueueHook, hook
+from pygents.context import ContextItem
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class ThinkResponse(BaseModel):
 @tool()
 async def think(memory: ContextQueue) -> Turn:
     """Choose how to respond: queue respond or create_event."""
-    context = "\n".join(memory.items[-10:])
+    context = "\n".join(str(item.content) for item in memory.items[-10:])
     response = await toolkit.asend(
         response_model=ThinkResponse,
         template="You are a calendar assistant. Recent conversation:\n{{ context }}\n\n"
@@ -90,14 +91,14 @@ class ReplyText(BaseModel):
 @tool()
 async def respond(memory: ContextQueue) -> str:
     """Generate a reply from recent context and append it to memory."""
-    context = "\n".join(memory.items[-10:])
+    context = "\n".join(str(item.content) for item in memory.items[-10:])
     reply_response = await toolkit.asend(
         response_model=ReplyText,
         template="You are a calendar assistant. Recent conversation:\n{{ context }}\n\nReply briefly.",
         context=context,
     )
     text = reply_response.content.reply
-    await memory.append(f"Assistant: {text}")
+    await memory.append(ContextItem(content=f"Assistant: {text}"))
     return text
 ```
 
@@ -117,8 +118,8 @@ calendar: list[CalendarEvent] = []
 
 def latest_user_message(memory: ContextQueue) -> str:
     for item in reversed(memory.items):
-        if isinstance(item, str) and item.startswith("User:"):
-            return item.removeprefix("User:").strip()
+        if isinstance(item.content, str) and item.content.startswith("User:"):
+            return item.content.removeprefix("User:").strip()
     return ""
 
 @tool()
@@ -135,9 +136,9 @@ async def create_event(memory: ContextQueue) -> Turn:
     calendar.append(event)
 
     summary = f"Created '{event.title}' on {event.start:%Y-%m-%d %H:%M}"
-    await memory.append(f"Assistant: {summary}")
+    await memory.append(ContextItem(content=f"Assistant: {summary}"))
 
-    await memory.append("User: Confirm the event was created.")
+    await memory.append(ContextItem(content="User: Confirm the event was created."))
     return Turn(think, kwargs=dict(memory=memory))
 ```
 
@@ -152,7 +153,7 @@ from pygents import Agent, Turn
 agent = Agent("assistant", "Calendar assistant", [think, respond, create_event])
 
 async def main():
-    await memory.append("User: Schedule standup tomorrow at 9am")
+    await memory.append(ContextItem(content="User: Schedule standup tomorrow at 9am"))
     await agent.put(Turn(think, kwargs=dict(memory=memory)))
 
     async for turn, result in agent.run():

@@ -162,7 +162,7 @@ cq = ContextQueue.from_dict(data)
 Keyed, bounded store for `ContextItem` objects. Use for **potentially large tool outputs** — documents, records, fetched data — that accumulate over a session and are retrieved selectively. Dumping everything into a prompt is expensive; instead, tools read descriptions to decide what's relevant, then pull only that content. Items are retrieved by `id`, not by position.
 
 ```python
-from pygents.context_pool import ContextItem, ContextPool
+from pygents.context import ContextItem, ContextPool
 
 pool = ContextPool(limit=50)               # limit=None for unbounded
 item = ContextItem(id="doc-1", description="Q3 earnings — revenue, margins", content={"text": "..."})

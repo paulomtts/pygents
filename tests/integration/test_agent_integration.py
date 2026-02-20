@@ -11,7 +11,7 @@ import asyncio
 
 from pygents.agent import Agent
 from pygents.hooks import AgentHook, ContextQueueHook, ToolHook, TurnHook, hook
-from pygents.context import ContextQueue
+from pygents.context import ContextItem, ContextQueue
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
@@ -55,7 +55,7 @@ def test_agent_run_with_hooks_and_memory():
     @hook(AgentHook.BEFORE_TURN)
     async def agent_before_turn(agent):
         events.append("agent_before_turn")
-        await agent.memory.append("before_turn")
+        await agent.memory.append(ContextItem(content="before_turn"))
 
     @hook(AgentHook.ON_TURN_VALUE)
     async def agent_on_turn_value(agent, turn, value):
@@ -64,7 +64,7 @@ def test_agent_run_with_hooks_and_memory():
     @hook(AgentHook.AFTER_TURN)
     async def agent_after_turn(agent, turn):
         events.append("agent_after_turn")
-        await agent.memory.append("after_turn")
+        await agent.memory.append(ContextItem(content="after_turn"))
 
     @hook(TurnHook.BEFORE_RUN)
     async def turn_before_run(turn):
@@ -103,7 +103,7 @@ def test_agent_run_with_hooks_and_memory():
     assert len(results) == 1
     assert results[0][1] == 8
 
-    assert memory.items == ["before_turn", "after_turn"]
+    assert memory.items == [ContextItem(content="before_turn"), ContextItem(content="after_turn")]
 
     expected_sequence = [
         "agent_before_put",
