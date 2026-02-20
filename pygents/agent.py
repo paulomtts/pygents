@@ -289,7 +289,7 @@ class Agent:
             agent._current_turn = Turn.from_dict(data["current_turn"])
         agent.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         agent.context_pool = ContextPool.from_dict(data.get("context_pool", {}))
+        agent.context_queue = ContextQueue.from_dict(data.get("context_queue", {"limit": 10, "items": [], "hooks": {}}))
         if data.get("is_paused", False):
             agent.pause()
-        agent.context_queue = ContextQueue.from_dict(data.get("context_queue", {"limit": 10, "items": [], "hooks": {}}))
         return agent
