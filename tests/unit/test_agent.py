@@ -63,7 +63,7 @@ from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
 from pygents.agent import Agent
-from pygents.context_queue import ContextQueue
+from pygents.context import ContextQueue
 
 
 @tool()
@@ -96,14 +96,20 @@ async def raising_tool_agent() -> None:
 
 @tool()
 async def returns_context_item_no_id():
-    from pygents.context_pool import ContextItem
+    from pygents.context import ContextItem
     return ContextItem(content=42)
 
 
 @tool()
 async def returns_context_item_with_id():
-    from pygents.context_pool import ContextItem
+    from pygents.context import ContextItem
     return ContextItem(content=99, description="result", id="x")
+
+
+@tool()
+async def returns_context_item_id_no_description():
+    from pygents.context import ContextItem
+    return ContextItem(content="val", id="missing-desc")
 
 
 # ---------------------------------------------------------------------------
@@ -141,14 +147,14 @@ def test_agent_init_accepts_context_pool_instance():
     async def pool_hook(pool, item):
         pass
 
-    from pygents.context_pool import ContextPool
+    from pygents.context import ContextPool
     agent = Agent("a", "desc", [add_agent], context_pool=ContextPool(hooks=[pool_hook]))
     assert pool_hook in agent.context_pool.hooks
 
 
 def test_agent_init_default_pool_when_none_provided():
     AgentRegistry.clear()
-    from pygents.context_pool import ContextPool
+    from pygents.context import ContextPool
     agent = Agent("a", "desc", [add_agent])
     assert isinstance(agent.context_pool, ContextPool)
     assert len(agent.context_pool) == 0
@@ -156,7 +162,7 @@ def test_agent_init_default_pool_when_none_provided():
 
 def test_agent_init_uses_provided_pool_instance():
     AgentRegistry.clear()
-    from pygents.context_pool import ContextPool
+    from pygents.context import ContextPool
     pool = ContextPool(limit=5)
     agent = Agent("a", "desc", [add_agent], context_pool=pool)
     assert agent.context_pool is pool
@@ -170,7 +176,7 @@ def test_agent_branch_child_pool_inherits_hooks():
     async def parent_pool_hook(pool, item):
         pass
 
-    from pygents.context_pool import ContextPool
+    from pygents.context import ContextPool
     parent = Agent("parent", "desc", [add_agent], context_pool=ContextPool(hooks=[parent_pool_hook]))
     child = parent.branch("child")
     assert parent_pool_hook in child.context_pool.hooks
@@ -234,6 +240,48 @@ def test_agent_add_context_routes_to_pool_when_id_provided():
     assert len(agent.context_pool) == 1
     assert len(agent.context_queue) == 0
     assert agent.context_pool.get("x").content == 99
+
+
+def test_agent_add_context_raises_when_id_set_but_description_missing():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [returns_context_item_id_no_description])
+
+    async def run():
+        await agent.put(Turn("returns_context_item_id_no_description", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    with pytest.raises(ValueError, match="'id' and 'description'"):
+        asyncio.run(run())
+
+
+def test_agent_add_context_queue_accumulates_across_multiple_turns():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [returns_context_item_no_id])
+
+    async def run():
+        for _ in range(3):
+            await agent.put(Turn("returns_context_item_no_id", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(agent.context_queue) == 3
+    assert all(item.content == 42 for item in agent.context_queue.items)
+
+
+def test_agent_add_context_queue_evicts_when_limit_exceeded():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [returns_context_item_no_id], context_queue=ContextQueue(limit=2))
+
+    async def run():
+        for _ in range(3):
+            await agent.put(Turn("returns_context_item_no_id", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(agent.context_queue) == 2
 
 
 # ---------------------------------------------------------------------------

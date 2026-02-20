@@ -17,7 +17,7 @@ from pygents.hooks import (
     TurnHook,
     hook,
 )
-from pygents.context_queue import ContextQueue
+from pygents.context import ContextQueue
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool, ToolMetadata, tool
 from pygents.turn import StopReason, Turn

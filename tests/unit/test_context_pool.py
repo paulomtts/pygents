@@ -65,7 +65,7 @@ import asyncio
 
 import pytest
 
-from pygents.context_pool import ContextItem, ContextPool
+from pygents.context import ContextItem, ContextPool
 from pygents.hooks import ContextPoolHook, hook
 from pygents.registry import HookRegistry
 

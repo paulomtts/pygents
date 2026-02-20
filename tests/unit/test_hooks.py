@@ -25,7 +25,7 @@ from datetime import datetime
 import pytest
 
 from pygents.agent import Agent
-from pygents.context_pool import ContextItem, ContextPool
+from pygents.context import ContextItem, ContextPool
 from pygents.hooks import AgentHook, ContextPoolHook, ContextQueueHook, HookMetadata, ToolHook, TurnHook, hook
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool

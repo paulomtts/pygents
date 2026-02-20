@@ -53,8 +53,7 @@ nav:
     - Tools: concepts/tools.md
     - Turns: concepts/turns.md
     - Agents: concepts/agents.md
-    - Context Queue: concepts/context_queue.md
-    - Context Pool: concepts/context_pool.md
+    - Context: concepts/context.md
     - Hooks: concepts/hooks.md
   - Guides:
     - Simple Agent: guides/ai-agent.md

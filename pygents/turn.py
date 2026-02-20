@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, AsyncIterator, Callable, Iterable, TypeVar
 
-from pygents.context_pool import ContextItem
+from pygents.context import ContextItem
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from pygents.hooks import Hook, TurnHook
 from pygents.registry import HookRegistry, ToolRegistry

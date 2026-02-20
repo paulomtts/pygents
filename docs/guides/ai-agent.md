@@ -174,4 +174,4 @@ Flow: **User message appended** → **think** runs (reads memory) → LLM return
 | **create_event** | Reads last user message from memory, extracts event, saves, appends to memory, appends follow-up user message, queues think with `memory`. |
 | **ContextQueue** | Single source of context; all tools receive only `memory`. |
 
-For more, see [Tools](../concepts/tools.md), [Turns](../concepts/turns.md), [Agents](../concepts/agents.md), and [ContextQueue](../concepts/context_queue.md).
+For more, see [Tools](../concepts/tools.md), [Turns](../concepts/turns.md), [Agents](../concepts/agents.md), and [Context](../concepts/context.md).

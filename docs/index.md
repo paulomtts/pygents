@@ -141,6 +141,6 @@ Everything importable from `pygents`:
 | Registries | `ToolRegistry`, `AgentRegistry`, `HookRegistry` |
 | Exceptions | `SafeExecutionError`, `WrongRunMethodError`, `TurnTimeoutError`, `UnregisteredToolError`, `UnregisteredAgentError`, `UnregisteredHookError` |
 
-Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), [ContextQueue](concepts/context_queue.md), or [Context Pool](concepts/context_pool.md).
+Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), [Context](concepts/context.md).
 
 Guides: [Building an AI Agent](guides/ai-agent.md), [LLM-Driven Context Querying](guides/context-pool.md).

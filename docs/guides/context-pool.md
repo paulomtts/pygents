@@ -95,7 +95,7 @@ Returns a `ContextItem`. The tool has no knowledge of — or interaction with �
 
 ```python
 from pygents import tool, Turn
-from pygents.context_pool import ContextItem, ContextPool
+from pygents.context import ContextItem, ContextPool
 
 @tool()
 async def fetch_document(doc_id: str) -> ContextItem:
@@ -232,7 +232,7 @@ The user queues fetch turns for the documents they want available, then queues t
 ```python
 import asyncio
 from pygents import Agent, Turn
-from pygents.context_pool import ContextPool
+from pygents.context import ContextPool
 
 pool = ContextPool(limit=50)
 
@@ -295,4 +295,4 @@ Descriptions are typically 1–2 sentences. A pool of 200 items with 20-word des
 | `answer` | **Read only** — reads `item.content` of selected ids | Injects and generates |
 | **Agent** | **Write** — stores `ContextItem` outputs automatically | Owns the pool |
 
-For the `ContextPool` API reference, see [Context Pool](../concepts/context_pool.md).
+For the `ContextPool` API reference, see [Context](../concepts/context.md#contextpool).

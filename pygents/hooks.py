@@ -11,7 +11,7 @@ from pygents.utils import _null_lock
 
 if TYPE_CHECKING:
     from pygents.agent import Agent
-    from pygents.context_pool import ContextItem, ContextPool
+    from pygents.context import ContextItem, ContextPool
     from pygents.turn import Turn
 
 

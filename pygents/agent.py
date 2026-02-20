@@ -2,8 +2,7 @@ import asyncio
 import inspect
 from typing import Any, AsyncIterator
 
-from pygents.context_pool import ContextItem, ContextPool
-from pygents.context_queue import ContextQueue
+from pygents.context import ContextItem, ContextPool, ContextQueue
 from pygents.errors import SafeExecutionError, TurnTimeoutError
 from pygents.hooks import AgentHook, Hook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry

@@ -11,7 +11,7 @@ import asyncio
 
 from pygents.agent import Agent
 from pygents.hooks import AgentHook, ContextQueueHook, ToolHook, TurnHook, hook
-from pygents.context_queue import ContextQueue
+from pygents.context import ContextQueue
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
@@ -125,7 +125,7 @@ def test_agent_run_with_hooks_and_memory():
 
 def test_agent_context_pool_collects_pool_item_outputs():
     AgentRegistry.clear()
-    from pygents.context_pool import ContextItem
+    from pygents.context import ContextItem
 
     @tool()
     async def context_tool(key: str, val: int) -> ContextItem:
@@ -148,7 +148,7 @@ def test_agent_context_pool_collects_pool_item_outputs():
 
 def test_agent_context_queue_collects_items_without_id():
     AgentRegistry.clear()
-    from pygents.context_pool import ContextItem
+    from pygents.context import ContextItem
 
     @tool()
     async def queue_tool() -> ContextItem:
@@ -170,7 +170,7 @@ def test_agent_context_queue_collects_items_without_id():
 
 def test_agent_context_pool_limit_evicts_oldest():
     AgentRegistry.clear()
-    from pygents.context_pool import ContextItem, ContextPool
+    from pygents.context import ContextItem, ContextPool
 
     @tool()
     async def bounded_context_tool(key: str, val: int) -> ContextItem:

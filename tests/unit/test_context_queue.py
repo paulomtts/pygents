@@ -32,7 +32,7 @@ import asyncio
 import pytest
 
 from pygents.hooks import ContextQueueHook, hook
-from pygents.context_queue import ContextQueue
+from pygents.context import ContextQueue
 
 
 # -- construction -------------------------------------------------------------

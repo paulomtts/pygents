@@ -69,14 +69,14 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `ON_YIELD` | Before each yielded value (async generator tools only) | `(value)` |
 | `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` |
 
-**ContextQueue** — during append (see [ContextQueue](context_queue.md#hooks)):
+**ContextQueue** — during append (see [ContextQueue](context.md#hooks)):
 
 | Hook | When | Args |
 |------|------|------|
 | `BEFORE_APPEND` | Before new items are inserted | `(items,)` — current items (read-only; does not clear or replace the window) |
 | `AFTER_APPEND` | After new items have been added | `(items,)` — current items |
 
-**ContextPool** — during pool mutation (see [Context Pool](context_pool.md#hooks)):
+**ContextPool** — during pool mutation (see [Context Pool](context.md#hooks_1)):
 
 | Hook | When | Args |
 |------|------|------|

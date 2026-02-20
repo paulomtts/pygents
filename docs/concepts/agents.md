@@ -19,8 +19,8 @@ agent = Agent("worker", "Doubles numbers", [work])
 | `name` | required | Unique name; registered in `AgentRegistry` |
 | `description` | required | Free-text description |
 | `tools` | required | Tools the agent may run |
-| `context_pool` | `None` | Pre-configured `ContextPool` (or subclass) to use; creates a default `ContextPool()` if not provided (see [Context Pool](context_pool.md)) |
-| `context_queue` | `None` | Pre-configured `ContextQueue` to use; creates a default `ContextQueue(limit=10)` if not provided (see [Context Queue](context_queue.md)) |
+| `context_pool` | `None` | Pre-configured `ContextPool` (or subclass) to use; creates a default `ContextPool()` if not provided (see [Context](context.md#contextpool)) |
+| `context_queue` | `None` | Pre-configured `ContextQueue` to use; creates a default `ContextQueue(limit=10)` if not provided (see [Context](context.md#contextqueue)) |
 
 Each tool must be the same instance as in `ToolRegistry` — the constructor validates this.
 
