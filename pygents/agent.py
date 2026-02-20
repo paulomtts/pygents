@@ -151,7 +151,7 @@ class Agent:
 
         The child is fully independent after creation. By default, it
         inherits this agent's hooks; pass hooks=[] or a new list to
-        override. Queue and current turn are NOT copied.
+        override. The queue is copied to the child; current turn is not.
 
         Parameters
         ----------

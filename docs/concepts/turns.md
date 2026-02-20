@@ -39,7 +39,7 @@ The agent's `run()` picks the right method automatically.
 | Attribute | Set | Mutable while running? |
 |-----------|-----|------------------------|
 | `tool`, `args`, `kwargs`, `timeout` | init | No |
-| `metadata` | init (optional dict) | Yes |
+| `metadata` | set internally by framework (`TurnMetadata` dataclass) | Yes (by framework) |
 | `output`, `start_time`, `end_time`, `stop_reason` | by framework during/after run | Yes (by framework). `output` is the return value for coroutine tools, or a **list** of all yielded values for async generator tools. |
 
 `start_time`, `end_time`, and `stop_reason` are **not** constructor parameters — they are managed by the framework and set during execution. On a fresh turn they default to `None`. When deserializing with `from_dict()`, the class method restores them directly on the instance.
@@ -96,7 +96,7 @@ Turn hooks fire at specific points during execution. Hooks are stored as a list 
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
 | `ON_VALUE` | Before each yielded value (streaming only) | `(turn, value)` |
 
-Use the `@hook(type)` decorator so the hook is registered and carries its type. Pass hooks in the constructor or append to `turn.hooks`:
+Use the `@hook(type)` decorator so the hook is registered and carries its type. Pass hooks in the constructor:
 
 ```python
 from pygents import Turn, hook, TurnHook
