@@ -114,17 +114,27 @@ class ContextQueue:
     # -- serialization --------------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
+        def _serialize_item(item: Any) -> Any:
+            from pygents.context_pool import ContextItem
+            if isinstance(item, ContextItem):
+                return {"__type__": "ContextItem", **item.to_dict()}
+            return item
+
         out: dict[str, Any] = {
             "limit": self.limit,
-            "items": list(self._items),
+            "items": [_serialize_item(i) for i in self._items],
             "hooks": serialize_hooks_by_type(self.hooks),
         }
         return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ContextQueue:
+        from pygents.context_pool import ContextItem
         cq = cls(limit=data["limit"])
-        for item in data.get("items", []):
-            cq._items.append(item)
+        for raw in data.get("items", []):
+            if isinstance(raw, dict) and raw.get("__type__") == "ContextItem":
+                cq._items.append(ContextItem.from_dict(raw))
+            else:
+                cq._items.append(raw)
         cq.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return cq

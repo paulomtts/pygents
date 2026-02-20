@@ -9,9 +9,9 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ContextItem[T]:
-    id: str
-    description: str
     content: T
+    description: str | None = None
+    id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -23,7 +23,9 @@ class ContextItem[T]:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ContextItem[Any]:
         return cls(
-            id=data["id"], description=data["description"], content=data["content"]
+            content=data["content"],
+            description=data.get("description"),
+            id=data.get("id"),
         )
 
 
@@ -85,6 +87,10 @@ class ContextPool:
 
     async def add(self, item: ContextItem[Any]) -> None:
         from pygents.hooks import ContextPoolHook
+        if item.id is None or item.description is None:
+            raise ValueError(
+                "ContextPool requires a ContextItem with both 'id' and 'description' set"
+            )
         if (
             self._limit is not None
             and item.id not in self._items

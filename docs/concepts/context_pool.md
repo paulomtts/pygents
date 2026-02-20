@@ -18,16 +18,19 @@ The `description` field is designed to support selective retrieval: your code ca
 ```python
 from pygents.context_pool import ContextItem
 
-item = ContextItem(id="doc-1", description="Q3 earnings report — revenue, margins, guidance", content={"text": "..."})
+item = ContextItem(content={"text": "..."}, description="Q3 earnings report — revenue, margins, guidance", id="doc-1")
 ```
 
-| Field | Type | Meaning |
-|-------|------|---------|
-| `id` | `str` | Unique key in the pool |
-| `description` | `str` | Compact summary used by your selection logic to decide relevance — keep it one or two sentences |
-| `content` | `T` | The full payload, retrieved only for items that pass selection |
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `content` | `T` | required | The full payload, retrieved only for items that pass selection |
+| `description` | `str \| None` | `None` | Compact summary used by your selection logic to decide relevance — keep it one or two sentences |
+| `id` | `str \| None` | `None` | Unique key in the pool |
 
-`ContextItem` is a frozen dataclass — it is immutable after creation.
+`ContextItem` is a frozen dataclass — it is immutable after creation. Only `content` is required; `description` and `id` default to `None`.
+
+!!! warning "ValueError"
+    `ContextPool.add()` raises `ValueError` if the item has `id=None` or `description=None`. Both fields are required for pool storage.
 
 !!! tip "Write descriptions that support selection"
     `description` is what your selection logic sees before deciding whether to fetch `content`. For LLM-driven querying that means a dense, specific summary the model can reason about. `"Q3 earnings report — revenue, margins, guidance"` works; `"A document"` does not. For non-LLM selection (keyword match, similarity search, etc.) the same principle applies: the description should be informative enough to make the decision without loading the full content.
