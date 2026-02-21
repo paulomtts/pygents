@@ -26,7 +26,6 @@ import pytest
 
 from pygents.agent import Agent
 from pygents.context import ContextItem, ContextPool, ContextQueue
-from pygents.context import _current_context_pool, _current_context_queue
 from pygents.hooks import AgentHook, ContextPoolHook, ContextQueueHook, HookMetadata, ToolHook, TurnHook, hook
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
