@@ -38,7 +38,7 @@ from typing import Any
 
 import pytest
 
-from pygents.context import ContextItem, ContextPool, ContextQueue
+from pygents.context import ContextPool, ContextQueue
 from pygents.context import _current_context_pool, _current_context_queue
 from pygents.hooks import ToolHook
 from pygents.registry import ToolRegistry
@@ -531,7 +531,7 @@ def test_async_gen_tool_injects_context_pool():
 def test_inject_context_deps_handles_unresolvable_hints():
     """_inject_context_deps returns merged unchanged when get_type_hints fails."""
 
-    def bad_hints_fn(x: "NonExistentType") -> None:  # type: ignore[name-defined]
+    def bad_hints_fn(x: "NonExistentType") -> None:  # type: ignore[name-defined]  # noqa: F821
         pass
 
     merged = {"x": 1}
