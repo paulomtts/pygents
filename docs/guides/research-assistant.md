@@ -34,8 +34,6 @@ The code blocks below are meant to be combined into one script.
     async def log_memory(items: list) -> None:
         logger.debug("ContextQueue: %d items", len(items))
 
-    memory = ContextQueue(limit=30, hooks=[log_memory])
-
     DOCUMENTS = {
         "q3-earnings": {
             "description": "Q3 earnings report — revenue $42M (+18% YoY), gross margin 68%, guidance raised",
@@ -68,10 +66,6 @@ The code blocks below are meant to be combined into one script.
     class ContextSelection(BaseModel):
         """IDs of the pooled items directly relevant to the question."""
         relevant_ids: list[str]
-
-    class Answer(BaseModel):
-        """Final answer to the user's question."""
-        answer: str
 
     @tool()
     async def fetch_document(doc_id: str) -> ContextItem:
@@ -121,8 +115,8 @@ The code blocks below are meant to be combined into one script.
         return Turn(answer, kwargs={"relevant_ids": response.content.relevant_ids})
 
     @tool()
-    async def answer(pool: ContextPool, memory: ContextQueue, relevant_ids: list[str]) -> str:
-        """Read selected item content from the pool and generate the final answer."""
+    async def answer(pool: ContextPool, memory: ContextQueue, relevant_ids: list[str]):
+        """Stream the final answer from selected pool content."""
         question = latest_user_message(memory)
         pool_ids = {item.id for item in pool.items}
         selected = [pool.get(id) for id in relevant_ids if id in pool_ids]
@@ -135,9 +129,9 @@ The code blocks below are meant to be combined into one script.
         else:
             context_block = "(no relevant context found)"
 
-        response = await toolkit.asend(
-            response_model=Answer,
-            template=(
+        full_text = ""
+        async for response in toolkit.stream(
+            prompt=(
                 "Answer this question using only the context below. "
                 "Be concise and cite the source id.\n\n"
                 "Question: {{ question }}\n\n"
@@ -145,27 +139,29 @@ The code blocks below are meant to be combined into one script.
             ),
             question=question,
             context_block=context_block,
-        )
-        text = response.content.answer
-        await memory.append(ContextItem(content=f"Assistant: {text}"))
-        return text
+        ):
+            full_text += response.content
+            yield response.content
+
+        await memory.append(ContextItem(content=f"Assistant: {full_text}"))
 
     agent = Agent(
         "researcher",
         "Answers questions from a document pool",
         [fetch_document, think, select_context, answer],
-        context_queue=memory,
+        context_queue=ContextQueue(limit=30, hooks=[log_memory]),
         context_pool=ContextPool(limit=50),
     )
 
     async def ask(question: str, doc_ids: list[str]) -> None:
-        await memory.append(ContextItem(content=f"User: {question}"))
+        await agent.context_queue.append(ContextItem(content=f"User: {question}"))
         for doc_id in doc_ids:
             await agent.put(Turn(fetch_document, kwargs={"doc_id": doc_id}))
         await agent.put(Turn(think))
         async for turn, value in agent.run():
             if isinstance(value, str):
-                print(f"[answer] {value}")
+                print(value, end="", flush=True)
+        print()
 
     asyncio.run(ask(
         question="What caused the November outage and has it been fixed?",
@@ -181,7 +177,7 @@ uv add pygents py-ai-toolkit
 
 ## Setup
 
-Configure the LLM and create the memory queue:
+Configure the LLM:
 
 ```python
 import logging
@@ -189,8 +185,7 @@ import logging
 from py_ai_toolkit import PyAIToolkit
 from py_ai_toolkit.core.domain.interfaces import LLMConfig
 
-from pygents import ContextQueue, ContextQueueHook, hook
-from pygents.context import ContextItem
+from pygents import ContextQueueHook, hook
 
 logger = logging.getLogger(__name__)
 toolkit = PyAIToolkit(main_model_config=LLMConfig())
@@ -198,8 +193,6 @@ toolkit = PyAIToolkit(main_model_config=LLMConfig())
 @hook(ContextQueueHook.AFTER_APPEND)
 async def log_memory(items: list) -> None:
     logger.debug("ContextQueue: %d items", len(items))
-
-memory = ContextQueue(limit=30, hooks=[log_memory])
 ```
 
 !!! info "LLM configuration"
@@ -248,10 +241,6 @@ from pydantic import BaseModel
 class ContextSelection(BaseModel):
     """IDs of the pooled items directly relevant to the question."""
     relevant_ids: list[str]
-
-class Answer(BaseModel):
-    """Final answer to the user's question."""
-    answer: str
 ```
 
 ## The fetch_document tool
@@ -334,12 +323,12 @@ async def select_context(pool: ContextPool, memory: ContextQueue) -> Turn:
 
 ## The answer tool
 
-`pool` and `memory` arrive via injection; `relevant_ids` is passed explicitly because it is computed by `select_context`, not provided by the agent. The reply is appended to memory and returned as a plain string — the agent yields it to the caller.
+`pool` and `memory` arrive via injection; `relevant_ids` is passed explicitly because it is computed by `select_context`, not provided by the agent. The tool is an async generator — it streams each chunk to the caller and appends the full accumulated text to memory when done.
 
 ```python
 @tool()
-async def answer(pool: ContextPool, memory: ContextQueue, relevant_ids: list[str]) -> str:
-    """Read selected item content from the pool and generate the final answer."""
+async def answer(pool: ContextPool, memory: ContextQueue, relevant_ids: list[str]):
+    """Stream the final answer from selected pool content."""
     question = latest_user_message(memory)
     pool_ids = {item.id for item in pool.items}
     selected = [pool.get(id) for id in relevant_ids if id in pool_ids]
@@ -352,9 +341,9 @@ async def answer(pool: ContextPool, memory: ContextQueue, relevant_ids: list[str
     else:
         context_block = "(no relevant context found)"
 
-    response = await toolkit.asend(
-        response_model=Answer,
-        template=(
+    full_text = ""
+    async for response in toolkit.stream(
+        prompt=(
             "Answer this question using only the context below. "
             "Be concise and cite the source id.\n\n"
             "Question: {{ question }}\n\n"
@@ -362,10 +351,11 @@ async def answer(pool: ContextPool, memory: ContextQueue, relevant_ids: list[str
         ),
         question=question,
         context_block=context_block,
-    )
-    text = response.content.answer
-    await memory.append(ContextItem(content=f"Assistant: {text}"))
-    return text
+    ):
+        full_text += response.content
+        yield response.content
+
+    await memory.append(ContextItem(content=f"Assistant: {full_text}"))
 ```
 
 ## Helper
@@ -380,17 +370,17 @@ def latest_user_message(memory: ContextQueue) -> str:
 
 ## Putting it together
 
-Pass `memory` and a fresh `ContextPool` to the agent — this is what makes context injection work. When `think`, `select_context`, and `answer` declare `pool: ContextPool` or `memory: ContextQueue`, the agent provides these exact instances automatically.
+Pass a `ContextQueue` and `ContextPool` directly to the agent — this is what makes context injection work. When `think`, `select_context`, and `answer` declare `pool: ContextPool` or `memory: ContextQueue`, the agent provides these exact instances automatically.
 
 ```python
 import asyncio
-from pygents import Agent, ContextPool, Turn
+from pygents import Agent, ContextPool, ContextQueue, Turn
 
 agent = Agent(
     "researcher",
     "Answers questions from a document pool",
     [fetch_document, think, select_context, answer],
-    context_queue=memory,
+    context_queue=ContextQueue(limit=30, hooks=[log_memory]),
     context_pool=ContextPool(limit=50),
 )
 ```
@@ -404,7 +394,7 @@ Before enqueueing a `think` turn, append the user message to memory. Every tool 
 
 ```python
 async def ask(question: str, doc_ids: list[str]) -> None:
-    await memory.append(ContextItem(content=f"User: {question}"))
+    await agent.context_queue.append(ContextItem(content=f"User: {question}"))
 
     # Pre-load documents — the agent stores each ContextItem automatically
     for doc_id in doc_ids:
@@ -415,7 +405,8 @@ async def ask(question: str, doc_ids: list[str]) -> None:
 
     async for turn, value in agent.run():
         if isinstance(value, str):
-            print(f"[answer] {value}")
+            print(value, end="", flush=True)
+    print()
 
 asyncio.run(ask(
     question="What caused the November outage and has it been fixed?",
@@ -428,7 +419,7 @@ asyncio.run(ask(
 1. **fetch_document × 5** — each returns a `ContextItem`; agent stores all five in the pool
 2. **think** — pool has 5 items; logs the catalogue; routes to `select_context`
 3. **select_context** — sends 5 descriptions (5 short lines) to the LLM; receives `["incident-2024-11"]`; routes to `answer`
-4. **answer** — reads only `incident-2024-11` content from the pool; appends reply to memory; returns string
+4. **answer** — reads only `incident-2024-11` content from the pool; streams reply chunks to the caller; appends the full text to memory when done
 
 For `"What is the Q3 revenue and are there any open security findings?"`, step 3 returns `["q3-earnings", "security-audit"]` — two documents, not five. The other three bodies never leave the pool.
 
@@ -452,7 +443,7 @@ Descriptions are typically 1–2 sentences. A pool of 200 items with 20-word des
 | `fetch_document` | Returns `ContextItem` → agent auto-stores in pool | Produces items |
 | `think` | Reads pool via injection — checks if populated, routes | Guards / routes |
 | `select_context` | Reads pool descriptions via injection — LLM narrows to relevant ids | Selects |
-| `answer` | Reads pool content via injection — only the selected ids | Injects and generates |
+| `answer` | Reads pool content via injection — only the selected ids; streams chunks | Injects and streams |
 | `memory` | Appended to before first turn; tools read via injection; `answer` appends reply | Conversation thread |
 | **Agent** | Stores `ContextItem` outputs; injects `memory` and `pool` into tools | Owns context |
 
