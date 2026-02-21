@@ -12,6 +12,8 @@ Five abstractions:
 - **ContextQueue** provides _working context_ — bounded, branchable window of raw items
 - **ContextPool** accumulates _tool outputs_ — keyed, bounded collection of `ContextItem` objects
 
+For the design rationale behind these abstractions, see [Structural Principles for Agent Systems](whitepaper.md).
+
 ## Install
 
 ```bash
@@ -32,6 +34,7 @@ async def fetch(url: str) -> str:
 
 async def main():
     agent = Agent("fetcher", "Fetches URLs", [fetch])
+    # "fetch" is the tool's registered name; Turn(fetch, ...) also works
     await agent.put(Turn("fetch", kwargs={"url": "https://example.com"}))
 
     async for turn, value in agent.run():
@@ -57,22 +60,6 @@ This is powerful because:
 - **Tools control flow** — the logic lives where the domain knowledge is
 - **Chaining is implicit** — no explicit queue management needed
 - **Conditional branching** — tools can choose different paths based on results
-
-## Dynamic arguments
-
-Callable positional args and kwargs are evaluated when the tool runs, not when the turn is created:
-
-```python
-config = {"retries": 3}
-
-turn = Turn(
-    "fetch",
-    args=["https://example.com"],
-    kwargs={
-        "retries": lambda: config["retries"],  # read at runtime
-    },
-)
-```
 
 ## Streaming
 
@@ -103,6 +90,22 @@ bob = Agent("bob", "Works", [work_tool])
 await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 ```
 
+## Dynamic arguments
+
+Callable positional args and kwargs are evaluated when the tool runs, not when the turn is created:
+
+```python
+config = {"retries": 3}
+
+turn = Turn(
+    "fetch",
+    args=["https://example.com"],
+    kwargs={
+        "retries": lambda: config["retries"],  # read at runtime
+    },
+)
+```
+
 ## Capabilities
 
 | Feature | Description |
@@ -112,8 +115,9 @@ await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
 | Dynamic arguments | Callable positional args and kwargs evaluated at invocation time |
 | Timeouts | Per-turn timeout (default 60s), raises `TurnTimeoutError` |
 | Per-tool locking | `@tool(lock=True)` serializes concurrent runs |
-| Hooks | Async callbacks at turn, agent, tool, memory, and context pool level |
-| Serialization | `to_dict()` / `from_dict()` for turns, agents, and memory |
+| Pause / resume | `agent.pause()` / `agent.resume()` gate the run loop between turns |
+| Hooks | Async callbacks at turn, agent, tool, context queue, and context pool level |
+| Serialization | `to_dict()` / `from_dict()` for turns, agents, context queues, and context pools |
 | ContextQueue | Bounded context window with branching |
 
 ## Registries
@@ -133,7 +137,7 @@ Everything importable from `pygents`:
 | Category | Symbols |
 |----------|---------|
 | Core classes | `Agent`, `Turn`, `ContextQueue` |
-| Context | `ContextPool`, `ContextItem` (from `pygents.context_pool`) |
+| Context | `ContextPool`, `ContextItem` (from `pygents.context`) |
 | Decorators | `@tool`, `@hook` |
 | Enums | `StopReason`, `TurnHook`, `AgentHook`, `ToolHook`, `ContextQueueHook`, `ContextPoolHook` |
 | Protocols | `Tool`, `Hook` |
@@ -141,6 +145,6 @@ Everything importable from `pygents`:
 | Registries | `ToolRegistry`, `AgentRegistry`, `HookRegistry` |
 | Exceptions | `SafeExecutionError`, `WrongRunMethodError`, `TurnTimeoutError`, `UnregisteredToolError`, `UnregisteredAgentError`, `UnregisteredHookError` |
 
-Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), [Context](concepts/context.md).
+Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), [Context](concepts/context.md), [Hooks](concepts/hooks.md).
 
 Guides: [Building an AI Agent](guides/ai-agent.md), [LLM-Driven Context Querying](guides/context-pool.md).

@@ -86,6 +86,42 @@ bool(cq)   # False when empty
 
 `items` returns a copy — mutating it does not affect the context queue.
 
+### Agent integration
+
+Every agent owns a `context_queue` attribute. If you do not pass one at construction, a default `ContextQueue(limit=10)` is created automatically.
+
+When a tool returns a `ContextItem` with `id=None`, the agent automatically appends it to `agent.context_queue` after the turn completes. Items with an `id` set are routed to `agent.context_pool` instead.
+
+```python
+from pygents import Agent, Turn, tool
+from pygents.context import ContextItem
+
+@tool()
+async def summarize(text: str) -> ContextItem:
+    result = ...  # call an LLM, compute a summary, etc.
+    return ContextItem(content=result)  # no id → goes to context_queue
+
+agent = Agent("summarizer", "Summarizes text", [summarize])
+await agent.put(Turn("summarize", kwargs={"text": "..."}))
+
+async for _ in agent.run():
+    pass
+
+print(agent.context_queue.items[0].content)
+```
+
+You can also pass a pre-configured queue:
+
+```python
+agent = Agent("summarizer", "Summarizes text", [summarize], context_queue=ContextQueue(limit=20))
+```
+
+The `context_queue` is branched alongside `context_pool` when calling `agent.branch()`. It is also included in `agent.to_dict()` and restored by `Agent.from_dict()`.
+
+---
+
+The sections below cover branching, hooks, and serialization — advanced features you can return to later.
+
 ### Branching
 
 A child scope inherits the parent's state via `branch()` and then diverges independently:
@@ -153,38 +189,6 @@ Hooks are stored by type and name. `from_dict()` resolves hook names from `HookR
 !!! warning "UnregisteredHookError"
     `ContextQueue.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.
 
-### Agent integration
-
-Every agent owns a `context_queue` attribute. If you do not pass one at construction, a default `ContextQueue(limit=10)` is created automatically.
-
-When a tool returns a `ContextItem` with `id=None`, the agent automatically appends it to `agent.context_queue` after the turn completes. Items with an `id` set are routed to `agent.context_pool` instead.
-
-```python
-from pygents import Agent, Turn, tool
-from pygents.context import ContextItem
-
-@tool()
-async def summarize(text: str) -> ContextItem:
-    result = ...  # call an LLM, compute a summary, etc.
-    return ContextItem(content=result)  # no id → goes to context_queue
-
-agent = Agent("summarizer", "Summarizes text", [summarize])
-await agent.put(Turn("summarize", kwargs={"text": "..."}))
-
-async for _ in agent.run():
-    pass
-
-print(agent.context_queue.items[0].content)
-```
-
-You can also pass a pre-configured queue:
-
-```python
-agent = Agent("summarizer", "Summarizes text", [summarize], context_queue=ContextQueue(limit=20))
-```
-
-The `context_queue` is branched alongside `context_pool` when calling `agent.branch()`. It is also included in `agent.to_dict()` and restored by `Agent.from_dict()`.
-
 ### Errors
 
 | Exception | When |
@@ -204,7 +208,48 @@ The `description` field is designed to support selective retrieval: your code ca
 !!! tip "Write descriptions that support selection"
     `description` is what your selection logic sees before deciding whether to fetch `content`. For LLM-driven querying that means a dense, specific summary the model can reason about. `"Q3 earnings report — revenue, margins, guidance"` works; `"A document"` does not.
 
-### How the agent uses ContextPool
+### Creating a pool
+
+```python
+from pygents.context import ContextItem, ContextPool
+
+pool = ContextPool(limit=50)   # evicts oldest when full
+pool = ContextPool()           # unbounded (limit=None)
+
+await pool.add(ContextItem(id="a", description="First", content=1))
+await pool.add(ContextItem(id="b", description="Second", content=2))
+
+item = pool.get("a")      # lookup by id
+await pool.remove("a")    # remove by id
+await pool.clear()        # remove all
+```
+
+`limit` caps the pool size. When the pool is full and a new item with a different `id` is added, the oldest item (by insertion order) is evicted. Pass `limit=None` (or omit it) for an unbounded pool. `add`, `remove`, and `clear` are async (they fire hooks). `get` is sync.
+
+If an item with the same `id` already exists, it is replaced in-place — no eviction occurs, but `BEFORE_ADD` and `AFTER_ADD` hooks still fire for the replacement.
+
+!!! warning "ValueError"
+    `ContextPool(limit=0)` or any `limit < 1` raises `ValueError`.
+
+!!! warning "KeyError"
+    `get()` and `remove()` raise `KeyError` if the id is not present.
+
+### Reading items
+
+```python
+pool.items       # list copy of all ContextItems
+len(pool)        # number of items
+list(pool)       # iterate
+bool(pool)       # False when empty
+pool.limit       # the configured limit (or None)
+pool.catalogue() # formatted "- [id] description" string, one line per item
+```
+
+`items` returns a copy — mutating it does not affect the pool.
+
+### Agent integration
+
+Every agent owns a `context_pool` attribute. If you do not pass one at construction, a default `ContextPool()` is created automatically.
 
 When a tool returns a `ContextItem` with an `id` set, the agent automatically stores it in its `context_pool` after the turn completes. The tool itself has no knowledge of the pool — it just returns the item.
 
@@ -233,40 +278,27 @@ print(item.content)
 
 Tools that need to read pooled items receive `pool` as a parameter — they use `pool.catalogue()`, `pool.get(id)`, or `pool.items` to access items, and never call `pool.add()`, `pool.remove()`, or `pool.clear()`.
 
-### Creating a pool directly
+You can also pass a pre-configured pool at construction or assign one after:
 
 ```python
-from pygents.context import ContextItem, ContextPool
+from pygents import Agent, ContextPoolHook, hook
+from pygents.context import ContextPool
 
-pool = ContextPool(limit=50)
-await pool.add(ContextItem(id="a", description="First", content=1))
-await pool.add(ContextItem(id="b", description="Second", content=2))
+@hook(ContextPoolHook.AFTER_ADD)
+async def on_item_added(pool, item):
+    print(f"Added {item.id!r}: {item.description}")
 
-item = pool.get("a")      # lookup by id
-await pool.remove("a")    # remove by id
-await pool.clear()        # remove all
+agent = Agent("reader", "Reads documents", [fetch_doc], context_pool=ContextPool(hooks=[on_item_added]))
+
+# or after construction (only while not running):
+agent.context_pool = ContextPool(limit=100, hooks=[on_item_added])
 ```
 
-`limit` caps the pool size. When the pool is full and a new item with a different `id` is added, the oldest item (by insertion order) is evicted. `add`, `remove`, and `clear` are async (they fire hooks). `get` is sync.
+The `context_pool` is branched alongside `context_queue` when calling `agent.branch()`. It is also included in `agent.to_dict()` and restored by `Agent.from_dict()`.
 
-!!! warning "ValueError"
-    `ContextPool(limit=0)` or any `limit < 1` raises `ValueError`.
+---
 
-!!! warning "KeyError"
-    `get()` and `remove()` raise `KeyError` if the id is not present.
-
-### Reading items
-
-```python
-pool.items       # list copy of all ContextItems
-len(pool)        # number of items
-list(pool)       # iterate
-bool(pool)       # False when empty
-pool.limit       # the configured limit (or None)
-pool.catalogue() # formatted "- [id] description" string, one line per item
-```
-
-`items` returns a copy — mutating it does not affect the pool.
+The sections below cover branching, hooks, and serialization — advanced features you can return to later.
 
 ### Branching
 
@@ -279,25 +311,6 @@ child2 = parent.branch(limit=5) # override limit (oldest evicted if needed)
 ```
 
 The child starts with a copy of the parent's items. Mutations to either are independent. No hooks fire during the snapshot copy.
-
-### Passing a ContextPool to Agent
-
-```python
-from pygents import Agent, ContextPoolHook, hook
-from pygents.context import ContextPool
-
-@hook(ContextPoolHook.AFTER_ADD)
-async def on_item_added(pool, item):
-    print(f"Added {item.id!r}: {item.description}")
-
-agent = Agent("reader", "Reads documents", [fetch_doc], context_pool=ContextPool(hooks=[on_item_added]))
-```
-
-You can also assign a new pool directly after construction:
-
-```python
-agent.context_pool = ContextPool(limit=100, hooks=[on_item_added])
-```
 
 ### Hooks
 
@@ -347,7 +360,7 @@ Hooks are stored by type and name (same shape as `ContextQueue`/`Agent`/`Turn`).
 
 | Exception | When |
 |-----------|------|
-| `ValueError` | `limit < 1` at construction |
+| `ValueError` | `limit < 1` at construction, or `add()` with `id=None` or `description=None` |
 | `KeyError` | `get()` or `remove()` with an id not in the pool |
 | `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |
 

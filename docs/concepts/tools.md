@@ -65,6 +65,42 @@ The agent detects which type and calls the right method automatically.
 !!! warning "WrongRunMethodError"
     Using `returning()` on an async generator or `yielding()` on a coroutine raises `WrongRunMethodError`.
 
+## Return values
+
+When a tool runs inside an agent, the return value is routed before the next turn starts
+(see [Turns](turns.md) and [Context](context.md) for the referenced types):
+
+| Return type | Agent behavior |
+|-------------|----------------|
+| `Turn` | Enqueued via `put()` and executed in the same `run()` call; **not yielded to the caller** |
+| `ContextItem` with `id=None` | Appended to `agent.context_queue`; **not yielded to the caller** |
+| `ContextItem` with `id` set | Stored in `agent.context_pool`; **not yielded to the caller** |
+| Anything else | Yielded to the caller as `(turn, value)` |
+
+Tools intended only for internal use return `Turn` or `ContextItem`. Tools that surface results to the caller return a plain value.
+
+```python
+@tool()
+async def decide(context: str) -> Turn:
+    if needs_more_info(context):
+        return Turn(gather, kwargs={"context": context})
+    return Turn(respond, kwargs={"context": context})
+
+@tool()
+async def record(text: str) -> ContextItem:
+    return ContextItem(content=text)  # id=None → appended to context_queue
+
+@tool()
+async def summarize(text: str) -> str:
+    return text[:200]  # plain value → yielded to caller
+```
+
+For async generator tools, each yielded value is routed individually as it is produced — so a single generator turn can yield a mix of `ContextItem`, `Turn`, and plain values.
+
+---
+
+The sections below cover advanced configuration. If you're getting started, continue to [Turns](turns.md).
+
 ## Hooks
 
 Tool hooks fire during invocation. Pass a list of hooks; each must have `type` (e.g. from `@hook(ToolHook.BEFORE_INVOKE)`):
@@ -132,6 +168,7 @@ The `Tool` protocol defines the shape every decorated tool conforms to:
 class Tool(Protocol):
     metadata: ToolMetadata
     fn: Callable[..., Coroutine | AsyncIterator]
+    hooks: list[Hook]
     lock: asyncio.Lock | None
     def __call__(self, *args, **kwargs) -> Any: ...
 ```

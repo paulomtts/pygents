@@ -1,5 +1,7 @@
 # Hooks
 
+Hooks are an advanced feature. If you're just starting out, read [Tools](tools.md), [Turns](turns.md), [Agents](agents.md), and [Context](context.md) first.
+
 Hooks are async callables that run at specific points in the lifecycle of turns, agents, tools, and memory. Use them for logging, metrics, auditing, or injecting fixed context into every invocation.
 
 ## Defining hooks
@@ -60,6 +62,8 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `ON_TURN_TIMEOUT` | Turn timed out | `(agent, turn)` |
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
 | `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
+| `ON_PAUSE` | When the run loop hits a paused gate | `(agent)` |
+| `ON_RESUME` | After the gate is released and before the next turn | `(agent)` |
 
 **Tool** — during tool invocation (see [Tools](tools.md#hooks)):
 
@@ -89,7 +93,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 
 ## Where hooks attach
 
-- **Turns** — `turn._hooks.append(my_hook)`; serialized with the turn by name.
+- **Turns** — `turn.hooks.append(my_hook)`; serialized with the turn by name.
 - **Agents** — `agent.hooks.append(my_hook)`; serialized with the agent by name.
 - **Tools** — `@tool(hooks=[...])`; applied on every invocation of that tool.
 - **ContextQueue** — `ContextQueue(limit=..., hooks=[...])` or `cq.branch(hooks=[...])`; serialized by name.

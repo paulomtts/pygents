@@ -1,6 +1,6 @@
 # Claude Code Skill
 
-This page contains a ready-to-use [Claude Code skill](https://docs.anthropic.com/en/docs/claude-code/skills) that teaches Claude how to build with pygents. Copy it into your project so Claude can help you write tools, agents, and hooks without needing to re-read the docs every time.
+This page contains a ready-to-use [Claude Code skill](https://docs.anthropic.com/en/docs/claude-code/skills) for pygents. **This skill is sufficient to teach any AI agent to write correct pygents code for the core patterns.** It covers all five abstractions with working examples, the value-routing table, all hook types and their call signatures, serialization, and common errors. Advanced features — agent and context branching, and pause/resume — are mentioned briefly but not fully explained; consult the full docs for those.
 
 ## Setup
 
@@ -15,7 +15,7 @@ description: Reference for the pygents async agent orchestration library. Use wh
 
 A lightweight async framework for structuring and running AI agents in Python. Requires Python 3.12+. Zero dependencies.
 
-Five abstractions: **Tools** (how), **Turns** (what), **Agents** (orchestrate), **ContextQueue** (memory-like context always passed to tools), **ContextPool** (large tool outputs retrieved selectively).
+Five abstractions: **Tools** (how), **Turns** (what), **Agents** (orchestrate), **ContextQueue** (bounded context window — passed explicitly as a parameter to tools that need it), **ContextPool** (keyed store for large tool outputs — tools return `ContextItem`s, the agent routes them in).
 
 ## Tools
 
@@ -110,7 +110,7 @@ async for turn, value in agent.run():
 
 Key behaviors:
 - `put(turn)` validates the tool is in the agent's set
-- After each turn: if output is a `Turn` → auto-enqueued; if output is a `ContextItem` → stored in `agent.context_pool`
+- After each turn: if output is a `Turn` → auto-enqueued; if output is a `ContextItem` with `id=None` → appended to `agent.context_queue`; if output is a `ContextItem` with `id` set → stored in `agent.context_pool`
 - Coroutine tools yield one `(turn, value)`. Generator tools yield per value.
 - Attributes are immutable while `run()` is active (`SafeExecutionError`)
 - `run()` cannot be called again while already running (`SafeExecutionError`)
@@ -137,7 +137,7 @@ Bounded window backed by `collections.deque`. Evicts oldest when full. Use for c
 from pygents import ContextQueue
 
 cq = ContextQueue(limit=20)                 # limit must be >= 1
-await cq.append("msg1", "msg2")            # async, variadic
+await cq.append(ContextItem(content="msg1"), ContextItem(content="msg2"))  # async, variadic; ContextItem only
 cq.clear()                                  # remove all items
 cq.items                                    # list copy
 len(cq)                                     # count
@@ -166,7 +166,7 @@ from pygents.context import ContextItem, ContextPool
 
 pool = ContextPool(limit=50)               # limit=None for unbounded
 item = ContextItem(id="doc-1", description="Q3 earnings — revenue, margins", content={"text": "..."})
-await pool.add(item)
+await pool.add(item)                       # ValueError if id=None or description=None
 pool.get("doc-1")                          # lookup by id (sync)
 await pool.remove("doc-1")                 # remove by id
 await pool.clear()                         # remove all
@@ -224,7 +224,7 @@ async def log_pool(pool, item):
 ```
 
 Attach hooks:
-- Turns: `Turn(..., hooks=[h])` or `turn._hooks.append(h)`
+- Turns: `Turn(..., hooks=[h])` or `turn.hooks.append(h)`
 - Agents: `agent.hooks.append(h)`
 - Tools: `@tool(hooks=[h])`
 - ContextQueue: `ContextQueue(limit=N, hooks=[h])` or `cq.branch(hooks=[h])`
@@ -257,6 +257,8 @@ async def log_events(*args, **kwargs): ...
 - `ON_TURN_TIMEOUT(agent, turn)` — turn timeout
 - `BEFORE_PUT(agent, turn)` — before enqueue
 - `AFTER_PUT(agent, turn)` — after enqueue
+- `ON_PAUSE(agent)` — run loop hit a paused gate
+- `ON_RESUME(agent)` — gate released, before next turn
 
 **ToolHook:**
 - `BEFORE_INVOKE(*args, **kwargs)` — about to call
@@ -298,7 +300,7 @@ The agent auto-enqueues any `Turn` returned as output. Chain as many steps as ne
 `to_dict()` / `from_dict()` on `Turn`, `Agent`, `ContextQueue`, and `ContextPool`. Hooks serialize by name, resolved from `HookRegistry` on load.
 
 ```python
-data = agent.to_dict()         # includes queue, current_turn, hooks, context_pool
+data = agent.to_dict()         # includes queue, current_turn, hooks, context_pool, context_queue, is_paused
 agent = Agent.from_dict(data)  # rebuilds from ToolRegistry, AgentRegistry, HookRegistry
 
 data = turn.to_dict()

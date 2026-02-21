@@ -6,6 +6,9 @@ A turn is a unit of work: which tool to run with what arguments. Turns describe 
 
 You can pass the tool by name (string) or by reference (the callable). The turn resolves the tool from `ToolRegistry` at construction time.
 
+!!! warning "UnregisteredToolError"
+    `Turn(name, ...)` raises `UnregisteredToolError` if no tool with that name is found in `ToolRegistry`. Tools must be decorated before any turn references them.
+
 ```python
 from pygents import Turn
 
@@ -39,10 +42,19 @@ The agent's `run()` picks the right method automatically.
 | Attribute | Set | Mutable while running? |
 |-----------|-----|------------------------|
 | `tool`, `args`, `kwargs`, `timeout` | init | No |
-| `metadata` | set internally by framework (`TurnMetadata` dataclass) | Yes (by framework) |
-| `output`, `start_time`, `end_time`, `stop_reason` | by framework during/after run | Yes (by framework). `output` is the return value for coroutine tools, or a **list** of all yielded values for async generator tools. |
+| `output` | by framework after run | Yes. The return value for coroutine tools, or a **list** of all yielded values for async generator tools. `None` on a fresh turn. |
+| `metadata` | by framework during run | Yes. A `TurnMetadata` dataclass with three fields: `start_time`, `end_time`, `stop_reason`. All default to `None` on a fresh turn. |
 
-`start_time`, `end_time`, and `stop_reason` are **not** constructor parameters — they are managed by the framework and set during execution. On a fresh turn they default to `None`. When deserializing with `from_dict()`, the class method restores them directly on the instance.
+Access execution results via the metadata object:
+
+```python
+turn.output                    # the tool's return value (or list for generators)
+turn.metadata.start_time       # datetime set when the turn started
+turn.metadata.end_time         # datetime set when the turn finished
+turn.metadata.stop_reason      # StopReason enum value
+```
+
+`metadata` fields are not constructor parameters — they are managed by the framework and set during execution. `from_dict()` restores them directly.
 
 !!! warning "SafeExecutionError"
     Changing immutable attributes while running raises `SafeExecutionError`. Calling `returning()` or `yielding()` on an already-running turn also raises `SafeExecutionError`.
@@ -56,7 +68,7 @@ Every turn has a timeout (default: 60 seconds). This prevents unbounded executio
 
 For `returning()`, the timeout applies to the single await. For `yielding()`, it applies to the entire run including all yielded values.
 
-The `stop_reason` attribute is a `StopReason` enum (importable from `pygents`):
+`turn.metadata.stop_reason` is a `StopReason` enum (importable from `pygents`):
 
 | Outcome | `stop_reason` |
 |---------|---------------|
@@ -66,7 +78,7 @@ The `stop_reason` attribute is a `StopReason` enum (importable from `pygents`):
 | Cancelled | `StopReason.CANCELLED` |
 
 !!! warning "TurnTimeoutError"
-    When a turn exceeds its timeout, `TurnTimeoutError` is raised and `stop_reason` is set to `TIMEOUT`.
+    When a turn exceeds its timeout, `TurnTimeoutError` is raised and `turn.metadata.stop_reason` is set to `TIMEOUT`.
 
 ## Dynamic args and kwargs
 
@@ -83,6 +95,10 @@ turn = Turn(
 ```
 
 This is especially useful when turns are queued — the lambda captures the latest state when the turn executes, not when it was created.
+
+---
+
+The sections below cover advanced configuration. If you're getting started, continue to [Agents](agents.md).
 
 ## Hooks
 

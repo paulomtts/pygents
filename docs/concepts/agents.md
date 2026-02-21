@@ -41,10 +41,13 @@ async for turn, value in agent.run():
 ```
 
 - `put(turn)` — enqueues a turn (validates tool is in agent's set)
-- `run()` — async generator: consumes turns from the queue, runs them, yields `(turn, value)`, exits when queue is empty
+- `run()` — async generator: consumes turns from the queue, runs them, yields `(turn, value)` as results are produced (not batched), exits when queue is empty. Because results are yielded as produced, you can process partial output, update a UI, or make decisions before a long sequence completes.
 
 !!! warning "ValueError"
     `put(turn)` raises `ValueError` if the turn has no tool or the tool is not in the agent's set.
+
+!!! warning "TurnTimeoutError"
+    If a turn exceeds its timeout during `run()`, `TurnTimeoutError` propagates out of the generator.
 
 **Value routing:**
 
@@ -52,18 +55,15 @@ Each value produced by a turn is routed before the next value (or the next turn)
 
 | Value type | Behavior |
 |------------|----------|
-| `Turn` | Enqueued via `put()` and executed in the same `run()` call |
-| `ContextItem` with `id=None` | Appended to `agent.context_queue` |
-| `ContextItem` with `id` set | Stored in `agent.context_pool` |
-| Anything else | Passed through to the caller; no side-effect |
+| `Turn` | Enqueued via `put()` and executed in the same `run()` call; **not yielded to the caller** |
+| `ContextItem` with `id=None` | Appended to `agent.context_queue`; **not yielded to the caller** |
+| `ContextItem` with `id` set | Stored in `agent.context_pool`; **not yielded to the caller** |
+| Anything else | Yielded to the caller as `(turn, value)`; no routing side-effect |
+
+!!! info "Why Turn and ContextItem are consumed, not yielded"
+    The routing table is what makes tools composable. A tool that returns a `Turn` drives the next step without knowing anything about the queue. A tool that returns a `ContextItem` accumulates state without knowing anything about the pool. The agent is the only thing that sees these types — callers of `run()` only ever receive plain values. This keeps implementation, declaration, and orchestration separate: tools don't reach into the queue or pool directly; the agent handles that from the return value's type alone.
 
 For single-value tools, the returned value is routed once after the turn completes. For async generator tools, each yielded value is routed individually at the moment the consumer resumes — so a generator can yield a mix of `ContextItem`, `Turn`, and plain values in a single turn.
-
-## Streaming
-
-Agents stream by default. The `run()` method is an async generator that yields `(turn, value)` pairs as results are produced — not batched at the end. This means you can process partial results, update UI, or make decisions before a long-running sequence completes.
-
-Single-value tools yield once per turn. Async generator tools yield per value. The agent detects the tool type and calls `returning()` or `yielding()` automatically. The loop exits when the queue is empty.
 
 ## Inter-agent messaging
 
@@ -79,6 +79,10 @@ await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))
 
 !!! warning "UnregisteredAgentError"
     `send_turn` raises `UnregisteredAgentError` if the target agent name is not found in `AgentRegistry`.
+
+---
+
+The sections below cover branching, pausing, hooks, serialization, and other less commonly-used features. If you're getting started, the [Building an AI Agent](../guides/ai-agent.md) guide shows a complete working example.
 
 ## Branching
 
@@ -219,11 +223,11 @@ AgentRegistry.clear()                # empty the registry (useful in tests)
 ## Serialization
 
 ```python
-data = agent.to_dict()       # name, description, tool_names, queue, hooks, context_pool, context_queue, is_paused
+data = agent.to_dict()       # name, description, tool_names, queue, current_turn, hooks, context_pool, context_queue, is_paused
 agent = Agent.from_dict(data)  # rebuilds from registries, repopulates queue, pool, context_queue, and pause state
 ```
 
-Hooks (agent-level, context pool, and context queue) are serialized by name and resolved from `HookRegistry` on deserialization. Context pool items, context queue items, and their hooks are all included in the serialized form. The `is_paused` field is also preserved — a paused agent reconstructed via `from_dict()` stays paused until `resume()` is called.
+The serialized form includes the queued turns, the `current_turn` if a turn was in-flight at serialize time (so it will be replayed on resume), and the full context pool and queue. Hooks (agent-level, context pool, and context queue) are serialized by name and resolved from `HookRegistry` on deserialization. The `is_paused` field is also preserved — a paused agent reconstructed via `from_dict()` stays paused until `resume()` is called.
 
 !!! warning "UnregisteredHookError"
     `Agent.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.
