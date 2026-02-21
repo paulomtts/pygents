@@ -649,7 +649,7 @@ def test_tool_hook_injects_context_queue():
         received.append(memory)
 
     @tool(hooks=[after_hook])
-    async def simple_tool(x: int) -> int:
+    async def hook_inject_cq_tool(x: int) -> int:
         return x * 2
 
     cq = ContextQueue(limit=5)
@@ -657,7 +657,7 @@ def test_tool_hook_injects_context_queue():
     async def run():
         token = _current_context_queue.set(cq)
         try:
-            turn = Turn("simple_tool", kwargs={"x": 3})
+            turn = Turn("hook_inject_cq_tool", kwargs={"x": 3})
             return await turn.returning()
         finally:
             _current_context_queue.reset(token)
@@ -677,7 +677,7 @@ def test_tool_hook_injects_context_pool():
         received.append(pool)
 
     @tool(hooks=[after_pool_hook])
-    async def simple_tool_pool(x: int) -> int:
+    async def hook_inject_cp_tool(x: int) -> int:
         return x + 1
 
     cp = ContextPool()
@@ -685,7 +685,7 @@ def test_tool_hook_injects_context_pool():
     async def run():
         token = _current_context_pool.set(cp)
         try:
-            turn = Turn("simple_tool_pool", kwargs={"x": 7})
+            turn = Turn("hook_inject_cp_tool", kwargs={"x": 7})
             return await turn.returning()
         finally:
             _current_context_pool.reset(token)
@@ -705,11 +705,11 @@ def test_tool_hook_optional_context_queue_falls_back_to_none():
         received.append(memory)
 
     @tool(hooks=[after_opt_hook])
-    async def simple_tool_opt(x: int) -> int:
+    async def hook_inject_opt_cq_tool(x: int) -> int:
         return x
 
     # Do NOT set the context var — it stays unset
-    turn = Turn("simple_tool_opt", kwargs={"x": 5})
+    turn = Turn("hook_inject_opt_cq_tool", kwargs={"x": 5})
     asyncio.run(turn.returning())
     assert received == [None]
 
@@ -725,7 +725,7 @@ def test_tool_hook_explicit_kwarg_not_overridden_by_injection():
         received.append(memory)
 
     @tool(hooks=[after_explicit_hook])
-    async def simple_tool_explicit(x: int) -> int:
+    async def hook_inject_explicit_cq_tool(x: int) -> int:
         return x
 
     injected_cq = ContextQueue(limit=10)
@@ -733,7 +733,7 @@ def test_tool_hook_explicit_kwarg_not_overridden_by_injection():
     async def run():
         token = _current_context_queue.set(injected_cq)
         try:
-            turn = Turn("simple_tool_explicit", kwargs={"x": 2})
+            turn = Turn("hook_inject_explicit_cq_tool", kwargs={"x": 2})
             return await turn.returning()
         finally:
             _current_context_queue.reset(token)
