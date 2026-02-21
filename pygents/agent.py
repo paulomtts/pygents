@@ -102,7 +102,15 @@ class Agent:
         tool_names = [t.metadata.name for t in self.tools]
         return f"Agent(name={self.name!r}, tools={tool_names})"
 
+    def __iter__(self):
+        return iter(self.turns)
+
     # -- utils -----------------------------------------------------------------
+
+    @property
+    def turns(self) -> list[Turn]:
+        """Non-destructive snapshot of the pending turns in the queue."""
+        return self._queue_snapshot()
 
     @property
     def is_paused(self) -> bool:

@@ -17,6 +17,12 @@ append(*items):
 
 clear(): _items.clear().
 
+history(last=None):
+  H1  last=None -> join all items' content as str, newline-separated
+  H2  last=N -> join only the N most-recent items
+  H3  last > len -> same as last=None (no error)
+  H4  Empty queue -> empty string
+
 branch(limit=None, hooks=...):
   B1  limit None -> child limit = self.limit
   B2  limit set -> child limit = that
@@ -551,3 +557,39 @@ def test_items_setter_replaces_queue_contents():
         assert q.items == [_ci("x"), _ci("y")]
 
     asyncio.run(_())
+
+
+# -- history ------------------------------------------------------------------
+
+
+def test_history_all_items():
+    async def _():
+        q = ContextQueue(5)
+        await q.append(_ci("a"), _ci("b"), _ci("c"))
+        assert q.history() == "a\nb\nc"
+
+    asyncio.run(_())
+
+
+def test_history_last_n_items():
+    async def _():
+        q = ContextQueue(5)
+        await q.append(_ci("a"), _ci("b"), _ci("c"), _ci("d"))
+        assert q.history(last=2) == "c\nd"
+
+    asyncio.run(_())
+
+
+def test_history_last_exceeds_length():
+    async def _():
+        q = ContextQueue(5)
+        await q.append(_ci("x"), _ci("y"))
+        assert q.history(last=10) == "x\ny"
+
+    asyncio.run(_())
+
+
+def test_history_empty_queue():
+    q = ContextQueue(5)
+    assert q.history() == ""
+    assert q.history(last=3) == ""

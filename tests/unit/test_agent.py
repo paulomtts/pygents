@@ -53,6 +53,8 @@ branch(name, description=None, tools=None, hooks=...):
   B9  Child is registered in AgentRegistry
   B10 child's context_queue is a branch of the parent's
 
+turns: non-destructive snapshot of the queue as a list[Turn].
+__iter__: iterates over turns.
 _queue_snapshot: non-destructive peek. to_dict/from_dict: queue, current_turn, hooks.
 """
 
@@ -380,6 +382,45 @@ def test_put_rejects_turn_with_unknown_tool():
     object.__setattr__(turn, "tool", fake_tool)
     with pytest.raises(ValueError, match="does not accept tool"):
         asyncio.run(agent.put(turn))
+
+
+# turns / __iter__
+# ---------------------------------------------------------------------------
+
+
+def test_turns_returns_empty_list_when_queue_is_empty():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    assert agent.turns == []
+
+
+def test_turns_returns_snapshot_of_queued_turns():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    t1 = Turn("add_agent", kwargs={"a": 1, "b": 2})
+    t2 = Turn("add_agent", kwargs={"a": 3, "b": 4})
+    asyncio.run(agent.put(t1))
+    asyncio.run(agent.put(t2))
+    assert agent.turns == [t1, t2]
+
+
+def test_turns_is_non_destructive():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    t1 = Turn("add_agent", kwargs={"a": 1, "b": 2})
+    asyncio.run(agent.put(t1))
+    _ = agent.turns
+    assert len(agent.turns) == 1
+
+
+def test_iter_yields_queued_turns():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    t1 = Turn("add_agent", kwargs={"a": 1, "b": 2})
+    t2 = Turn("add_agent", kwargs={"a": 3, "b": 4})
+    asyncio.run(agent.put(t1))
+    asyncio.run(agent.put(t2))
+    assert list(agent) == [t1, t2]
 
 
 def test_agent_registered_after_init():

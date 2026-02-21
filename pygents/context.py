@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, Iterator, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Iterator
 
 if TYPE_CHECKING:
     from pygents.hooks import Hook
@@ -91,6 +91,7 @@ class ContextQueue:
                 )
         from pygents.hooks import ContextQueueHook
         from pygents.registry import HookRegistry
+
         if before_append_hook := HookRegistry.get_by_type(
             ContextQueueHook.BEFORE_APPEND, self.hooks
         ):
@@ -101,6 +102,20 @@ class ContextQueue:
             ContextQueueHook.AFTER_APPEND, self.hooks
         ):
             await after_append_hook(list(self._items))
+
+    def history(self, last: int | None = None) -> str:
+        """Return the queue contents as a newline-joined string.
+
+        Parameters
+        ----------
+        last:
+            If given, only the *last* N items are included.
+            If ``None`` (default), all items are included.
+        """
+        items = self.items
+        if last is not None:
+            items = self.items[-last:]
+        return "\n".join(str(item.content) for item in items)
 
     def clear(self) -> None:
         self._items.clear()
@@ -146,6 +161,7 @@ class ContextQueue:
 
     def to_dict(self) -> dict[str, Any]:
         from pygents.utils import serialize_hooks_by_type
+
         return {
             "limit": self.limit,
             "items": [item.to_dict() for item in self._items],
@@ -155,6 +171,7 @@ class ContextQueue:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ContextQueue:
         from pygents.utils import rebuild_hooks_from_serialization
+
         cq = cls(limit=data["limit"])
         for raw in data.get("items", []):
             cq._items.append(ContextItem.from_dict(raw))
@@ -180,7 +197,9 @@ class ContextPool:
         Lifecycle hooks to attach to this pool.
     """
 
-    def __init__(self, limit: int | None = None, hooks: list["Hook"] | None = None) -> None:
+    def __init__(
+        self, limit: int | None = None, hooks: list["Hook"] | None = None
+    ) -> None:
         if limit is not None and limit < 1:
             raise ValueError("limit must be >= 1")
         self._items: dict[str, ContextItem[Any]] = {}
@@ -205,14 +224,14 @@ class ContextPool:
         Returns an empty string when the pool is empty.
         """
         return "\n".join(
-            f"- [{item.id}] {item.description}"
-            for item in self._items.values()
+            f"- [{item.id}] {item.description}" for item in self._items.values()
         )
 
     # -- hooks ----------------------------------------------------------------
 
     async def _run_hook(self, hook_type: Any, *args: Any) -> None:
         from pygents.registry import HookRegistry
+
         if h := HookRegistry.get_by_type(hook_type, self.hooks):
             await h(self, *args)
 
@@ -220,6 +239,7 @@ class ContextPool:
 
     async def add(self, item: ContextItem[Any]) -> None:
         from pygents.hooks import ContextPoolHook
+
         if item.id is None or item.description is None:
             raise ValueError(
                 "ContextPool requires a ContextItem with both 'id' and 'description' set"
@@ -240,13 +260,15 @@ class ContextPool:
 
     async def remove(self, id: str) -> None:
         from pygents.hooks import ContextPoolHook
-        item = self._items[id]          # raises KeyError early if missing
+
+        item = self._items[id]  # raises KeyError early if missing
         await self._run_hook(ContextPoolHook.BEFORE_REMOVE, item)
         del self._items[id]
         await self._run_hook(ContextPoolHook.AFTER_REMOVE, item)
 
     async def clear(self) -> None:
         from pygents.hooks import ContextPoolHook
+
         await self._run_hook(ContextPoolHook.BEFORE_CLEAR)
         self._items.clear()
         await self._run_hook(ContextPoolHook.AFTER_CLEAR)
@@ -294,6 +316,7 @@ class ContextPool:
 
     def to_dict(self) -> dict[str, Any]:
         from pygents.utils import serialize_hooks_by_type
+
         return {
             "limit": self._limit,
             "items": [item.to_dict() for item in self._items.values()],
@@ -303,10 +326,11 @@ class ContextPool:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ContextPool":
         from pygents.utils import rebuild_hooks_from_serialization
+
         pool = cls(limit=data.get("limit"))
         for item_data in data.get("items", []):
             item = ContextItem.from_dict(item_data)
-            pool._items[item.id] = item   # bypass add() to avoid hooks
+            pool._items[item.id] = item  # bypass add() to avoid hooks
         pool.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return pool
 
