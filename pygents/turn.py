@@ -19,6 +19,7 @@ from pygents.utils import (
     serialize_hooks_by_type,
 )
 
+_QUEUE_SENTINEL = object()
 T = TypeVar("T")
 
 
@@ -194,7 +195,7 @@ class Turn[T]:
                     async for value in self.tool(*runtime_args, **runtime_kwargs):
                         await queue.put(value)
                 finally:
-                    await queue.put(None)
+                    await queue.put(_QUEUE_SENTINEL)
 
             producer = asyncio.create_task(produce())
             deadline = time.monotonic() + self.timeout
@@ -214,7 +215,7 @@ class Turn[T]:
                             f"Turn timed out after {self.timeout}s"
                         ) from None
                     item = await asyncio.wait_for(queue.get(), timeout=remaining)
-                    if item is None:
+                    if item is _QUEUE_SENTINEL:
                         break
                     aggregated.append(item)
                     await self._run_hook(TurnHook.ON_VALUE, item)
