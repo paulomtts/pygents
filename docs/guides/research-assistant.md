@@ -143,7 +143,7 @@ The code blocks below are meant to be combined into one script.
             full_text += response.content
             yield response.content
 
-        await memory.append(ContextItem(content=f"Assistant: {full_text}"))
+        yield ContextItem(content=f"Assistant: {full_text}")  # id=None → auto-appended to context_queue
 
     agent = Agent(
         "researcher",
@@ -323,7 +323,7 @@ async def select_context(pool: ContextPool, memory: ContextQueue) -> Turn:
 
 ## The answer tool
 
-`pool` and `memory` arrive via injection; `relevant_ids` is passed explicitly because it is computed by `select_context`, not provided by the agent. The tool is an async generator — it streams each chunk to the caller and appends the full accumulated text to memory when done.
+`pool` and `memory` arrive via injection; `relevant_ids` is passed explicitly because it is computed by `select_context`, not provided by the agent. The tool is an async generator — it streams each chunk to the caller, then yields a `ContextItem` at the end. The agent sees the `ContextItem` (with `id=None`) and appends it to the context queue automatically.
 
 ```python
 @tool()
@@ -355,7 +355,7 @@ async def answer(pool: ContextPool, memory: ContextQueue, relevant_ids: list[str
         full_text += response.content
         yield response.content
 
-    await memory.append(ContextItem(content=f"Assistant: {full_text}"))
+    yield ContextItem(content=f"Assistant: {full_text}")  # id=None → auto-appended to context_queue
 ```
 
 ## Helper
@@ -419,7 +419,7 @@ asyncio.run(ask(
 1. **fetch_document × 5** — each returns a `ContextItem`; agent stores all five in the pool
 2. **think** — pool has 5 items; logs the catalogue; routes to `select_context`
 3. **select_context** — sends 5 descriptions (5 short lines) to the LLM; receives `["incident-2024-11"]`; routes to `answer`
-4. **answer** — reads only `incident-2024-11` content from the pool; streams reply chunks to the caller; appends the full text to memory when done
+4. **answer** — reads only `incident-2024-11` content from the pool; streams reply chunks to the caller; yields a `ContextItem` at the end which the agent auto-appends to the context queue
 
 For `"What is the Q3 revenue and are there any open security findings?"`, step 3 returns `["q3-earnings", "security-audit"]` — two documents, not five. The other three bodies never leave the pool.
 
