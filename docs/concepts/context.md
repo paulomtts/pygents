@@ -116,6 +116,9 @@ You can also pass a pre-configured queue:
 agent = Agent("summarizer", "Summarizes text", [summarize], context_queue=ContextQueue(limit=20))
 ```
 
+!!! tip
+    A tool that needs to read from the queue can declare a `ContextQueue`-typed parameter — the agent provides its own instance automatically. See [Reading context from tools](#reading-context-from-tools) below.
+
 The `context_queue` is branched alongside `context_pool` when calling `agent.branch()`. It is also included in `agent.to_dict()` and restored by `Agent.from_dict()`.
 
 ---
@@ -276,7 +279,8 @@ item = agent.context_pool.get("report-2024")
 print(item.content)
 ```
 
-Tools that need to read pooled items receive `pool` as a parameter — they use `pool.catalogue()`, `pool.get(id)`, or `pool.items` to access items, and never call `pool.add()`, `pool.remove()`, or `pool.clear()`.
+!!! tip
+    Tools that need to read pooled items declare a `ContextPool`-typed parameter — the agent provides its instance automatically (see [Reading context from tools](#reading-context-from-tools)). They use `pool.catalogue()`, `pool.get(id)`, or `pool.items` to access items, and never call `pool.add()`, `pool.remove()`, or `pool.clear()`.
 
 You can also pass a pre-configured pool at construction or assign one after:
 
@@ -295,6 +299,52 @@ agent.context_pool = ContextPool(limit=100, hooks=[on_item_added])
 ```
 
 The `context_pool` is branched alongside `context_queue` when calling `agent.branch()`. It is also included in `agent.to_dict()` and restored by `Agent.from_dict()`.
+
+---
+
+## Reading context from tools
+
+A tool that needs the agent's `ContextQueue` or `ContextPool` can declare a parameter
+with the corresponding type. The agent provides its own instance automatically when
+the tool runs — no extra wiring needed:
+
+```python
+from pygents import tool, ContextQueue
+from pygents.context import ContextPool
+
+@tool()
+async def summarize(text: str, memory: ContextQueue) -> str:
+    recent = [item.content for item in memory.items[-3:]]
+    ...
+
+@tool()
+async def answer(question: str, pool: ContextPool) -> str:
+    catalogue = pool.catalogue()
+    ...
+```
+
+The type annotation is enough. This removes the need to thread context through
+every `Turn(kwargs={"memory": cq})` in a tool chain.
+
+Use `X | None = None` to make the parameter optional. This lets the tool run both
+inside and outside an agent:
+
+```python
+@tool()
+async def think(question: str, memory: ContextQueue | None = None) -> str:
+    context = [item.content for item in memory.items] if memory else []
+    ...
+```
+
+**Explicit kwargs always win.** If a `Turn` supplies an explicit value for a context
+parameter, that value is used instead of injection:
+
+```python
+Turn("think", kwargs={"question": "...", "memory": some_other_queue})
+```
+
+**Outside an agent**, no injection occurs. A required context parameter raises a standard
+`TypeError`; an optional (`X | None = None`) parameter receives `None`.
 
 ---
 

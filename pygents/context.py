@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Iterator, TYPE_CHECKING
 
@@ -308,3 +309,11 @@ class ContextPool:
             pool._items[item.id] = item   # bypass add() to avoid hooks
         pool.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return pool
+
+
+_current_context_queue: ContextVar["ContextQueue | None"] = ContextVar(
+    "pygents.context_queue", default=None
+)
+_current_context_pool: ContextVar["ContextPool | None"] = ContextVar(
+    "pygents.context_pool", default=None
+)

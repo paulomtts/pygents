@@ -28,6 +28,7 @@ hooks_by_type_for_serialization(hooks):
   HT4  name = getattr(h, "__name__", "hook"); by_type[key].append(name)
 """
 
+import asyncio
 import logging
 
 import pytest
@@ -101,6 +102,24 @@ def test_safe_execution_raises_when_running():
         obj.run_me(1)
     assert "run_me" in str(exc_info.value)
     assert "running" in str(exc_info.value).lower()
+
+
+def test_safe_execution_asyncgen_raises_when_running():
+    @safe_execution
+    async def gen_fn(self):
+        yield 1
+
+    class Obj:
+        _is_running = True
+
+    obj = Obj()
+
+    async def _():
+        async for _ in gen_fn(obj):
+            pass
+
+    with pytest.raises(SafeExecutionError):
+        asyncio.run(_())
 
 
 def test_safe_execution_uses_getattr_so_missing_is_false():

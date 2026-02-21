@@ -409,8 +409,8 @@ def test_turn_hook_append_and_registered():
         pass
 
     turn = Turn("tool_for_hook_test", kwargs={"x": 5})
-    turn._hooks.append(turn_hook)
-    assert turn_hook in turn._hooks
+    turn.hooks.append(turn_hook)
+    assert turn_hook in turn.hooks
     assert HookRegistry.get("turn_hook") is turn_hook
 
 
@@ -425,7 +425,7 @@ def test_turn_hook_custom_registry_name():
         another_turn_hook, "custom_turn_hook", hook_type=TurnHook.AFTER_RUN
     )
     turn = Turn("tool_for_hook_test", kwargs={"x": 5})
-    turn._hooks.append(another_turn_hook)
+    turn.hooks.append(another_turn_hook)
     assert HookRegistry.get("custom_turn_hook") is another_turn_hook
 
 
@@ -437,7 +437,7 @@ def test_turn_to_dict_includes_hooks():
         pass
 
     turn = Turn("tool_for_hook_test", kwargs={"x": 10})
-    turn._hooks.append(serializable_turn_hook)
+    turn.hooks.append(serializable_turn_hook)
     data = turn.to_dict()
     assert data["hooks"] == {"before_run": ["serializable_turn_hook"]}
 
@@ -455,8 +455,8 @@ def test_turn_from_dict_restores_hooks():
         "hooks": {"before_run": ["restorable_turn_hook"]},
     }
     turn = Turn.from_dict(data)
-    assert len(turn._hooks) == 1
-    assert turn._hooks[0] is restorable_turn_hook
+    assert len(turn.hooks) == 1
+    assert turn.hooks[0] is restorable_turn_hook
 
 
 def test_turn_roundtrip_with_hooks():
@@ -468,11 +468,11 @@ def test_turn_roundtrip_with_hooks():
         events.append(id(turn))
 
     turn = Turn("tool_for_hook_test", kwargs={"x": 7})
-    turn._hooks.append(roundtrip_hook)
+    turn.hooks.append(roundtrip_hook)
     data = turn.to_dict()
     restored = Turn.from_dict(data)
-    assert len(restored._hooks) == 1
-    assert restored._hooks[0] is roundtrip_hook
+    assert len(restored.hooks) == 1
+    assert restored.hooks[0] is roundtrip_hook
     asyncio.run(restored.returning())
     assert events == [id(restored)]
     assert restored.output == 14

@@ -221,6 +221,22 @@ def test_hook_registry_get_by_type():
     assert empty is None
 
 
+def test_hook_registry_get_by_type_with_frozenset():
+    from pygents.hooks import AgentHook
+
+    HookRegistry.clear()
+
+    async def my_hook(agent):
+        pass
+
+    object.__setattr__(my_hook, "type", frozenset({AgentHook.BEFORE_TURN}))
+
+    result = HookRegistry.get_by_type(AgentHook.BEFORE_TURN, [my_hook])
+    assert result is my_hook
+    result_miss = HookRegistry.get_by_type(AgentHook.AFTER_TURN, [my_hook])
+    assert result_miss is None
+
+
 def test_hook_registry_get_by_type_returns_first_match():
     from pygents.hooks import TurnHook
 
@@ -239,3 +255,19 @@ def test_hook_registry_get_by_type_returns_first_match():
         TurnHook.BEFORE_RUN, [first_hook, second_hook]
     )
     assert single is first_hook
+
+
+def test_get_by_type_returns_none_for_typeless_hook():
+    """Covers the `ht is None` guard (line 213 in registry.py).
+
+    A plain callable without a `.type` attribute must be treated as
+    non-matching, returning None.
+    """
+    from pygents.hooks import TurnHook
+
+    async def typeless_hook(turn):
+        pass
+
+    # No .type attribute set — getattr returns None → matches() returns False
+    result = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [typeless_hook])
+    assert result is None

@@ -6,7 +6,7 @@ The pattern prevents token explosion: a pool of 50 documents adds only 50 short 
 
 ## The rule
 
-> **Tools never write to the pool.** Writing is the agent's responsibility. A fetch tool simply returns a `ContextItem`; the agent stores it automatically. Tools that need context receive `pool` as a parameter and **read** from it — descriptions for selection, content for injection. That's it.
+> **Tools never write to the pool.** Writing is the agent's responsibility. A fetch tool simply returns a `ContextItem`; the agent stores it automatically. Tools that need context declare a `ContextPool`-typed parameter — the agent provides its own instance automatically — and **read** from it: descriptions for selection, content for injection. That's it.
 
 This means:
 
@@ -140,7 +140,7 @@ class Answer(BaseModel):
 
 ## The think tool
 
-`think` receives the pool as a read-only view of what's been fetched so far. If the pool is empty it routes directly to `answer` with no ids; otherwise it logs the catalogue and hands off to `select_context`. No LLM call, no writes.
+`think` receives the pool and memory queue via typed parameters — the agent injects its own instances automatically. If the pool is empty it routes directly to `answer` with no ids; otherwise it logs the catalogue and hands off to `select_context`. No LLM call, no writes.
 
 ```python
 @tool()
@@ -148,14 +148,12 @@ async def think(pool: ContextPool, memory: ContextQueue) -> Turn:
     """Read pool descriptions, decide if enough context exists, route to select_context."""
     if not pool:
         # Nothing in the pool — answer directly from memory
-        return Turn(answer, kwargs={
-            "pool": pool, "relevant_ids": [], "memory": memory
-        })
+        return Turn(answer, kwargs={"relevant_ids": []})
 
     catalogue = pool.catalogue()
     logger.debug("think: pool has %d items\n%s", len(pool), catalogue)
 
-    return Turn(select_context, kwargs={"pool": pool, "memory": memory})
+    return Turn(select_context)
 ```
 
 ## The select_context tool
@@ -181,14 +179,7 @@ async def select_context(pool: ContextPool, memory: ContextQueue) -> Turn:
         catalogue=catalogue,
     )
 
-    return Turn(
-        answer,
-        kwargs={
-            "pool": pool,
-            "relevant_ids": response.content.relevant_ids,
-            "memory": memory,
-        },
-    )
+    return Turn(answer, kwargs={"relevant_ids": response.content.relevant_ids})
 ```
 
 ## The answer tool
@@ -248,13 +239,11 @@ import asyncio
 from pygents import Agent, Turn
 from pygents.context import ContextPool
 
-pool = ContextPool(limit=50)
-
 agent = Agent(
     "researcher",
     "Answers questions from a document pool",
     [fetch_document, think, select_context, answer],
-    context_pool=pool,
+    context_pool=ContextPool(limit=50),
 )
 
 async def ask(question: str, doc_ids: list[str]) -> None:
@@ -264,8 +253,8 @@ async def ask(question: str, doc_ids: list[str]) -> None:
     for doc_id in doc_ids:
         await agent.put(Turn(fetch_document, kwargs={"doc_id": doc_id}))
 
-    # Reasoning chain reads from the pool — no tool writes to it
-    await agent.put(Turn(think, kwargs={"pool": pool, "memory": memory}))
+    # Reasoning chain — pool and memory are injected automatically
+    await agent.put(Turn(think))
 
     async for turn, value in agent.run():
         if isinstance(value, str):

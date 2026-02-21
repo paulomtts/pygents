@@ -242,6 +242,18 @@ def test_branch_smaller_limit_evicts_oldest():
     assert child.get("c").id == "c"
 
 
+def test_branch_limit_none_removes_limit_from_child():
+    bounded = ContextPool(limit=2)
+    asyncio.run(bounded.add(_item("a")))
+    child = bounded.branch(limit=None)
+    assert child.limit is None
+    # child can exceed the parent's limit without eviction
+    asyncio.run(child.add(_item("b")))
+    asyncio.run(child.add(_item("c")))
+    asyncio.run(child.add(_item("d")))
+    assert len(child) == 4
+
+
 def test_branch_returns_same_type_for_subclass():
     class MyPool(ContextPool):
         pass
@@ -505,3 +517,22 @@ def test_context_pool_hooks_to_dict_from_dict_roundtrip():
     restored = ContextPool.from_dict(data)
     assert len(restored.hooks) == 1
     assert restored.hooks[0] is roundtrip_hook
+
+
+def test_from_dict_restored_hooks_fire():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextPoolHook.BEFORE_ADD)
+    async def cp_restored_hook(pool, item):
+        fired.append(item.id)
+
+    pool = ContextPool(hooks=[cp_restored_hook])
+    data = pool.to_dict()
+    assert "before_add" in data["hooks"]
+
+    restored = ContextPool.from_dict(data)
+    assert len(restored.hooks) == 1
+
+    asyncio.run(restored.add(_item("z")))
+    assert fired == ["z"]
