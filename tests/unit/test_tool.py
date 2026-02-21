@@ -25,8 +25,8 @@ Hooks:
   H1  hooks=None -> wrapper.hooks = []
   H2  hooks=[...] -> wrapper.hooks = list(hooks)
 
-Invocation (coroutine): start_time, BEFORE_INVOKE, await fn, AFTER_INVOKE, end_time in finally.
-Invocation (async gen): start_time, BEFORE_INVOKE, async for + ON_YIELD, AFTER_INVOKE(list of all yielded values), end_time in finally.
+Invocation (coroutine): start_time, BEFORE_INVOKE, await fn, end_time in finally.
+Invocation (async gen): start_time, BEFORE_INVOKE, async for + ON_YIELD, end_time in finally.
   R1  ToolRegistry.register(wrapper) after build
   M1  ToolMetadata.dict(): start_time/end_time -> None or isoformat
 """
@@ -302,60 +302,21 @@ def test_before_invoke_hook_fires_on_coroutine_tool():
     assert events == [("before", 7)]
 
 
-def test_after_invoke_hook_fires_with_result_on_coroutine_tool():
-    events = []
-
-    async def after(result):
-        events.append(("after", result))
-
-    after.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[after])
-    async def double_it(x: int) -> int:
-        return x * 2
-
-    asyncio.run(double_it(5))
-    assert events == [("after", 10)]
-
-
-def test_on_yield_and_after_invoke_hooks_fire_on_async_gen_tool():
+def test_on_yield_hook_fires_on_async_gen_tool():
     yields_seen = []
-    after_seen = []
 
     async def on_yield(value):
         yields_seen.append(value)
 
-    async def after_invoke(values):
-        after_seen.append(values)
-
     on_yield.type = ToolHook.ON_YIELD        # type: ignore[attr-defined]
-    after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
 
-    @tool(hooks=[on_yield, after_invoke])
+    @tool(hooks=[on_yield])
     async def gen_two():
         yield 10
         yield 20
 
     _collect_async(gen_two())
     assert yields_seen == [10, 20]
-    assert after_seen == [[10, 20]]  # list of all yielded values
-
-
-def test_after_invoke_receives_empty_list_when_gen_yields_nothing():
-    after_seen = []
-
-    async def after_invoke(values):
-        after_seen.append(values)
-
-    after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[after_invoke])
-    async def gen_empty():
-        return
-        yield  # make it an async generator
-
-    _collect_async(gen_empty())
-    assert after_seen == [[]]  # empty list, not None
 
 
 # ---------------------------------------------------------------------------

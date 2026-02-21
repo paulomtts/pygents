@@ -536,3 +536,58 @@ def test_from_dict_restored_hooks_fire():
 
     asyncio.run(restored.add(_item("z")))
     assert fired == ["z"]
+
+
+# ---------------------------------------------------------------------------
+# ON_EVICT hook
+# ---------------------------------------------------------------------------
+
+
+def test_on_evict_hook_fires_when_pool_at_limit():
+    HookRegistry.clear()
+    evicted = []
+
+    @hook(ContextPoolHook.ON_EVICT)
+    async def on_evict(pool, item):
+        evicted.append(item.id)
+
+    pool = ContextPool(limit=2, hooks=[on_evict])
+    asyncio.run(pool.add(_item("a")))
+    asyncio.run(pool.add(_item("b")))
+    assert evicted == []
+    asyncio.run(pool.add(_item("c")))
+    assert evicted == ["a"]
+    asyncio.run(pool.add(_item("d")))
+    assert evicted == ["a", "b"]
+
+
+def test_on_evict_not_fired_when_pool_not_full():
+    HookRegistry.clear()
+    evicted = []
+
+    @hook(ContextPoolHook.ON_EVICT)
+    async def on_evict_nf(pool, item):
+        evicted.append(item.id)
+
+    pool = ContextPool(limit=5, hooks=[on_evict_nf])
+    asyncio.run(pool.add(_item("a")))
+    asyncio.run(pool.add(_item("b")))
+    assert evicted == []
+
+
+def test_on_evict_not_fired_when_updating_existing_id():
+    HookRegistry.clear()
+    evicted = []
+
+    @hook(ContextPoolHook.ON_EVICT)
+    async def on_evict_upd(pool, item):
+        evicted.append(item.id)
+
+    pool = ContextPool(limit=2, hooks=[on_evict_upd])
+    asyncio.run(pool.add(_item("a")))
+    asyncio.run(pool.add(_item("b")))
+    # Update "a" in place — no eviction expected
+    updated = ContextItem(id="a", description="updated", content="new")
+    asyncio.run(pool.add(updated))
+    assert evicted == []
+    assert pool.get("a").content == "new"

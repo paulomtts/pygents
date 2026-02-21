@@ -80,7 +80,6 @@ def tool(
                             await _run_hook(ToolHook.ON_YIELD, value)
                             values.append(value)
                             yield value
-                        await _run_hook(ToolHook.AFTER_INVOKE, values)
                     finally:
                         wrapper.metadata.end_time = datetime.now()
         else:
@@ -95,7 +94,6 @@ def tool(
                     try:
                         await _run_hook(ToolHook.BEFORE_INVOKE, *args, **merged)
                         result = await fn(*args, **merged)
-                        await _run_hook(ToolHook.AFTER_INVOKE, result)
                         return result
                     finally:
                         wrapper.metadata.end_time = datetime.now()

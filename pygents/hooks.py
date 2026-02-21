@@ -12,7 +12,7 @@ from pygents.utils import _null_lock
 if TYPE_CHECKING:
     from pygents.agent import Agent
     from pygents.context import ContextItem, ContextPool
-    from pygents.turn import Turn
+    from pygents.turn import StopReason, Turn
 
 
 class TurnHook(str, Enum):
@@ -20,12 +20,12 @@ class TurnHook(str, Enum):
     AFTER_RUN = "after_run"
     ON_TIMEOUT = "on_timeout"
     ON_ERROR = "on_error"
-    ON_VALUE = "on_value"
 
 
 class AgentHook(str, Enum):
     BEFORE_TURN = "before_turn"
     AFTER_TURN = "after_turn"
+    ON_TURN_COMPLETE = "on_turn_complete"
     ON_TURN_VALUE = "on_turn_value"
     ON_TURN_ERROR = "on_turn_error"
     ON_TURN_TIMEOUT = "on_turn_timeout"
@@ -44,6 +44,9 @@ class ToolHook(str, Enum):
 class ContextQueueHook(str, Enum):
     BEFORE_APPEND = "before_append"
     AFTER_APPEND = "after_append"
+    BEFORE_CLEAR = "before_clear"
+    AFTER_CLEAR = "after_clear"
+    ON_EVICT = "on_evict"
 
 
 class ContextPoolHook(str, Enum):
@@ -53,6 +56,7 @@ class ContextPoolHook(str, Enum):
     AFTER_REMOVE  = "after_remove"
     BEFORE_CLEAR  = "before_clear"
     AFTER_CLEAR   = "after_clear"
+    ON_EVICT      = "on_evict"
 
 
 HookType = TurnHook | AgentHook | ToolHook | ContextQueueHook | ContextPoolHook
@@ -105,15 +109,6 @@ def hook(
 
 @overload
 def hook(
-    type: TurnHook.ON_VALUE,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Turn", Any], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
     type: AgentHook.BEFORE_TURN,
     *,
     lock: bool = False,
@@ -162,6 +157,15 @@ def hook(
 
 @overload
 def hook(
+    type: AgentHook.ON_TURN_COMPLETE,
+    *,
+    lock: bool = False,
+    **fixed_kwargs: Any,
+) -> Callable[[Callable[["Agent", "Turn", "StopReason | None"], Awaitable[None]]], Hook]: ...
+
+
+@overload
+def hook(
     type: ToolHook.BEFORE_INVOKE,
     *,
     lock: bool = False,
@@ -184,7 +188,25 @@ def hook(
     *,
     lock: bool = False,
     **fixed_kwargs: Any,
+) -> Callable[[Callable[[list[Any], list[Any]], Awaitable[None]]], Hook]: ...
+
+
+@overload
+def hook(
+    type: ContextQueueHook.BEFORE_CLEAR | ContextQueueHook.AFTER_CLEAR,
+    *,
+    lock: bool = False,
+    **fixed_kwargs: Any,
 ) -> Callable[[Callable[[list[Any]], Awaitable[None]]], Hook]: ...
+
+
+@overload
+def hook(
+    type: ContextQueueHook.ON_EVICT,
+    *,
+    lock: bool = False,
+    **fixed_kwargs: Any,
+) -> Callable[[Callable[["ContextItem[Any]"], Awaitable[None]]], Hook]: ...
 
 
 @overload
@@ -206,6 +228,15 @@ def hook(
     lock: bool = False,
     **fixed_kwargs: Any,
 ) -> Callable[[Callable[["ContextPool"], Awaitable[None]]], Hook]: ...
+
+
+@overload
+def hook(
+    type: ContextPoolHook.ON_EVICT,
+    *,
+    lock: bool = False,
+    **fixed_kwargs: Any,
+) -> Callable[[Callable[["ContextPool", "ContextItem[Any]"], Awaitable[None]]], Hook]: ...
 
 
 @overload

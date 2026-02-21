@@ -21,6 +21,7 @@ agent = Agent("worker", "Doubles numbers", [work])
 | `tools` | required | Tools the agent may run |
 | `context_pool` | `None` | Pre-configured `ContextPool` (or subclass) to use; creates a default `ContextPool()` if not provided (see [Context](context.md#contextpool)) |
 | `context_queue` | `None` | Pre-configured `ContextQueue` to use; creates a default `ContextQueue(limit=10)` if not provided (see [Context](context.md#contextqueue)) |
+| `hooks` | `None` | Initial list of `Hook` objects for this agent; equivalent to constructing then appending to `agent.hooks` |
 
 Each tool must be the same instance as in `ToolRegistry` — the constructor validates this.
 
@@ -180,7 +181,7 @@ Agent hooks fire at specific points during the run loop. Hooks are stored as a l
 |------|------|------|
 | `BEFORE_TURN` | Before consuming next turn from queue | `(agent)` |
 | `AFTER_TURN` | After turn fully processed | `(agent, turn)` |
-| `ON_TURN_VALUE` | Before yielding each result | `(agent, turn, value)` |
+| `ON_TURN_VALUE` | After routing (value already stored in `context_queue`/`context_pool`), before yielding to the caller | `(agent, turn, value)` |
 | `ON_TURN_ERROR` | Turn raised an exception | `(agent, turn, exception)` |
 | `ON_TURN_TIMEOUT` | Turn timed out | `(agent, turn)` |
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |

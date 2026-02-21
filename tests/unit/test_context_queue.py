@@ -41,6 +41,7 @@ import pytest
 
 from pygents.context import ContextItem, ContextQueue
 from pygents.hooks import ContextQueueHook, hook
+from pygents.registry import HookRegistry
 
 
 def _ci(content) -> ContextItem:
@@ -143,13 +144,11 @@ def test_append_successive_eviction():
 
 
 def test_before_append_is_called_on_every_append():
-    from pygents.registry import HookRegistry
-
     HookRegistry.clear()
     calls = []
 
-    async def spy(items):
-        calls.append(list(items))
+    async def spy(incoming, current):
+        calls.append((list(incoming), list(current)))
 
     spy.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
@@ -157,33 +156,15 @@ def test_before_append_is_called_on_every_append():
         mem = ContextQueue(5, hooks=[spy])
         await mem.append(_ci("a"))
         await mem.append(_ci("b"))
-        assert calls == [[], [_ci("a")]]
+        assert calls == [([_ci("a")], []), ([_ci("b")], [_ci("a")])]
         assert mem.items == [_ci("a"), _ci("b")]
 
     asyncio.run(_())
 
 
-def test_before_append_receives_snapshot_of_items_at_call_time():
-    snapshots = []
-
-    async def spy(items):
-        snapshots.append(list(items))
-
-    spy.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
-
-    async def _():
-        mem = ContextQueue(5, hooks=[spy])
-        await mem.append(_ci("a"))
-        await mem.append(_ci("b"))
-        # first call: queue was empty; second: queue had ["a"]
-        assert snapshots == [[], [_ci("a")]]
-
-    asyncio.run(_())
-
-
 def test_before_append_mutation_of_snapshot_does_not_affect_queue():
-    async def mutating(items):
-        items.clear()
+    async def mutating(incoming, current):
+        current.clear()
 
     mutating.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
@@ -195,48 +176,23 @@ def test_before_append_mutation_of_snapshot_does_not_affect_queue():
     asyncio.run(_())
 
 
-def test_before_append_receives_copy():
-    from pygents.registry import HookRegistry
-
-    HookRegistry.clear()
-
-    async def mutating_compact(items):
-        items.clear()
-
-    mutating_compact.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
-
-    async def _():
-        mem = ContextQueue(5, hooks=[mutating_compact])
-        await mem.append(_ci("a"), _ci("b"))
-        assert mem.items == [_ci("a"), _ci("b")]
-
-    asyncio.run(_())
-
-
-def test_no_hooks_does_not_compact():
-    async def _():
-        mem = ContextQueue(5)
-        await mem.append(_ci("a"), _ci("b"), _ci("c"))
-        await mem.append(_ci("d"))
-        assert mem.items == [_ci("a"), _ci("b"), _ci("c"), _ci("d")]
-
-    asyncio.run(_())
-
-
 def test_after_append_hook_called():
     seen = []
 
-    async def after_spy(items):
-        seen.append(list(items))
+    async def after_spy(incoming, current):
+        seen.append((list(incoming), list(current)))
 
     after_spy.type = ContextQueueHook.AFTER_APPEND  # type: ignore[attr-defined]
 
     async def _():
         mem = ContextQueue(5, hooks=[after_spy])
         await mem.append(_ci("a"))
-        assert seen == [[_ci("a")]]
+        assert seen == [([_ci("a")], [_ci("a")])]
         await mem.append(_ci("b"), _ci("c"))
-        assert seen == [[_ci("a")], [_ci("a"), _ci("b"), _ci("c")]]
+        assert seen == [
+            ([_ci("a")], [_ci("a")]),
+            ([_ci("b"), _ci("c")], [_ci("a"), _ci("b"), _ci("c")]),
+        ]
 
     asyncio.run(_())
 
@@ -248,9 +204,81 @@ def test_clear_empties_memory():
     async def _():
         mem = ContextQueue(3)
         await mem.append(_ci("a"), _ci("b"))
-        mem.clear()
+        await mem.clear()
         assert len(mem) == 0
         assert mem.items == []
+
+    asyncio.run(_())
+
+
+def test_before_clear_hook_fires_with_current_items():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextQueueHook.BEFORE_CLEAR)
+    async def before_clear(items):
+        fired.append(list(items))
+
+    async def _():
+        mem = ContextQueue(5, hooks=[before_clear])
+        await mem.append(_ci("a"), _ci("b"))
+        await mem.clear()
+        assert fired == [[_ci("a"), _ci("b")]]
+        assert len(mem) == 0
+
+    asyncio.run(_())
+
+
+def test_after_clear_hook_fires_with_empty_list():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextQueueHook.AFTER_CLEAR)
+    async def after_clear(items):
+        fired.append(list(items))
+
+    async def _():
+        mem = ContextQueue(5, hooks=[after_clear])
+        await mem.append(_ci("a"))
+        await mem.clear()
+        assert fired == [[]]
+
+    asyncio.run(_())
+
+
+def test_on_evict_hook_fires_when_appending_to_full_queue():
+    HookRegistry.clear()
+    evicted = []
+
+    @hook(ContextQueueHook.ON_EVICT)
+    async def on_evict(item):
+        evicted.append(item)
+
+    async def _():
+        mem = ContextQueue(2, hooks=[on_evict])
+        await mem.append(_ci("a"), _ci("b"))
+        assert evicted == []
+        await mem.append(_ci("c"))
+        assert evicted == [_ci("a")]
+        await mem.append(_ci("d"))
+        assert evicted == [_ci("a"), _ci("b")]
+        assert mem.items == [_ci("c"), _ci("d")]
+
+    asyncio.run(_())
+
+
+def test_on_evict_not_fired_when_queue_not_full():
+    HookRegistry.clear()
+    evicted = []
+
+    @hook(ContextQueueHook.ON_EVICT)
+    async def on_evict_nf(item):
+        evicted.append(item)
+
+    async def _():
+        mem = ContextQueue(5, hooks=[on_evict_nf])
+        await mem.append(_ci("a"), _ci("b"), _ci("c"))
+        assert evicted == []
 
     asyncio.run(_())
 
@@ -330,13 +358,11 @@ def test_nested_branch():
 
 
 def test_branch_inherits_hooks():
-    from pygents.registry import HookRegistry
-
     HookRegistry.clear()
     calls = []
 
-    async def spy(items):
-        calls.append(list(items))
+    async def spy(incoming, current):
+        calls.append((list(incoming), list(current)))
 
     spy.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
@@ -345,14 +371,14 @@ def test_branch_inherits_hooks():
         await mem.append(_ci("a"))
         child = mem.branch()
         await child.append(_ci("b"))
-        assert calls == [[], [_ci("a")]]
+        assert calls == [([_ci("a")], []), ([_ci("b")], [_ci("a")])]
         assert child.items == [_ci("a"), _ci("b")]
 
     asyncio.run(_())
 
 
 def test_branch_overrides_hooks():
-    async def keep_last(items):
+    async def keep_last(incoming, current):
         pass
 
     keep_last.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
@@ -368,7 +394,7 @@ def test_branch_overrides_hooks():
 
 
 def test_branch_hooks_none_gives_empty_hooks():
-    async def my_hook(items):
+    async def my_hook(incoming, current):
         pass
 
     my_hook.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
@@ -382,10 +408,10 @@ def test_branch_hooks_none_gives_empty_hooks():
 
 
 def test_branch_with_explicit_hooks_uses_them():
-    async def parent_compact(items):
+    async def parent_compact(incoming, current):
         pass
 
-    async def child_compact(items):
+    async def child_compact(incoming, current):
         pass
 
     parent_compact.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
@@ -500,12 +526,10 @@ def test_roundtrip():
 
 
 def test_roundtrip_with_before_append_hook():
-    from pygents.registry import HookRegistry
-
     HookRegistry.clear()
 
     @hook(ContextQueueHook.BEFORE_APPEND)
-    async def keep_last_two(items):
+    async def keep_last_two(incoming, current):
         pass
 
     async def _():
@@ -524,14 +548,12 @@ def test_roundtrip_with_before_append_hook():
 
 
 def test_from_dict_restored_hooks_fire():
-    from pygents.registry import HookRegistry
-
     HookRegistry.clear()
     fired = []
 
     @hook(ContextQueueHook.BEFORE_APPEND)
-    async def cq_restored_hook(items):
-        fired.append(len(items))
+    async def cq_restored_hook(incoming, current):
+        fired.append((list(incoming), list(current)))
 
     mem = ContextQueue(5, hooks=[cq_restored_hook])
     data = mem.to_dict()
@@ -544,7 +566,7 @@ def test_from_dict_restored_hooks_fire():
         await restored.append(_ci("a"))
 
     asyncio.run(_())
-    assert fired == [0]  # hook fired and saw 0 items before "a" was inserted
+    assert fired == [([_ci("a")], [])]  # hook fired with incoming=["a"], current=[]
 
 
 def test_items_setter_replaces_queue_contents():

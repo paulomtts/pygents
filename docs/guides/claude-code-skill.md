@@ -96,8 +96,9 @@ from pygents import Agent, Turn
 
 agent = Agent("worker", "Doubles numbers", [double, add])
 
-# Optional: pre-configured context pool
+# Optional: pre-configured context pool, hooks
 agent = Agent("worker", "Doubles numbers", [double, add], context_pool=ContextPool(limit=50))
+agent = Agent("worker", "Doubles numbers", [double, add], hooks=[my_hook])
 
 # Enqueue turns
 await agent.put(Turn("double", kwargs={"x": 5}))
@@ -138,7 +139,7 @@ from pygents import ContextQueue
 
 cq = ContextQueue(limit=20)                 # limit must be >= 1
 await cq.append(ContextItem(content="msg1"), ContextItem(content="msg2"))  # async, variadic; ContextItem only
-cq.clear()                                  # remove all items
+await cq.clear()                            # remove all items (async, fires BEFORE_CLEAR/AFTER_CLEAR)
 cq.items                                    # list copy
 len(cq)                                     # count
 bool(cq)                                    # False when empty
@@ -215,8 +216,8 @@ async def log_result(value):
     print(f"Result: {value}")
 
 @hook(ContextQueueHook.AFTER_APPEND)
-async def log_cq(items):
-    print(f"ContextQueue now has {len(items)} items")
+async def log_cq(incoming, current):
+    print(f"ContextQueue now has {len(current)} items")
 
 @hook(ContextPoolHook.AFTER_ADD)
 async def log_pool(pool, item):
@@ -245,15 +246,15 @@ async def log_events(*args, **kwargs): ...
 
 **TurnHook:**
 - `BEFORE_RUN(turn)` — before tool runs
-- `AFTER_RUN(turn)` — after success
+- `AFTER_RUN(turn)` — after clean completion, before agent routing
 - `ON_TIMEOUT(turn)` — turn timed out
 - `ON_ERROR(turn, exception)` — non-timeout error
-- `ON_VALUE(turn, value)` — each yielded value (streaming)
 
 **AgentHook:**
 - `BEFORE_TURN(agent)` — before consuming next turn
-- `AFTER_TURN(agent, turn)` — after turn processed
-- `ON_TURN_VALUE(agent, turn, value)` — before yielding result
+- `AFTER_TURN(agent, turn)` — after turn processed (clean completion only)
+- `ON_TURN_COMPLETE(agent, turn, stop_reason)` — always fires after a turn (clean, error, or timeout); fires in the finally block before AFTER_TURN
+- `ON_TURN_VALUE(agent, turn, value)` — after routing (context already updated), before yielding result
 - `ON_TURN_ERROR(agent, turn, exception)` — turn error
 - `ON_TURN_TIMEOUT(agent, turn)` — turn timeout
 - `BEFORE_PUT(agent, turn)` — before enqueue
@@ -264,11 +265,15 @@ async def log_events(*args, **kwargs): ...
 **ToolHook:**
 - `BEFORE_INVOKE(*args, **kwargs)` — about to call
 - `ON_YIELD(value)` — each yielded value (generators)
-- `AFTER_INVOKE(value)` — return value (coroutine) or list of all yielded values (async gen)
+- `AFTER_INVOKE(result)` — coroutine tool: fires after routing, receives the return value
+- `AFTER_INVOKE([values])` — async gen tool: fires after all values are routed, receives the full list of yielded values
 
 **ContextQueueHook:**
-- `BEFORE_APPEND(items)` — current items (read-only)
-- `AFTER_APPEND(items)` — current items after append
+- `BEFORE_APPEND(incoming, current)` — items about to be added; current queue snapshot
+- `AFTER_APPEND(incoming, current)` — items that were added; queue snapshot after append
+- `BEFORE_CLEAR(items)` — current items before clear
+- `AFTER_CLEAR(items)` — always empty list, fires after clear
+- `ON_EVICT(item)` — oldest item about to be evicted (fires once per eviction)
 
 **ContextPoolHook:**
 - `BEFORE_ADD(pool, item)` — before item inserted
@@ -277,6 +282,7 @@ async def log_events(*args, **kwargs): ...
 - `AFTER_REMOVE(pool, item)` — after item deleted
 - `BEFORE_CLEAR(pool)` — before all items cleared
 - `AFTER_CLEAR(pool)` — after all items cleared
+- `ON_EVICT(pool, item)` — oldest item about to be evicted when pool is at limit
 
 ## Tool-driven flow control
 

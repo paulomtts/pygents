@@ -10,7 +10,7 @@ from pygents.context import (
     _current_context_queue,
 )
 from pygents.errors import SafeExecutionError, TurnTimeoutError
-from pygents.hooks import AgentHook, Hook
+from pygents.hooks import AgentHook, Hook, ToolHook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool
 from pygents.turn import Turn
@@ -75,6 +75,7 @@ class Agent:
         tools: list[Tool],
         context_pool: ContextPool | None = None,
         context_queue: ContextQueue | None = None,
+        hooks: list[Hook] | None = None,
     ):
         for t in tools:
             registered = ToolRegistry.get(t.metadata.name)
@@ -85,7 +86,7 @@ class Agent:
         self.name = name
         self.description = description
         self.tools = tools
-        self.hooks: list[Hook] = []
+        self.hooks: list[Hook] = list(hooks) if hooks else []
 
         self._tool_names = {t.metadata.name for t in tools}
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
@@ -261,20 +262,24 @@ class Agent:
                 try:
                     if inspect.isasyncgenfunction(turn.tool.fn):
                         async for value in turn.yielding():
+                            await self._route_value(value)
                             await self._run_hooks(
                                 AgentHook.ON_TURN_VALUE, self, turn, value
                             )
                             if not isinstance(value, (ContextItem, Turn)):
                                 yield (turn, value)
-                            await self._route_value(value)
+                        if h := HookRegistry.get_by_type(ToolHook.AFTER_INVOKE, turn.tool.hooks):
+                            await h(turn.output)
                     else:
                         output = await turn.returning()
+                        await self._route_value(turn.output)
+                        if h := HookRegistry.get_by_type(ToolHook.AFTER_INVOKE, turn.tool.hooks):
+                            await h(output)
                         await self._run_hooks(
                             AgentHook.ON_TURN_VALUE, self, turn, output
                         )
                         if not isinstance(output, (ContextItem, Turn)):
                             yield (turn, output)
-                        await self._route_value(turn.output)
                 except TurnTimeoutError:
                     await self._run_hooks(AgentHook.ON_TURN_TIMEOUT, self, turn)
                     raise
@@ -291,6 +296,7 @@ class Agent:
                         # Fall back to set() which is context-agnostic.
                         _current_context_queue.set(prev_queue)
                         _current_context_pool.set(prev_pool)
+                    await self._run_hooks(AgentHook.ON_TURN_COMPLETE, self, turn, turn.metadata.stop_reason)
                 await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
                 self._current_turn = None
         finally:

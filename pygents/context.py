@@ -95,13 +95,17 @@ class ContextQueue:
         if before_append_hook := HookRegistry.get_by_type(
             ContextQueueHook.BEFORE_APPEND, self.hooks
         ):
-            await before_append_hook(list(self._items))
+            await before_append_hook(list(items), list(self._items))
         for item in items:
+            if len(self._items) == self.limit:
+                evicted = self._items[0]
+                if h := HookRegistry.get_by_type(ContextQueueHook.ON_EVICT, self.hooks):
+                    await h(evicted)
             self._items.append(item)
         if after_append_hook := HookRegistry.get_by_type(
             ContextQueueHook.AFTER_APPEND, self.hooks
         ):
-            await after_append_hook(list(self._items))
+            await after_append_hook(list(items), list(self._items))
 
     def history(self, last: int | None = None) -> str:
         """Return the queue contents as a newline-joined string.
@@ -117,8 +121,14 @@ class ContextQueue:
             items = self.items[-last:]
         return "\n".join(str(item.content) for item in items)
 
-    def clear(self) -> None:
+    async def clear(self) -> None:
+        from pygents.hooks import ContextQueueHook
+        from pygents.registry import HookRegistry
+        if h := HookRegistry.get_by_type(ContextQueueHook.BEFORE_CLEAR, self.hooks):
+            await h(list(self._items))
         self._items.clear()
+        if h := HookRegistry.get_by_type(ContextQueueHook.AFTER_CLEAR, self.hooks):
+            await h([])
 
     # -- branching ------------------------------------------------------------
 
@@ -250,6 +260,7 @@ class ContextPool:
             and len(self._items) >= self._limit
         ):
             oldest_key = next(iter(self._items))
+            await self._run_hook(ContextPoolHook.ON_EVICT, self._items[oldest_key])
             del self._items[oldest_key]
         await self._run_hook(ContextPoolHook.BEFORE_ADD, item)
         self._items[item.id] = item

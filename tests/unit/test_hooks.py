@@ -137,7 +137,7 @@ def test_hook_memory_hook_type_accepted():
     HookRegistry.clear()
 
     @hook(ContextQueueHook.BEFORE_APPEND)
-    async def before_append(items):
+    async def before_append(incoming, current):
         pass
 
     assert before_append.type == ContextQueueHook.BEFORE_APPEND
@@ -329,6 +329,7 @@ def test_hook_start_time_end_time_set_on_run():
 
 def test_tool_hooks_before_and_after_invoke():
     HookRegistry.clear()
+    AgentRegistry.clear()
     events = []
 
     async def before_hook(*args, **kwargs):
@@ -344,9 +345,14 @@ def test_tool_hooks_before_and_after_invoke():
     async def hooked_tool(x: int) -> int:
         return x + 10
 
-    turn = Turn("hooked_tool", kwargs={"x": 5})
-    result = asyncio.run(turn.returning())
-    assert result == 15
+    agent = Agent("a", "desc", [hooked_tool])
+
+    async def run():
+        await agent.put(Turn("hooked_tool", kwargs={"x": 5}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
     assert events[0][0] == "before"
     assert events[0][2] == {"x": 5}
     assert events[1] == ("after", 15)
@@ -354,6 +360,7 @@ def test_tool_hooks_before_and_after_invoke():
 
 def test_tool_hooks_async_gen_before_on_yield_after():
     HookRegistry.clear()
+    AgentRegistry.clear()
     events = []
 
     async def before_hook(*args, **kwargs):
@@ -374,9 +381,14 @@ def test_tool_hooks_async_gen_before_on_yield_after():
         yield "a"
         yield "b"
 
-    turn = Turn("hooked_gen_tool", kwargs={})
-    items = _collect_async(turn.yielding())
-    assert items == ["a", "b"]
+    agent = Agent("a", "desc", [hooked_gen_tool])
+
+    async def run():
+        await agent.put(Turn("hooked_gen_tool", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
     assert events[0] == ("before", {})
     assert events[1] == ("on_yield", "a")
     assert events[2] == ("on_yield", "b")
@@ -642,6 +654,7 @@ def test_context_pool_after_add_hook_fires():
 
 def test_tool_hook_injects_context_queue():
     HookRegistry.clear()
+    AgentRegistry.clear()
     received = []
 
     @hook(ToolHook.AFTER_INVOKE)
@@ -653,23 +666,21 @@ def test_tool_hook_injects_context_queue():
         return x * 2
 
     cq = ContextQueue(limit=5)
+    agent = Agent("a", "desc", [hook_inject_cq_tool], context_queue=cq)
 
     async def run():
-        token = _current_context_queue.set(cq)
-        try:
-            turn = Turn("hook_inject_cq_tool", kwargs={"x": 3})
-            return await turn.returning()
-        finally:
-            _current_context_queue.reset(token)
+        await agent.put(Turn("hook_inject_cq_tool", kwargs={"x": 3}))
+        async for _ in agent.run():
+            pass
 
-    result = asyncio.run(run())
-    assert result == 6
+    asyncio.run(run())
     assert len(received) == 1
     assert received[0] is cq
 
 
 def test_tool_hook_injects_context_pool():
     HookRegistry.clear()
+    AgentRegistry.clear()
     received = []
 
     @hook(ToolHook.AFTER_INVOKE)
@@ -681,23 +692,22 @@ def test_tool_hook_injects_context_pool():
         return x + 1
 
     cp = ContextPool()
+    agent = Agent("a", "desc", [hook_inject_cp_tool], context_pool=cp)
 
     async def run():
-        token = _current_context_pool.set(cp)
-        try:
-            turn = Turn("hook_inject_cp_tool", kwargs={"x": 7})
-            return await turn.returning()
-        finally:
-            _current_context_pool.reset(token)
+        await agent.put(Turn("hook_inject_cp_tool", kwargs={"x": 7}))
+        async for _ in agent.run():
+            pass
 
-    result = asyncio.run(run())
-    assert result == 8
+    asyncio.run(run())
     assert len(received) == 1
     assert received[0] is cp
 
 
-def test_tool_hook_optional_context_queue_falls_back_to_none():
+def test_tool_hook_optional_context_queue_injected_from_agent():
+    # When AFTER_INVOKE fires through the agent, context_queue is always set.
     HookRegistry.clear()
+    AgentRegistry.clear()
     received = []
 
     @hook(ToolHook.AFTER_INVOKE)
@@ -708,14 +718,21 @@ def test_tool_hook_optional_context_queue_falls_back_to_none():
     async def hook_inject_opt_cq_tool(x: int) -> int:
         return x
 
-    # Do NOT set the context var — it stays unset
-    turn = Turn("hook_inject_opt_cq_tool", kwargs={"x": 5})
-    asyncio.run(turn.returning())
-    assert received == [None]
+    cq = ContextQueue(limit=5)
+    agent = Agent("a", "desc", [hook_inject_opt_cq_tool], context_queue=cq)
+
+    async def run():
+        await agent.put(Turn("hook_inject_opt_cq_tool", kwargs={"x": 5}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert received == [cq]
 
 
 def test_tool_hook_explicit_kwarg_not_overridden_by_injection():
     HookRegistry.clear()
+    AgentRegistry.clear()
     received = []
 
     explicit_cq = ContextQueue(limit=3)
@@ -728,15 +745,12 @@ def test_tool_hook_explicit_kwarg_not_overridden_by_injection():
     async def hook_inject_explicit_cq_tool(x: int) -> int:
         return x
 
-    injected_cq = ContextQueue(limit=10)
+    agent = Agent("a", "desc", [hook_inject_explicit_cq_tool], context_queue=ContextQueue(limit=10))
 
     async def run():
-        token = _current_context_queue.set(injected_cq)
-        try:
-            turn = Turn("hook_inject_explicit_cq_tool", kwargs={"x": 2})
-            return await turn.returning()
-        finally:
-            _current_context_queue.reset(token)
+        await agent.put(Turn("hook_inject_explicit_cq_tool", kwargs={"x": 2}))
+        async for _ in agent.run():
+            pass
 
     asyncio.run(run())
     # explicit fixed_kwarg wins over injection

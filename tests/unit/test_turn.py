@@ -23,7 +23,7 @@ returning():
 yielding():
   Y1  Already running -> SafeExecutionError
   Y2  Tool not async gen -> WrongRunMethodError "use returning()"
-  Y3  Normal: BEFORE_RUN, queue, ON_VALUE per item, yield, COMPLETED, AFTER_RUN, output = aggregated
+  Y3  Normal: BEFORE_RUN, queue, yield, COMPLETED, AFTER_RUN, output = aggregated
   Y4  Timeout -> ON_TIMEOUT, TurnTimeoutError, finally end_time
   Y5  Tool raises -> ERROR, ON_ERROR(e), finally end_time
 
@@ -365,20 +365,6 @@ def test_returning_on_error_hook_raises_replaces_original_exception():
     assert turn.metadata.end_time is not None   # finally ran
 
 
-def test_turn_on_value_hook_called_for_each_yield():
-    values_seen = []
-
-    @hook(TurnHook.ON_VALUE)
-    async def on_value(turn, value):
-        values_seen.append(value)
-
-    turn = Turn("turn_run_async_gen_20", kwargs={})
-    turn.hooks.append(on_value)
-    items = asyncio.run(_collect_async(turn.yielding()))
-    assert items == [10, 20]
-    assert values_seen == [10, 20]
-
-
 def test_yielding_async_rejects_coroutine_tool():
     turn = Turn("turn_run_sync", kwargs={"x": 5})
     with pytest.raises(WrongRunMethodError, match="returning\\(\\)"):
@@ -481,9 +467,6 @@ def test_turn_to_dict_before_run():
     assert data["kwargs"] == {"x": 1}
     assert data["metadata"] == {"start_time": None, "end_time": None, "stop_reason": None}
     assert data["timeout"] == 30
-    assert data["metadata"]["start_time"] is None
-    assert data["metadata"]["end_time"] is None
-    assert data["metadata"]["stop_reason"] is None
     assert data["output"] is None
 
 

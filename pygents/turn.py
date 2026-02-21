@@ -218,7 +218,6 @@ class Turn[T]:
                     if item is _QUEUE_SENTINEL:
                         break
                     aggregated.append(item)
-                    await self._run_hook(TurnHook.ON_VALUE, item)
                     yield item
                 await producer
             except (asyncio.TimeoutError, TimeoutError) as exc:
@@ -236,6 +235,8 @@ class Turn[T]:
                 ) from None
             self.output = aggregated
             self.metadata.stop_reason = StopReason.COMPLETED
+            # AFTER_RUN fires before the agent routes the output; use AgentHook.ON_TURN_VALUE
+            # if you need to observe post-routing context state.
             await self._run_hook(TurnHook.AFTER_RUN)
         except TurnTimeoutError:
             raise
