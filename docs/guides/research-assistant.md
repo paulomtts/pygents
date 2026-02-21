@@ -24,7 +24,7 @@ The code blocks below are meant to be combined into one script.
     from py_ai_toolkit.core.domain.interfaces import LLMConfig
     from pydantic import BaseModel
 
-    from pygents import Agent, ContextPool, ContextQueue, ContextQueueHook, Turn, hook, tool
+    from pygents import Agent, ContextPool, ContextQueue, ContextQueueHook, ToolHook, Turn, hook, tool
     from pygents.context import ContextItem
 
     logger = logging.getLogger(__name__)
@@ -91,12 +91,17 @@ The code blocks below are meant to be combined into one script.
                 return item.content.removeprefix("User:").strip()
         return ""
 
-    @tool()
+    @hook(ToolHook.BEFORE_INVOKE)
+    async def log_pool_state(**kwargs) -> None:
+        pool = kwargs.get("pool")
+        if pool:
+            logger.debug("think: pool has %d items\n%s", len(pool), pool.catalogue())
+
+    @tool(hooks=[log_pool_state])
     async def think(pool: ContextPool, memory: ContextQueue) -> Turn:
         """Check if the pool has context; route to select_context or answer directly."""
         if not pool:
             return Turn(answer, kwargs={"relevant_ids": []})
-        logger.debug("think: pool has %d items\n%s", len(pool), pool.catalogue())
         return Turn(select_context)
 
     @tool()
@@ -287,18 +292,23 @@ async def fetch_document(doc_id: str) -> ContextItem:
 `think` receives the pool and memory via context injection — the agent provides its own instances automatically. It checks whether the pool has anything and routes accordingly. No LLM call, no writes.
 
 ```python
-from pygents import ContextPool, ContextQueue, Turn
+from pygents import ContextPool, ContextQueue, ToolHook, Turn
 
-@tool()
+@hook(ToolHook.BEFORE_INVOKE)
+async def log_pool_state(**kwargs) -> None:
+    pool = kwargs.get("pool")
+    if pool:
+        logger.debug("think: pool has %d items\n%s", len(pool), pool.catalogue())
+
+@tool(hooks=[log_pool_state])
 async def think(pool: ContextPool, memory: ContextQueue) -> Turn:
     """Check if the pool has context; route to select_context or answer directly."""
     if not pool:
         return Turn(answer, kwargs={"relevant_ids": []})
-    logger.debug("think: pool has %d items\n%s", len(pool), pool.catalogue())
     return Turn(select_context)
 ```
 
-When a tool returns a `Turn`, the agent enqueues it and runs it next — that is how the chain `think → select_context → answer` forms without any external orchestration.
+The logging concern lives in the hook, not in the tool body — `think` only routes. When a tool returns a `Turn`, the agent enqueues it and runs it next — that is how the chain `think → select_context → answer` forms without any external orchestration.
 
 ## The select_context tool
 
