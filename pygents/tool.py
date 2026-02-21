@@ -3,48 +3,13 @@ import functools
 import inspect
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, AsyncIterator, Callable, Coroutine, Protocol, TypeVar, cast, get_args, get_type_hints
+from typing import Any, AsyncIterator, Callable, Coroutine, Protocol, TypeVar, cast
 
-from pygents.context import ContextPool, ContextQueue, _current_context_pool, _current_context_queue
 from pygents.hooks import Hook, ToolHook
 from pygents.registry import HookRegistry, ToolRegistry
-from pygents.utils import _null_lock, merge_kwargs, validate_fixed_kwargs
+from pygents.utils import _inject_context_deps, _null_lock, merge_kwargs, validate_fixed_kwargs
 
 T = TypeVar("T", bound=Any)
-
-
-def _injectable_type(hint: Any) -> type | None:
-    """Return ContextQueue or ContextPool if hint is or wraps one; else None."""
-    for candidate in (ContextQueue, ContextPool):
-        if hint is candidate:
-            return candidate
-    for arg in get_args(hint):  # handles Union / X | None
-        for candidate in (ContextQueue, ContextPool):
-            if arg is candidate:
-                return candidate
-    return None
-
-
-def _inject_context_deps(fn: Callable, merged: dict[str, Any]) -> dict[str, Any]:
-    """Inject ContextQueue/ContextPool for typed params not already in merged."""
-    try:
-        hints = get_type_hints(fn)
-    except Exception:
-        return merged
-    injected: dict[str, Any] = {}
-    for name, hint in hints.items():
-        if name == "return" or name in merged:
-            continue
-        t = _injectable_type(hint)
-        if t is ContextQueue:
-            val = _current_context_queue.get()
-            if val is not None:
-                injected[name] = val
-        elif t is ContextPool:
-            val = _current_context_pool.get()
-            if val is not None:
-                injected[name] = val
-    return {**injected, **merged}  # merged (explicit) always wins
 
 
 @dataclass
@@ -110,11 +75,12 @@ def tool(
                     wrapper.metadata.start_time = datetime.now()
                     try:
                         await _run_hook(ToolHook.BEFORE_INVOKE, *args, **merged)
-                        value = None
+                        values: list = []
                         async for value in fn(*args, **merged):
                             await _run_hook(ToolHook.ON_YIELD, value)
+                            values.append(value)
                             yield value
-                        await _run_hook(ToolHook.AFTER_INVOKE, value)
+                        await _run_hook(ToolHook.AFTER_INVOKE, values)
                     finally:
                         wrapper.metadata.end_time = datetime.now()
         else:

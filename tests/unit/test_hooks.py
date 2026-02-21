@@ -25,7 +25,8 @@ from datetime import datetime
 import pytest
 
 from pygents.agent import Agent
-from pygents.context import ContextItem, ContextPool
+from pygents.context import ContextItem, ContextPool, ContextQueue
+from pygents.context import _current_context_pool, _current_context_queue
 from pygents.hooks import AgentHook, ContextPoolHook, ContextQueueHook, HookMetadata, ToolHook, TurnHook, hook
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
@@ -379,7 +380,7 @@ def test_tool_hooks_async_gen_before_on_yield_after():
     assert events[0] == ("before", {})
     assert events[1] == ("on_yield", "a")
     assert events[2] == ("on_yield", "b")
-    assert events[3] == ("after", "b")
+    assert events[3] == ("after", ["a", "b"])
 
 
 def test_tool_with_decorated_hook_registered_in_registry():
@@ -632,3 +633,112 @@ def test_context_pool_after_add_hook_fires():
     pool = ContextPool(hooks=[cp_after_add])
     asyncio.run(pool.add(ContextItem(id="world", description="d", content=2)))
     assert fired == [("after_add", "world", True)]
+
+
+# ---------------------------------------------------------------------------
+# Context injection in hooks
+# ---------------------------------------------------------------------------
+
+
+def test_tool_hook_injects_context_queue():
+    HookRegistry.clear()
+    received = []
+
+    @hook(ToolHook.AFTER_INVOKE)
+    async def after_hook(result, memory: ContextQueue):
+        received.append(memory)
+
+    @tool(hooks=[after_hook])
+    async def simple_tool(x: int) -> int:
+        return x * 2
+
+    cq = ContextQueue(limit=5)
+
+    async def run():
+        token = _current_context_queue.set(cq)
+        try:
+            turn = Turn("simple_tool", kwargs={"x": 3})
+            return await turn.returning()
+        finally:
+            _current_context_queue.reset(token)
+
+    result = asyncio.run(run())
+    assert result == 6
+    assert len(received) == 1
+    assert received[0] is cq
+
+
+def test_tool_hook_injects_context_pool():
+    HookRegistry.clear()
+    received = []
+
+    @hook(ToolHook.AFTER_INVOKE)
+    async def after_pool_hook(result, pool: ContextPool):
+        received.append(pool)
+
+    @tool(hooks=[after_pool_hook])
+    async def simple_tool_pool(x: int) -> int:
+        return x + 1
+
+    cp = ContextPool()
+
+    async def run():
+        token = _current_context_pool.set(cp)
+        try:
+            turn = Turn("simple_tool_pool", kwargs={"x": 7})
+            return await turn.returning()
+        finally:
+            _current_context_pool.reset(token)
+
+    result = asyncio.run(run())
+    assert result == 8
+    assert len(received) == 1
+    assert received[0] is cp
+
+
+def test_tool_hook_optional_context_queue_falls_back_to_none():
+    HookRegistry.clear()
+    received = []
+
+    @hook(ToolHook.AFTER_INVOKE)
+    async def after_opt_hook(result, memory: ContextQueue | None = None):
+        received.append(memory)
+
+    @tool(hooks=[after_opt_hook])
+    async def simple_tool_opt(x: int) -> int:
+        return x
+
+    # Do NOT set the context var — it stays unset
+    turn = Turn("simple_tool_opt", kwargs={"x": 5})
+    asyncio.run(turn.returning())
+    assert received == [None]
+
+
+def test_tool_hook_explicit_kwarg_not_overridden_by_injection():
+    HookRegistry.clear()
+    received = []
+
+    explicit_cq = ContextQueue(limit=3)
+
+    @hook(ToolHook.AFTER_INVOKE, memory=explicit_cq)
+    async def after_explicit_hook(result, memory: ContextQueue):
+        received.append(memory)
+
+    @tool(hooks=[after_explicit_hook])
+    async def simple_tool_explicit(x: int) -> int:
+        return x
+
+    injected_cq = ContextQueue(limit=10)
+
+    async def run():
+        token = _current_context_queue.set(injected_cq)
+        try:
+            turn = Turn("simple_tool_explicit", kwargs={"x": 2})
+            return await turn.returning()
+        finally:
+            _current_context_queue.reset(token)
+
+    asyncio.run(run())
+    # explicit fixed_kwarg wins over injection
+    assert len(received) == 1
+    assert received[0] is explicit_cq

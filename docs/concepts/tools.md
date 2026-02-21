@@ -113,7 +113,7 @@ Tool hooks fire during invocation. Pass a list of hooks; each must have `type` (
 |------|------|------|
 | `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` |
 | `ON_YIELD` | Before each yielded value (async generator tools only) | `(value)` |
-| `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` — the return value or last yielded value |
+| `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` — the return value (coroutine) or list of all yielded values (async gen) |
 
 ```python
 from pygents import tool, hook, ToolHook

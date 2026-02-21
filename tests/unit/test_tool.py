@@ -9,7 +9,7 @@ Decorator entry:
 
 Function type:
   F1  Coroutine function -> coroutine path (single result)
-  F2  Async generator function -> async-gen path (yield loop, ON_YIELD, AFTER_INVOKE with last value)
+  F2  Async generator function -> async-gen path (yield loop, ON_YIELD, AFTER_INVOKE with list of all yielded values)
   F3  Sync function -> TypeError "Tool must be async"
 
 Fixed kwargs:
@@ -26,7 +26,7 @@ Hooks:
   H2  hooks=[...] -> wrapper.hooks = list(hooks)
 
 Invocation (coroutine): start_time, BEFORE_INVOKE, await fn, AFTER_INVOKE, end_time in finally.
-Invocation (async gen): start_time, BEFORE_INVOKE, async for + ON_YIELD, AFTER_INVOKE(last), end_time in finally.
+Invocation (async gen): start_time, BEFORE_INVOKE, async for + ON_YIELD, AFTER_INVOKE(list of all yielded values), end_time in finally.
   R1  ToolRegistry.register(wrapper) after build
   M1  ToolMetadata.dict(): start_time/end_time -> None or isoformat
 """
@@ -325,8 +325,8 @@ def test_on_yield_and_after_invoke_hooks_fire_on_async_gen_tool():
     async def on_yield(value):
         yields_seen.append(value)
 
-    async def after_invoke(value):
-        after_seen.append(value)
+    async def after_invoke(values):
+        after_seen.append(values)
 
     on_yield.type = ToolHook.ON_YIELD        # type: ignore[attr-defined]
     after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
@@ -338,7 +338,24 @@ def test_on_yield_and_after_invoke_hooks_fire_on_async_gen_tool():
 
     _collect_async(gen_two())
     assert yields_seen == [10, 20]
-    assert after_seen == [20]  # last yielded value
+    assert after_seen == [[10, 20]]  # list of all yielded values
+
+
+def test_after_invoke_receives_empty_list_when_gen_yields_nothing():
+    after_seen = []
+
+    async def after_invoke(values):
+        after_seen.append(values)
+
+    after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
+
+    @tool(hooks=[after_invoke])
+    async def gen_empty():
+        return
+        yield  # make it an async generator
+
+    _collect_async(gen_empty())
+    assert after_seen == [[]]  # empty list, not None
 
 
 # ---------------------------------------------------------------------------

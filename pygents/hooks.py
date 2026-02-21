@@ -249,7 +249,9 @@ def hook(
 
         @functools.wraps(fn)
         async def wrapper(*args: Any, **kwargs: Any) -> None:
+            from pygents.utils import _inject_context_deps
             merged = merge_kwargs(fixed_kwargs, kwargs, f"hook {fn.__name__!r}")
+            merged = _inject_context_deps(fn, merged)
             lock_ctx = asyncio_lock if asyncio_lock is not None else _null_lock
             async with lock_ctx:
                 wrapper.metadata.start_time = datetime.now()

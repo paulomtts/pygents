@@ -1,6 +1,6 @@
 import inspect
 import logging
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, Iterable, TypeVar, get_args, get_type_hints
 
 from pygents.errors import SafeExecutionError
 
@@ -86,6 +86,43 @@ def merge_kwargs(
                 label,
             )
     return {**evaluated, **call_kwargs}
+
+
+def _injectable_type(hint: Any) -> type | None:
+    """Return ContextQueue or ContextPool if hint is or wraps one; else None."""
+    from pygents.context import ContextPool, ContextQueue
+    for candidate in (ContextQueue, ContextPool):
+        if hint is candidate:
+            return candidate
+    for arg in get_args(hint):
+        for candidate in (ContextQueue, ContextPool):
+            if arg is candidate:
+                return candidate
+    return None
+
+
+def _inject_context_deps(fn: Callable[..., Any], merged: dict[str, Any]) -> dict[str, Any]:
+    """Inject ContextQueue/ContextPool for typed params not already in merged."""
+    from pygents.context import ContextPool, ContextQueue
+    from pygents.context import _current_context_pool, _current_context_queue
+    try:
+        hints = get_type_hints(fn)
+    except Exception:
+        return merged
+    injected: dict[str, Any] = {}
+    for name, hint in hints.items():
+        if name == "return" or name in merged:
+            continue
+        t = _injectable_type(hint)
+        if t is ContextQueue:
+            val = _current_context_queue.get()
+            if val is not None:
+                injected[name] = val
+        elif t is ContextPool:
+            val = _current_context_pool.get()
+            if val is not None:
+                injected[name] = val
+    return {**injected, **merged}  # merged (explicit) always wins
 
 
 def rebuild_hooks_from_serialization(hooks_data: dict[str, list[str]]) -> list[Any]:

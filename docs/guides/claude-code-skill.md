@@ -233,6 +233,7 @@ Attach hooks:
 Hook decorator options: `@hook(type, lock=True, **fixed_kwargs)`.
 - `lock=True` serializes concurrent runs via `asyncio.Lock`
 - Fixed kwargs merge into every call (call-time overrides)
+- Context injection: declare `param: ContextQueue` or `param: ContextPool` in any hook function — the agent's live instances are injected automatically during turn execution (same as tools). Optional `ContextQueue | None` is safe to use for hooks that may fire outside a turn.
 
 Multi-type hooks — one hook for several events (must accept `*args, **kwargs`):
 ```python
@@ -263,7 +264,7 @@ async def log_events(*args, **kwargs): ...
 **ToolHook:**
 - `BEFORE_INVOKE(*args, **kwargs)` — about to call
 - `ON_YIELD(value)` — each yielded value (generators)
-- `AFTER_INVOKE(value)` — after return/last yield
+- `AFTER_INVOKE(value)` — return value (coroutine) or list of all yielded values (async gen)
 
 **ContextQueueHook:**
 - `BEFORE_APPEND(items)` — current items (read-only)

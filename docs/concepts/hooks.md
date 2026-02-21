@@ -71,7 +71,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 |------|------|------|
 | `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` |
 | `ON_YIELD` | Before each yielded value (async generator tools only) | `(value)` |
-| `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` |
+| `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` — return value for coroutine tools; `list` of all yielded values for async-gen tools |
 
 **ContextQueue** — during append (see [ContextQueue](context.md#hooks)):
 
@@ -126,6 +126,20 @@ async def report(turn, env):
 ```
 
 Use this for environment labels, log handles, or other context that is constant for the hook's lifetime.
+
+## Context injection
+
+Hooks can declare `ContextQueue` or `ContextPool` parameters (including optional `ContextQueue | None`) and receive the agent's active instances automatically — the same injection mechanism used by tools. Injection only occurs when the context vars are live (i.e. during turn execution); hooks that fire outside a turn (e.g. `AgentHook.BEFORE_TURN`, `AgentHook.AFTER_TURN`) will receive `None` for optional parameters and no injection for required ones.
+
+```python
+from pygents import hook, ToolHook
+from pygents.context import ContextQueue
+
+@hook(ToolHook.AFTER_INVOKE)
+async def log_result(value, memory: ContextQueue | None = None):
+    if memory is not None:
+        print(f"Result: {value}, context items: {len(memory)}")
+```
 
 ## Locking
 
