@@ -206,7 +206,7 @@ Hooks are stored by type and name. `from_dict()` resolves hook names from `HookR
 
 A keyed, bounded store for `ContextItem` objects. Each item carries an `id`, a short `description`, and an arbitrary `content` payload. The agent owns writes — tools only read.
 
-The `description` field is designed to support selective retrieval: your code can inspect descriptions to decide which items' `content` to load, without pulling everything at once. The [LLM-Driven Context Querying](../guides/context-pool.md) guide shows one approach using an LLM.
+The `description` field is designed to support selective retrieval: your code can inspect descriptions to decide which items' `content` to load, without pulling everything at once. The [Building a Research Assistant](../guides/research-assistant.md) guide shows one approach using an LLM.
 
 !!! tip "Write descriptions that support selection"
     `description` is what your selection logic sees before deciding whether to fetch `content`. For LLM-driven querying that means a dense, specific summary the model can reason about. `"Q3 earnings report — revenue, margins, guidance"` works; `"A document"` does not.

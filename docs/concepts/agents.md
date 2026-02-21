@@ -82,7 +82,7 @@ await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))
 
 ---
 
-The sections below cover branching, pausing, hooks, serialization, and other less commonly-used features. If you're getting started, the [Building an AI Agent](../guides/ai-agent.md) guide shows a complete working example.
+The sections below cover branching, pausing, hooks, serialization, and other less commonly-used features. If you're getting started, the [Building a Research Assistant](../guides/research-assistant.md) guide shows a complete working example.
 
 ## Branching
 
