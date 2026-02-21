@@ -119,6 +119,7 @@ turn = Turn(
 | Hooks | Async callbacks at turn, agent, tool, context queue, and context pool level |
 | Serialization | `to_dict()` / `from_dict()` for turns, agents, context queues, and context pools |
 | ContextQueue | Bounded context window with branching |
+| Context injection | Typed `ContextQueue` / `ContextPool` parameters are automatically provided by the running agent |
 
 ## Registries
 
@@ -136,8 +137,8 @@ Everything importable from `pygents`:
 
 | Category | Symbols |
 |----------|---------|
-| Core classes | `Agent`, `Turn`, `ContextQueue` |
-| Context | `ContextPool`, `ContextItem` (from `pygents.context`) |
+| Core classes | `Agent`, `Turn`, `ContextQueue`, `ContextPool` |
+| Context | `ContextItem` (from `pygents.context`) |
 | Decorators | `@tool`, `@hook` |
 | Enums | `StopReason`, `TurnHook`, `AgentHook`, `ToolHook`, `ContextQueueHook`, `ContextPoolHook` |
 | Protocols | `Tool`, `Hook` |

@@ -89,7 +89,7 @@ def test_agent_run_with_hooks_and_memory():
     )
 
     turn = Turn("integration_compute", kwargs={"a": 3, "b": 5})
-    turn._hooks.extend([turn_before_run, turn_after_run])
+    turn.hooks.extend([turn_before_run, turn_after_run])
 
     async def run():
         await agent.put(turn)
@@ -263,7 +263,8 @@ def test_generator_tool_yielding_turn_enqueues_and_executes():
     results = asyncio.run(run())
     tool_names = [name for name, _ in results]
     values = [v for _, v in results]
-    assert "gen_turn_tool" in tool_names
+    # Turn yielded by gen_turn_tool is filtered from the stream
+    assert "gen_turn_tool" not in tool_names
     assert "turn_adder" in tool_names
     assert 30 in values
 
@@ -294,11 +295,11 @@ def test_generator_tool_yielding_mixed_values_routes_correctly():
 
     results = asyncio.run(run())
 
-    # gen_mixed_tool yielded 3 values; simple_add yielded 1
+    # gen_mixed_tool yielded 3 values: ContextItem (filtered), Turn (filtered), 99 (passed through)
     gen_values = [v for name, v in results if name == "gen_mixed_tool"]
     add_values = [v for name, v in results if name == "mixed_adder"]
 
-    assert len(gen_values) == 3
+    assert gen_values == [99]
     assert len(add_values) == 1
     assert add_values[0] == 3
 
@@ -348,3 +349,52 @@ def test_agent_multi_type_hook_invoked_for_each_event():
         ("multi_type", 1),
         ("multi_type", 2),
     ]
+
+
+def test_send_turn_routes_to_target_agent_and_executes():
+    AgentRegistry.clear()
+
+    @tool()
+    async def multiply(a: int, b: int) -> int:
+        return a * b
+
+    sender = Agent("sender", "Sends turns", [multiply])
+    receiver = Agent("receiver", "Receives turns", [multiply])
+
+    async def main():
+        await sender.send_turn("receiver", Turn("multiply", kwargs={"a": 3, "b": 4}))
+        out = []
+        async for _, v in receiver.run():
+            out.append(v)
+        return out
+
+    results = asyncio.run(main())
+    assert results == [12]
+    assert sender._queue.empty()
+
+
+def test_context_accumulates_across_multiple_turns_in_single_run():
+    AgentRegistry.clear()
+
+    @tool()
+    async def emit_queue_item() -> ContextItem:
+        return ContextItem(content="queue_val")
+
+    @tool()
+    async def emit_pool_item() -> ContextItem:
+        return ContextItem(content="pool_val", description="a result", id="result_key")
+
+    agent = Agent("ctx_agent", "Context accumulation", [emit_queue_item, emit_pool_item])
+
+    async def run():
+        await agent.put(Turn("emit_queue_item", kwargs={}))
+        await agent.put(Turn("emit_queue_item", kwargs={}))
+        await agent.put(Turn("emit_pool_item", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(agent.context_queue) == 2
+    assert all(item.content == "queue_val" for item in agent.context_queue.items)
+    assert len(agent.context_pool) == 1
+    assert agent.context_pool.get("result_key").content == "pool_val"

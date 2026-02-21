@@ -83,6 +83,18 @@ def test_append_rejects_non_context_item_mixed():
     asyncio.run(_())
 
 
+def test_append_state_unchanged_on_partial_type_error():
+    async def _():
+        mem = ContextQueue(5)
+        await mem.append(_ci("a"))
+        assert len(mem) == 1
+        with pytest.raises(TypeError):
+            await mem.append(_ci("b"), "not-a-context-item")
+        assert len(mem) == 1
+
+    asyncio.run(_())
+
+
 def test_append_single_item():
     async def _():
         mem = ContextQueue(3)
@@ -145,44 +157,32 @@ def test_before_append_is_called_on_every_append():
     asyncio.run(_())
 
 
-def test_before_append_does_not_replace_items():
-    async def keep_last_two(items):
-        pass
+def test_before_append_receives_snapshot_of_items_at_call_time():
+    snapshots = []
 
-    keep_last_two.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    async def spy(items):
+        snapshots.append(list(items))
 
-    async def _():
-        mem = ContextQueue(5, hooks=[keep_last_two])
-        await mem.append(_ci("a"), _ci("b"), _ci("c"), _ci("d"), _ci("e"))
-        assert mem.items == [_ci("a"), _ci("b"), _ci("c"), _ci("d"), _ci("e")]
-        await mem.append(_ci("f"))
-        assert mem.items == [_ci("b"), _ci("c"), _ci("d"), _ci("e"), _ci("f")]
-
-    asyncio.run(_())
-
-
-def test_before_append_observes_only():
-    async def four_items(items):
-        pass
-
-    four_items.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    spy.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(3, hooks=[four_items])
+        mem = ContextQueue(5, hooks=[spy])
         await mem.append(_ci("a"))
-        assert mem.items == [_ci("a")]
+        await mem.append(_ci("b"))
+        # first call: queue was empty; second: queue had ["a"]
+        assert snapshots == [[], [_ci("a")]]
 
     asyncio.run(_())
 
 
-def test_before_append_can_be_no_op():
-    async def clear_all(items):
-        pass
+def test_before_append_mutation_of_snapshot_does_not_affect_queue():
+    async def mutating(items):
+        items.clear()
 
-    clear_all.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
+    mutating.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(3, hooks=[clear_all])
+        mem = ContextQueue(5, hooks=[mutating])
         await mem.append(_ci("a"), _ci("b"))
         assert mem.items == [_ci("a"), _ci("b")]
 
@@ -361,6 +361,20 @@ def test_branch_overrides_hooks():
     asyncio.run(_())
 
 
+def test_branch_hooks_none_gives_empty_hooks():
+    async def my_hook(items):
+        pass
+
+    my_hook.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
+
+    async def _():
+        mem = ContextQueue(5, hooks=[my_hook])
+        child = mem.branch(hooks=None)
+        assert child.hooks == []
+
+    asyncio.run(_())
+
+
 def test_branch_with_explicit_hooks_uses_them():
     async def parent_compact(items):
         pass
@@ -501,3 +515,39 @@ def test_roundtrip_with_before_append_hook():
 
     asyncio.run(_())
     HookRegistry.clear()
+
+
+def test_from_dict_restored_hooks_fire():
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextQueueHook.BEFORE_APPEND)
+    async def cq_restored_hook(items):
+        fired.append(len(items))
+
+    mem = ContextQueue(5, hooks=[cq_restored_hook])
+    data = mem.to_dict()
+    assert "before_append" in data["hooks"]
+
+    restored = ContextQueue.from_dict(data)
+    assert len(restored.hooks) == 1
+
+    async def _():
+        await restored.append(_ci("a"))
+
+    asyncio.run(_())
+    assert fired == [0]  # hook fired and saw 0 items before "a" was inserted
+
+
+def test_items_setter_replaces_queue_contents():
+    """Covers the `items` setter (lines 74-75 in context.py)."""
+
+    async def _():
+        q = ContextQueue(5)
+        await q.append(_ci("a"), _ci("b"))
+        q.items = [_ci("x"), _ci("y")]
+        assert q.items == [_ci("x"), _ci("y")]
+
+    asyncio.run(_())

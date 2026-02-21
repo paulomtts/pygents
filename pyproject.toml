@@ -26,3 +26,9 @@ dev = [
 where = ["."]
 include = ["pygents*"]
 exclude = ["tests*"]
+
+[tool.coverage.run]
+omit = ["pygents/__init__.py"]
+
+[tool.coverage.report]
+omit = ["pygents/__init__.py"]

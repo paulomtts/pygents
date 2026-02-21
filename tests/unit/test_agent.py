@@ -26,8 +26,8 @@ send_turn(agent_name, turn):
 run():
   R1  Already running -> SafeExecutionError
   R2  Loop: get turn from _current_turn or queue; BEFORE_TURN
-  R3  Async gen tool -> yielding(), ON_TURN_VALUE per value, yield (turn, value), _route_value(value) per value
-  R4  Coroutine tool -> returning(), ON_TURN_VALUE, yield (turn, output), _route_value(turn.output)
+  R3  Async gen tool -> yielding(), ON_TURN_VALUE per value, yield (turn, value) only if not ContextItem/Turn, _route_value(value) per value
+  R4  Coroutine tool -> returning(), ON_TURN_VALUE, yield (turn, output) only if not ContextItem/Turn, _route_value(turn.output)
   R5  TurnTimeoutError -> ON_TURN_TIMEOUT, re-raise
   R6  Other exception -> ON_TURN_ERROR, re-raise
   R7  After: AFTER_TURN; clear _current_turn
@@ -405,6 +405,24 @@ def test_put_before_put_and_after_put_hooks_called():
     assert events == [("before_put", "add_agent"), ("after_put", "add_agent")]
 
 
+def test_put_before_put_hook_raises_turn_not_enqueued():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+
+    @hook(AgentHook.BEFORE_PUT)
+    async def rejecting_before_put(agent, turn):
+        raise ValueError("rejected")
+
+    agent = Agent("a", "desc", [add_agent])
+    agent.hooks.append(rejecting_before_put)
+    turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
+
+    with pytest.raises(ValueError, match="rejected"):
+        asyncio.run(agent.put(turn))
+
+    assert agent._queue.empty()   # turn was never enqueued
+
+
 def test_put_then_run_yields_turn_and_result():
     AgentRegistry.clear()
     agent = Agent("a", "desc", [add_agent])
@@ -589,6 +607,28 @@ def test_run_before_turn_after_turn_and_on_turn_value_hooks_called():
     assert items[0][1] == 5
 
 
+def test_run_on_turn_value_hook_raises_propagates_and_cleans_up():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+
+    @hook(AgentHook.ON_TURN_VALUE)
+    async def exploding_on_turn_value(agent, turn, value):
+        raise RuntimeError("value hook failed")
+
+    agent = Agent("a", "desc", [add_agent])
+    agent.hooks.append(exploding_on_turn_value)
+
+    async def run_it():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        async for _ in agent.run():
+            pass
+
+    with pytest.raises(RuntimeError, match="value hook failed"):
+        asyncio.run(run_it())
+
+    assert agent._is_running is False   # finally ran
+
+
 def test_run_on_turn_timeout_hook_called():
     AgentRegistry.clear()
     events = []
@@ -632,6 +672,8 @@ def test_run_on_turn_error_hook_called():
 
 
 def test_run_puts_turn_output_when_turn_returns_turn():
+    # outer returns a Turn (filtered from stream), which is routed and executed.
+    # Only the chained inner turn's result appears in the stream.
     AgentRegistry.clear()
     agent = Agent("a", "desc", [add_agent, returns_turn_agent])
     inner = Turn("add_agent", kwargs={"a": 1, "b": 2})
@@ -645,11 +687,95 @@ def test_run_puts_turn_output_when_turn_returns_turn():
         return out
 
     items = asyncio.run(collect())
-    assert len(items) == 2
-    assert items[0][0] is outer
-    assert items[0][1] is inner
-    assert items[1][0] is inner
-    assert items[1][1] == 3
+    assert len(items) == 1
+    assert items[0][0] is inner
+    assert items[0][1] == 3
+    # routing still worked: outer's output is the inner Turn
+    assert outer.output is inner
+
+
+def test_run_does_not_yield_context_item_to_caller():
+    # ContextItem is routed to context_queue but not yielded to the caller.
+    AgentRegistry.clear()
+    from pygents.context import ContextItem
+
+    @tool()
+    async def returns_ci():
+        return ContextItem(content=42)
+
+    agent = Agent("a", "desc", [returns_ci])
+
+    async def collect():
+        await agent.put(Turn("returns_ci", kwargs={}))
+        out = []
+        async for t, v in agent.run():
+            out.append((t, v))
+        return out
+
+    items = asyncio.run(collect())
+    assert len(items) == 0
+    assert len(agent.context_queue) == 1
+    assert agent.context_queue.items[0].content == 42
+
+
+def test_run_does_not_yield_turn_to_caller():
+    # A tool that returns a Turn causes chaining but the Turn itself is not yielded.
+    AgentRegistry.clear()
+
+    @tool()
+    async def chained_add(a: int, b: int) -> int:
+        return a + b
+
+    @tool()
+    async def spawner() -> Turn:
+        return Turn("chained_add", kwargs={"a": 10, "b": 5})
+
+    agent = Agent("a", "desc", [spawner, chained_add])
+
+    async def collect():
+        await agent.put(Turn("spawner", kwargs={}))
+        out = []
+        async for t, v in agent.run():
+            out.append((t.tool.metadata.name, v))
+        return out
+
+    items = asyncio.run(collect())
+    tool_names = [name for name, _ in items]
+    values = [v for _, v in items]
+    assert "spawner" not in tool_names
+    assert "chained_add" in tool_names
+    assert 15 in values
+
+
+def test_on_turn_value_hook_fires_for_context_item_even_when_filtered():
+    # ON_TURN_VALUE hook must receive the ContextItem even though it is not yielded.
+    AgentRegistry.clear()
+    from pygents.context import ContextItem
+    hook_values = []
+
+    @hook(AgentHook.ON_TURN_VALUE)
+    async def capture_value(agent, turn, value):
+        hook_values.append(value)
+
+    @tool()
+    async def returns_ci_for_hook():
+        return ContextItem(content=99)
+
+    agent = Agent("a", "desc", [returns_ci_for_hook])
+    agent.hooks.append(capture_value)
+
+    async def collect():
+        await agent.put(Turn("returns_ci_for_hook", kwargs={}))
+        out = []
+        async for t, v in agent.run():
+            out.append(v)
+        return out
+
+    items = asyncio.run(collect())
+    assert len(items) == 0
+    assert len(hook_values) == 1
+    assert isinstance(hook_values[0], ContextItem)
+    assert hook_values[0].content == 99
 
 
 # ---------------------------------------------------------------------------
@@ -859,6 +985,19 @@ def test_branch_overrides_hooks():
     parent = Agent("parent", "Desc", [add_agent])
     parent.hooks.append(parent_hook)
     child = parent.branch("child", hooks=[])
+    assert child.hooks == []
+
+
+def test_branch_hooks_none_gives_empty_hooks():
+    AgentRegistry.clear()
+
+    @hook(AgentHook.BEFORE_TURN)
+    async def some_hook(agent):
+        pass
+
+    parent = Agent("parent", "Desc", [add_agent])
+    parent.hooks.append(some_hook)
+    child = parent.branch("child", hooks=None)
     assert child.hooks == []
 
 
@@ -1139,18 +1278,14 @@ def test_pause_does_not_interrupt_running_turn():
     asyncio.run(main())
 
 
-def test_to_dict_is_paused_true_when_paused():
-    # PR14
+def test_to_dict_captures_pause_state():
+    # PR14/PR15
     AgentRegistry.clear()
     agent = Agent("a", "desc", [add_agent])
+    assert agent.to_dict()["is_paused"] is False
     agent.pause()
     assert agent.to_dict()["is_paused"] is True
-
-
-def test_to_dict_is_paused_false_when_not_paused():
-    # PR15
-    AgentRegistry.clear()
-    agent = Agent("a", "desc", [add_agent])
+    agent.resume()
     assert agent.to_dict()["is_paused"] is False
 
 
@@ -1224,3 +1359,106 @@ def test_setattr_allowed_after_resume():
     agent.resume()
     agent.name = "new_name"   # must not raise
     assert agent.name == "new_name"
+
+
+# ---------------------------------------------------------------------------
+# Context injection via agent.run()
+# ---------------------------------------------------------------------------
+
+
+def test_agent_run_injects_context_queue_into_tool():
+    AgentRegistry.clear()
+    received = []
+
+    @tool()
+    async def reads_queue(memory: ContextQueue) -> int:
+        received.append(memory)
+        return len(memory)
+
+    agent = Agent("a", "desc", [reads_queue])
+
+    async def run():
+        await agent.put(Turn("reads_queue", kwargs={}))
+        async for _, v in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(received) == 1
+    assert received[0] is agent.context_queue
+
+
+def test_agent_run_injects_context_pool_into_tool():
+    AgentRegistry.clear()
+    received = []
+
+    from pygents.context import ContextPool
+
+    @tool()
+    async def reads_pool(pool: ContextPool) -> int:
+        received.append(pool)
+        return len(pool)
+
+    agent = Agent("a", "desc", [reads_pool])
+
+    async def run():
+        await agent.put(Turn("reads_pool", kwargs={}))
+        async for _, v in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(received) == 1
+    assert received[0] is agent.context_pool
+
+
+def test_two_agents_each_inject_their_own_context_queue():
+    AgentRegistry.clear()
+    received = []
+
+    @tool()
+    async def capture_queue(memory: ContextQueue) -> int:
+        received.append(memory)
+        return 0
+
+    queue_a = ContextQueue(limit=5)
+    queue_b = ContextQueue(limit=5)
+    agent_a = Agent("a", "desc", [capture_queue], context_queue=queue_a)
+    agent_b = Agent("b", "desc", [capture_queue], context_queue=queue_b)
+
+    async def run():
+        await agent_a.put(Turn("capture_queue", kwargs={}))
+        await agent_b.put(Turn("capture_queue", kwargs={}))
+        async for _ in agent_a.run():
+            pass
+        async for _ in agent_b.run():
+            pass
+
+    asyncio.run(run())
+    assert len(received) == 2
+    assert received[0] is queue_a
+    assert received[1] is queue_b
+
+
+def test_context_var_reset_after_each_turn():
+    """ContextVar is reset after a turn; a subsequent standalone call gets no injection."""
+    AgentRegistry.clear()
+    from pygents.context import _current_context_queue
+
+    @tool()
+    async def check_injected(memory: ContextQueue | None = None) -> bool:
+        return memory is not None
+
+    agent = Agent("a", "desc", [check_injected])
+
+    async def run():
+        await agent.put(Turn("check_injected", kwargs={}))
+        results = []
+        async for _, v in agent.run():
+            results.append(v)
+        return results
+
+    # While agent runs, injection is True
+    results = asyncio.run(run())
+    assert results == [True]
+
+    # After run(), ContextVar should be reset (default None)
+    assert _current_context_queue.get() is None

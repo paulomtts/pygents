@@ -15,7 +15,7 @@ description: Reference for the pygents async agent orchestration library. Use wh
 
 A lightweight async framework for structuring and running AI agents in Python. Requires Python 3.12+. Zero dependencies.
 
-Five abstractions: **Tools** (how), **Turns** (what), **Agents** (orchestrate), **ContextQueue** (bounded context window — passed explicitly as a parameter to tools that need it), **ContextPool** (keyed store for large tool outputs — tools return `ContextItem`s, the agent routes them in).
+Five abstractions: **Tools** (how), **Turns** (what), **Agents** (orchestrate), **ContextQueue** (bounded context window — declare a typed parameter and the agent injects its instance automatically), **ContextPool** (keyed store for large tool outputs — tools return `ContextItem`s, the agent routes them in; same typed-parameter injection for reading).
 
 ## Tools
 
@@ -131,7 +131,7 @@ Registry: `AgentRegistry.get(name)`, `.clear()`.
 
 ## ContextQueue
 
-Bounded window backed by `collections.deque`. Evicts oldest when full. Use for context that should **always be present** when a tool runs — conversation history, system instructions, recent events. Pass it explicitly as a tool argument; every tool that needs it receives the same instance.
+Bounded window backed by `collections.deque`. Evicts oldest when full. Use for context that should **always be present** when a tool runs — conversation history, system instructions, recent events. Declare `param: ContextQueue` in the tool signature — the agent provides its own instance automatically (context injection). No explicit wiring needed.
 
 ```python
 from pygents import ContextQueue
@@ -174,7 +174,7 @@ pool.catalogue()                           # "- [id] description" string, one li
 pool.items                                 # list of all ContextItems
 ```
 
-**The agent owns writes.** When a tool returns a `ContextItem`, the agent stores it in `agent.context_pool` automatically. Tools only read from the pool.
+**The agent owns writes.** When a tool returns a `ContextItem`, the agent stores it in `agent.context_pool` automatically. Tools only read from the pool — declare `param: ContextPool` and the agent injects its instance automatically (same injection as `ContextQueue`).
 
 ```python
 @tool()
@@ -285,15 +285,15 @@ The core pattern: tools return `Turn` objects to control what runs next.
 @tool()
 async def think(cq: ContextQueue, pool: ContextPool) -> Turn:
     if not pool:
-        return Turn(respond, kwargs={"cq": cq})
-    return Turn(select_and_answer, kwargs={"cq": cq, "pool": pool})
+        return Turn(respond)              # cq injected automatically
+    return Turn(select_and_answer)        # cq and pool injected automatically
 
 @tool()
 async def respond(cq: ContextQueue) -> str:
     return "Final answer"
 ```
 
-The agent auto-enqueues any `Turn` returned as output. Chain as many steps as needed.
+The agent auto-enqueues any `Turn` returned as output. Chain as many steps as needed. Because `ContextQueue` and `ContextPool` parameters are injected by the agent, returned `Turn`s rarely need explicit kwargs for context — only non-context arguments need to be passed.
 
 ## Serialization
 

@@ -38,8 +38,11 @@ from typing import Any
 
 import pytest
 
+from pygents.context import ContextItem, ContextPool, ContextQueue
+from pygents.context import _current_context_pool, _current_context_queue
+from pygents.hooks import ToolHook
 from pygents.registry import ToolRegistry
-from pygents.tool import ToolMetadata, tool
+from pygents.tool import ToolMetadata, _inject_context_deps, tool
 
 
 def test_decorated_function_preserves_behavior():
@@ -281,3 +284,256 @@ def _collect_async(agen):
         return out
 
     return asyncio.run(run())
+
+
+def test_before_invoke_hook_fires_on_coroutine_tool():
+    events = []
+
+    async def before(x):
+        events.append(("before", x))
+
+    before.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
+
+    @tool(hooks=[before])
+    async def add_one(x: int) -> int:
+        return x + 1
+
+    asyncio.run(add_one(7))
+    assert events == [("before", 7)]
+
+
+def test_after_invoke_hook_fires_with_result_on_coroutine_tool():
+    events = []
+
+    async def after(result):
+        events.append(("after", result))
+
+    after.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
+
+    @tool(hooks=[after])
+    async def double_it(x: int) -> int:
+        return x * 2
+
+    asyncio.run(double_it(5))
+    assert events == [("after", 10)]
+
+
+def test_on_yield_and_after_invoke_hooks_fire_on_async_gen_tool():
+    yields_seen = []
+    after_seen = []
+
+    async def on_yield(value):
+        yields_seen.append(value)
+
+    async def after_invoke(value):
+        after_seen.append(value)
+
+    on_yield.type = ToolHook.ON_YIELD        # type: ignore[attr-defined]
+    after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
+
+    @tool(hooks=[on_yield, after_invoke])
+    async def gen_two():
+        yield 10
+        yield 20
+
+    _collect_async(gen_two())
+    assert yields_seen == [10, 20]
+    assert after_seen == [20]  # last yielded value
+
+
+# ---------------------------------------------------------------------------
+# Context injection tests
+# ---------------------------------------------------------------------------
+
+
+def test_tool_injects_context_queue_when_var_is_set():
+    received = []
+
+    @tool()
+    async def needs_queue(x: int, memory: ContextQueue) -> int:
+        received.append(memory)
+        return x
+
+    cq = ContextQueue(limit=5)
+
+    async def run():
+        token = _current_context_queue.set(cq)
+        try:
+            return await needs_queue(x=3)
+        finally:
+            _current_context_queue.reset(token)
+
+    result = asyncio.run(run())
+    assert result == 3
+    assert len(received) == 1
+    assert received[0] is cq
+
+
+def test_tool_injects_context_pool_when_var_is_set():
+    received = []
+
+    @tool()
+    async def needs_pool(x: int, pool: ContextPool) -> int:
+        received.append(pool)
+        return x
+
+    cp = ContextPool()
+
+    async def run():
+        token = _current_context_pool.set(cp)
+        try:
+            return await needs_pool(x=7)
+        finally:
+            _current_context_pool.reset(token)
+
+    result = asyncio.run(run())
+    assert result == 7
+    assert len(received) == 1
+    assert received[0] is cp
+
+
+def test_tool_injects_optional_context_queue_when_var_is_set():
+    received = []
+
+    @tool()
+    async def optional_queue(x: int, memory: ContextQueue | None = None) -> int:
+        received.append(memory)
+        return x
+
+    cq = ContextQueue(limit=5)
+
+    async def run():
+        token = _current_context_queue.set(cq)
+        try:
+            return await optional_queue(x=1)
+        finally:
+            _current_context_queue.reset(token)
+
+    result = asyncio.run(run())
+    assert result == 1
+    assert received[0] is cq
+
+
+def test_tool_optional_context_queue_falls_back_to_none_when_var_unset():
+    received = []
+
+    @tool()
+    async def optional_queue_unset(x: int, memory: ContextQueue | None = None) -> int:
+        received.append(memory)
+        return x
+
+    result = asyncio.run(optional_queue_unset(x=2))
+    assert result == 2
+    assert received[0] is None
+
+
+def test_explicit_kwarg_overrides_context_injection():
+    received = []
+
+    @tool()
+    async def overridable_queue(x: int, memory: ContextQueue) -> int:
+        received.append(memory)
+        return x
+
+    cq_injected = ContextQueue(limit=5)
+    cq_explicit = ContextQueue(limit=3)
+
+    async def run():
+        token = _current_context_queue.set(cq_injected)
+        try:
+            return await overridable_queue(x=5, memory=cq_explicit)
+        finally:
+            _current_context_queue.reset(token)
+
+    result = asyncio.run(run())
+    assert result == 5
+    assert received[0] is cq_explicit  # explicit wins over injection
+
+
+def test_tool_without_context_typed_params_unaffected():
+    @tool()
+    async def plain_tool(a: int, b: int) -> int:
+        return a + b
+
+    cq = ContextQueue(limit=5)
+
+    async def run():
+        token = _current_context_queue.set(cq)
+        try:
+            return await plain_tool(a=2, b=3)
+        finally:
+            _current_context_queue.reset(token)
+
+    result = asyncio.run(run())
+    assert result == 5
+
+
+def test_async_gen_tool_injects_context_queue():
+    received = []
+
+    @tool()
+    async def gen_needs_queue(memory: ContextQueue):
+        received.append(memory)
+        yield len(memory)
+
+    cq = ContextQueue(limit=5)
+
+    async def run():
+        token = _current_context_queue.set(cq)
+        try:
+            return _collect_async(gen_needs_queue())
+        finally:
+            _current_context_queue.reset(token)
+
+    # Must set ContextVar before collection starts
+    async def run_inner():
+        token = _current_context_queue.set(cq)
+        try:
+            out = []
+            async for v in gen_needs_queue():
+                out.append(v)
+            return out
+        finally:
+            _current_context_queue.reset(token)
+
+    results = asyncio.run(run_inner())
+    assert len(received) == 1
+    assert received[0] is cq
+    assert results == [0]
+
+
+def test_async_gen_tool_injects_context_pool():
+    received = []
+
+    @tool()
+    async def gen_needs_pool(pool: ContextPool):
+        received.append(pool)
+        yield len(pool)
+
+    cp = ContextPool()
+
+    async def run_inner():
+        token = _current_context_pool.set(cp)
+        try:
+            out = []
+            async for v in gen_needs_pool():
+                out.append(v)
+            return out
+        finally:
+            _current_context_pool.reset(token)
+
+    results = asyncio.run(run_inner())
+    assert len(received) == 1
+    assert received[0] is cp
+    assert results == [0]
+
+
+def test_inject_context_deps_handles_unresolvable_hints():
+    """_inject_context_deps returns merged unchanged when get_type_hints fails."""
+
+    def bad_hints_fn(x: "NonExistentType") -> None:  # type: ignore[name-defined]
+        pass
+
+    merged = {"x": 1}
+    result = _inject_context_deps(bad_hints_fn, merged)
+    assert result == {"x": 1}

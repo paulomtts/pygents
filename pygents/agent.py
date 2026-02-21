@@ -2,7 +2,13 @@ import asyncio
 import inspect
 from typing import Any, AsyncIterator
 
-from pygents.context import ContextItem, ContextPool, ContextQueue
+from pygents.context import (
+    ContextItem,
+    ContextPool,
+    ContextQueue,
+    _current_context_pool,
+    _current_context_queue,
+)
 from pygents.errors import SafeExecutionError, TurnTimeoutError
 from pygents.hooks import AgentHook, Hook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
@@ -47,7 +53,11 @@ class Agent:
     def __setattr__(self, name: str, value: Any) -> None:
         if name not in ("_is_running", "_current_turn"):
             _is_running = getattr(self, "_is_running", False)
-            _is_paused = (not self._pause_event.is_set()) if hasattr(self, "_pause_event") else False
+            _is_paused = (
+                (not self._pause_event.is_set())
+                if hasattr(self, "_pause_event")
+                else False
+            )
             if _is_running:
                 raise SafeExecutionError(
                     f"Cannot change property '{name}' while the agent is running."
@@ -82,7 +92,9 @@ class Agent:
         self.context_pool = context_pool if context_pool is not None else ContextPool()
         self._pause_event: asyncio.Event = asyncio.Event()
         self._pause_event.set()  # unpaused by default
-        self.context_queue = context_queue if context_queue is not None else ContextQueue(limit=10)
+        self.context_queue = (
+            context_queue if context_queue is not None else ContextQueue(limit=10)
+        )
 
         AgentRegistry.register(self)
 
@@ -234,27 +246,34 @@ class Agent:
                 if turn is None:
                     turn = self._queue.get_nowait()
                 self._current_turn = turn
+                queue_token = _current_context_queue.set(self.context_queue)
+                pool_token = _current_context_pool.set(self.context_pool)
                 try:
                     if inspect.isasyncgenfunction(turn.tool.fn):
                         async for value in turn.yielding():
                             await self._run_hooks(
                                 AgentHook.ON_TURN_VALUE, self, turn, value
                             )
-                            yield (turn, value)
+                            if not isinstance(value, (ContextItem, Turn)):
+                                yield (turn, value)
                             await self._route_value(value)
                     else:
                         output = await turn.returning()
                         await self._run_hooks(
                             AgentHook.ON_TURN_VALUE, self, turn, output
                         )
-                        yield (turn, output)
-                    await self._route_value(turn.output)
+                        if not isinstance(output, (ContextItem, Turn)):
+                            yield (turn, output)
+                        await self._route_value(turn.output)
                 except TurnTimeoutError:
                     await self._run_hooks(AgentHook.ON_TURN_TIMEOUT, self, turn)
                     raise
                 except Exception as e:
                     await self._run_hooks(AgentHook.ON_TURN_ERROR, self, turn, e)
                     raise
+                finally:
+                    _current_context_queue.reset(queue_token)
+                    _current_context_pool.reset(pool_token)
                 await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
                 self._current_turn = None
         finally:
@@ -287,7 +306,9 @@ class Agent:
             agent._current_turn = Turn.from_dict(data["current_turn"])
         agent.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         agent.context_pool = ContextPool.from_dict(data.get("context_pool", {}))
-        agent.context_queue = ContextQueue.from_dict(data.get("context_queue", {"limit": 10, "items": [], "hooks": {}}))
+        agent.context_queue = ContextQueue.from_dict(
+            data.get("context_queue", {"limit": 10, "items": [], "hooks": {}})
+        )
         if data.get("is_paused", False):
             agent.pause()
         return agent

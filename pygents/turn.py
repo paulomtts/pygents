@@ -83,7 +83,7 @@ class Turn[T]:
     output: Any | ContextItem[Any] | None
     metadata: TurnMetadata
 
-    _hooks: list[Hook]
+    hooks: list[Hook]
     _is_running: bool = False
 
     # -- mutation guard -------------------------------------------------------
@@ -122,7 +122,7 @@ class Turn[T]:
         self.output = None
         self.metadata = TurnMetadata()
 
-        self._hooks: list[Hook] = list(hooks) if hooks else []
+        self.hooks: list[Hook] = list(hooks) if hooks else []
         self._is_running = False
 
     def __repr__(self) -> str:
@@ -132,7 +132,7 @@ class Turn[T]:
     # -- hooks -----------------------------------------------------------------
 
     async def _run_hook(self, hook_type: TurnHook, *args: Any) -> None:
-        if h := HookRegistry.get_by_type(hook_type, self._hooks):
+        if h := HookRegistry.get_by_type(hook_type, self.hooks):
             await h(self, *args)
 
     # -- execution ------------------------------------------------------------
@@ -220,7 +220,9 @@ class Turn[T]:
                     await self._run_hook(TurnHook.ON_VALUE, item)
                     yield item
                 await producer
-            except (asyncio.TimeoutError, TimeoutError):
+            except (asyncio.TimeoutError, TimeoutError) as exc:
+                if isinstance(exc, TurnTimeoutError):
+                    raise
                 producer.cancel()
                 try:
                     await producer
@@ -253,7 +255,7 @@ class Turn[T]:
             "timeout": self.timeout,
             "metadata": self.metadata.to_dict(),
             "output": self.output,
-            "hooks": serialize_hooks_by_type(self._hooks),
+            "hooks": serialize_hooks_by_type(self.hooks),
         }
 
     @classmethod
@@ -267,5 +269,5 @@ class Turn[T]:
         turn.metadata = TurnMetadata.from_dict(data.get("metadata", {}))
         if "output" in data:
             turn.output = data["output"]
-        turn._hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
+        turn.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return turn

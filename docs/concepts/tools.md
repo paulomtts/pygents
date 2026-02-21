@@ -97,6 +97,10 @@ async def summarize(text: str) -> str:
 
 For async generator tools, each yielded value is routed individually as it is produced — so a single generator turn can yield a mix of `ContextItem`, `Turn`, and plain values.
 
+
+!!! info
+    Tools can also *receive* context from the agent by declaring `ContextQueue` or `ContextPool` parameters — see [Reading context from tools](context.md#reading-context-from-tools).
+
 ---
 
 The sections below cover advanced configuration. If you're getting started, continue to [Turns](turns.md).

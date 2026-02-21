@@ -30,7 +30,7 @@ Structural separation is only possible if the primitives that enforce it are wel
 
 ### The Tool
 
-An Tool is a pure, stateless unit of work, and expresses instructions for realizing something. A Tool may well return a Turn, in which case the Agent will be obliged to enqueue it for later execution.
+A Tool is a pure, stateless unit of work, and expresses instructions for realizing something. A Tool may well return a Turn, in which case the Agent will be obliged to enqueue it for later execution.
 
 ### The Turn
 
@@ -40,7 +40,15 @@ A Turn is a declaration of intent. It references a specific Tool and binds it to
 
 The Agent owns a queue of Turns and processes them in order. It dispatches execution, and routes the output. Its job is coordination; it does not interpret outputs or make domain decisions. 
 
-In addition, it acts as the sole writer to the context stores - when Tools pproduce result intended as context, that intent is expressed in the type of its output. The Agent recognizes the intent and performs the write. 
+In addition, it acts as the sole writer to the context stores - when Tools produce results intended as context, that intent is expressed in the type of its output. The Agent recognizes the intent and performs the write.
+
+### The ContextQueue
+
+A ContextQueue is a bounded, ordered window of context items. It holds the working memory that tools receive and append to as a session progresses — conversation history, recent events, system instructions. Its bound is enforced by construction: when the window is full, the oldest item is evicted to make room. This bound is what makes the context manageable; without it, the window would grow without limit.
+
+### The ContextPool
+
+A ContextPool is a keyed store of context items, each identified by a unique id and carrying a short description alongside its full content. It accumulates tool outputs that are too large or too numerous to pass in every prompt — documents, records, fetched data. Selection is left to the application: descriptions are cheap enough to present to a model for relevance filtering; full content is retrieved only when needed.
 
 ---
 

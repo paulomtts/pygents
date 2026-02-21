@@ -38,6 +38,7 @@ import pytest
 
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from pygents.hooks import TurnHook, hook
+from pygents.registry import HookRegistry
 from pygents.tool import tool
 from pygents.turn import StopReason, Turn, TurnMetadata
 
@@ -121,6 +122,12 @@ async def turn_run_slow_yielding(duration: float):
     yield 1
     await asyncio.sleep(duration)
     yield 2
+
+
+@tool()
+async def turn_run_yields_nothing():
+    return
+    yield  # makes it an async generator
 
 
 async def _collect_async(agen):
@@ -268,7 +275,7 @@ def test_turn_before_run_hook_called():
         events.append(("before_run", id(turn)))
 
     turn = Turn("turn_run_sync", kwargs={"x": 10})
-    turn._hooks.append(before_run)
+    turn.hooks.append(before_run)
     asyncio.run(turn.returning())
     assert len(events) == 1
     assert events[0][0] == "before_run"
@@ -284,7 +291,7 @@ def test_turn_after_run_hook_called():
         events.append(("after_run", turn.output))
 
     turn = Turn("turn_run_sync", kwargs={"x": 10})
-    turn._hooks.append(after_run)
+    turn.hooks.append(after_run)
     asyncio.run(turn.returning())
     assert len(events) == 1
     assert events[0][0] == "after_run"
@@ -299,7 +306,7 @@ def test_turn_on_timeout_hook_called():
         events.append("on_timeout")
 
     turn = Turn("turn_run_slow", kwargs={"duration": 2.0}, timeout=1)
-    turn._hooks.append(on_timeout)
+    turn.hooks.append(on_timeout)
     with pytest.raises(TurnTimeoutError):
         asyncio.run(turn.returning())
     assert events == ["on_timeout"]
@@ -313,13 +320,49 @@ def test_turn_on_error_hook_called():
         events.append(("on_error", type(exc).__name__, str(exc)))
 
     turn = Turn("turn_run_raises", kwargs={})
-    turn._hooks.append(on_error)
+    turn.hooks.append(on_error)
     with pytest.raises(ValueError, match="tool failed"):
         asyncio.run(turn.returning())
     assert len(events) == 1
     assert events[0][0] == "on_error"
     assert events[0][1] == "ValueError"
     assert "tool failed" in events[0][2]
+
+
+def test_returning_before_run_hook_raises_sets_error_metadata_and_finally_runs():
+    HookRegistry.clear()
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def exploding_before_run(turn):
+        raise RuntimeError("hook blew up")
+
+    turn = Turn("turn_run_sync", kwargs={"x": 1})
+    turn.hooks.append(exploding_before_run)
+
+    with pytest.raises(RuntimeError, match="hook blew up"):
+        asyncio.run(turn.returning())
+
+    assert turn.metadata.stop_reason == StopReason.ERROR
+    assert turn.metadata.end_time is not None   # finally ran
+    assert turn.output is None                  # tool never executed
+
+
+def test_returning_on_error_hook_raises_replaces_original_exception():
+    HookRegistry.clear()
+
+    @hook(TurnHook.ON_ERROR)
+    async def exploding_on_error(turn, exc):
+        raise RuntimeError("hook also failed")
+
+    turn = Turn("turn_run_raises", kwargs={})
+    turn.hooks.append(exploding_on_error)
+
+    # RuntimeError from the hook wins; original ValueError is gone
+    with pytest.raises(RuntimeError, match="hook also failed"):
+        asyncio.run(turn.returning())
+
+    assert turn.metadata.stop_reason == StopReason.ERROR
+    assert turn.metadata.end_time is not None   # finally ran
 
 
 def test_turn_on_value_hook_called_for_each_yield():
@@ -330,7 +373,7 @@ def test_turn_on_value_hook_called_for_each_yield():
         values_seen.append(value)
 
     turn = Turn("turn_run_async_gen_20", kwargs={})
-    turn._hooks.append(on_value)
+    turn.hooks.append(on_value)
     items = asyncio.run(_collect_async(turn.yielding()))
     assert items == [10, 20]
     assert values_seen == [10, 20]
@@ -340,6 +383,23 @@ def test_yielding_async_rejects_coroutine_tool():
     turn = Turn("turn_run_sync", kwargs={"x": 5})
     with pytest.raises(WrongRunMethodError, match="returning\\(\\)"):
         asyncio.run(_collect_async(turn.yielding()))
+
+
+def test_yielding_zero_yield_generator():
+    events = []
+
+    async def after_run_zero(turn):
+        events.append("after_run")
+
+    after_run_zero.type = TurnHook.AFTER_RUN  # type: ignore[attr-defined]
+
+    turn = Turn("turn_run_yields_nothing", kwargs={})
+    turn.hooks.append(after_run_zero)
+    output = asyncio.run(_collect_async(turn.yielding()))
+    assert output == []
+    assert turn.output == []
+    assert turn.metadata.stop_reason == StopReason.COMPLETED
+    assert events == ["after_run"]
 
 
 # ---------------------------------------------------------------------------
@@ -481,3 +541,66 @@ def test_turn_from_dict_minimal():
     assert turn.output is None
     result = asyncio.run(turn.returning())
     assert result == 6
+
+
+def test_from_dict_restores_hooks_that_fire_on_rerun():
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    events = []
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def turn_roundtrip_hook(turn):
+        events.append("before_run")
+
+    turn = Turn("turn_run_sync", kwargs={"x": 5})
+    turn.hooks.append(turn_roundtrip_hook)
+    data = turn.to_dict()
+
+    assert "before_run" in data["hooks"]  # serialized by type
+
+    restored = Turn.from_dict(data)
+    assert len(restored.hooks) == 1
+
+    result = asyncio.run(restored.returning())
+    assert result == 6
+    assert events == ["before_run"]
+
+
+def test_yielding_remaining_zero_branch():
+    """Covers the `remaining <= 0` guard (lines 206-213 in turn.py).
+
+    Patches only the `time` name in pygents.turn so the event-loop's own
+    time import is unaffected and asyncio.wait_for / task scheduling still
+    work with real wall-clock time.
+    """
+    import time as real_time
+    from unittest.mock import patch
+
+    fired = []
+
+    @hook(TurnHook.ON_TIMEOUT)
+    async def on_timeout_remaining_zero(turn):
+        fired.append("timeout")
+
+    t0 = real_time.monotonic()
+    timeout_val = 5.0
+
+    # side_effect values:
+    #   call 1 → deadline = t0 + 5.0
+    #   call 2 → remaining = 5.0 > 0 on first iteration; wait_for gets item
+    #   call 3 → remaining = -1.0 ≤ 0 on second iteration; branch fires
+    turn = Turn("turn_run_slow_yielding", kwargs={"duration": 999.0}, timeout=timeout_val)
+    turn.hooks.append(on_timeout_remaining_zero)
+
+    with patch("pygents.turn.time") as fake_time:
+        fake_time.monotonic.side_effect = [
+            t0,
+            t0,
+            t0 + timeout_val + 1.0,
+        ]
+        with pytest.raises(TurnTimeoutError):
+            asyncio.run(_collect_async(turn.yielding()))
+
+    assert fired == ["timeout"]
+    assert turn.metadata.stop_reason == StopReason.TIMEOUT

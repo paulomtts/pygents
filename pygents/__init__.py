@@ -17,7 +17,7 @@ from pygents.hooks import (
     TurnHook,
     hook,
 )
-from pygents.context import ContextQueue
+from pygents.context import ContextPool, ContextQueue
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool, ToolMetadata, tool
 from pygents.turn import StopReason, Turn
@@ -26,6 +26,7 @@ __all__ = [
     "Agent",
     "AgentHook",
     "AgentRegistry",
+    "ContextPool",
     "ContextPoolHook",
     "ContextQueue",
     "ContextQueueHook",
