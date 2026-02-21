@@ -32,6 +32,8 @@ run():
   R6  Other exception -> ON_TURN_ERROR, re-raise
   R7  After: AFTER_TURN; clear _current_turn
   R8  finally: _is_running False, _current_turn None
+  R9  Early break (coroutine tool) -> no ValueError; _is_running False
+  R10 Early break (streaming tool) -> no ValueError; _is_running False
 
 _route_value(value):
   RV1  value is ContextItem with id None -> context_queue.append
@@ -627,6 +629,33 @@ def test_run_on_turn_value_hook_raises_propagates_and_cleans_up():
         asyncio.run(run_it())
 
     assert agent._is_running is False   # finally ran
+
+
+def test_run_early_break_coroutine_does_not_raise():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+
+    async def run_with_break():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        await agent.put(Turn("add_agent", kwargs={"a": 3, "b": 4}))
+        async for _, _ in agent.run():
+            break
+
+    asyncio.run(run_with_break())   # must not raise ValueError
+    assert agent._is_running is False
+
+
+def test_run_early_break_streaming_does_not_raise():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [stream_agent])
+
+    async def run_with_break():
+        await agent.put(Turn("stream_agent", kwargs={}))
+        async for _, _ in agent.run():
+            break
+
+    asyncio.run(run_with_break())
+    assert agent._is_running is False
 
 
 def test_run_on_turn_timeout_hook_called():

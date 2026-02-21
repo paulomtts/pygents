@@ -246,6 +246,8 @@ class Agent:
                 if turn is None:
                     turn = self._queue.get_nowait()
                 self._current_turn = turn
+                prev_queue = _current_context_queue.get()
+                prev_pool = _current_context_pool.get()
                 queue_token = _current_context_queue.set(self.context_queue)
                 pool_token = _current_context_pool.set(self.context_pool)
                 try:
@@ -272,8 +274,15 @@ class Agent:
                     await self._run_hooks(AgentHook.ON_TURN_ERROR, self, turn, e)
                     raise
                 finally:
-                    _current_context_queue.reset(queue_token)
-                    _current_context_pool.reset(pool_token)
+                    try:
+                        _current_context_queue.reset(queue_token)
+                        _current_context_pool.reset(pool_token)
+                    except ValueError:
+                        # aclose() from an early break can run in a different Context copy;
+                        # reset() requires the same Context the token was created in.
+                        # Fall back to set() which is context-agnostic.
+                        _current_context_queue.set(prev_queue)
+                        _current_context_pool.set(prev_pool)
                 await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
                 self._current_turn = None
         finally:
