@@ -148,4 +148,4 @@ Everything importable from `pygents`:
 
 Next: [Tools](concepts/tools.md), [Turns](concepts/turns.md), [Agents](concepts/agents.md), [Context](concepts/context.md), [Hooks](concepts/hooks.md).
 
-Guides: [Building an AI Agent](guides/ai-agent.md), [LLM-Driven Context Querying](guides/context-pool.md).
+Guides: [Building a Research Assistant](guides/research-assistant.md), [Claude Code Skill](guides/claude-code-skill.md).

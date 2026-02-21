@@ -56,8 +56,7 @@ nav:
     - Context: concepts/context.md
     - Hooks: concepts/hooks.md
   - Guides:
-    - Simple Agent: guides/ai-agent.md
-    - Context Querying: guides/context-pool.md
+    - Research Assistant: guides/research-assistant.md
     - Claude Code Skill: guides/claude-code-skill.md
   - Zen:
     - Manifesto: whitepaper.md

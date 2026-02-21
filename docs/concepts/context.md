@@ -414,4 +414,4 @@ Hooks are stored by type and name (same shape as `ContextQueue`/`Agent`/`Turn`).
 | `KeyError` | `get()` or `remove()` with an id not in the pool |
 | `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |
 
-For a complete worked example of the LLM-driven query pattern, see [LLM-Driven Context Querying](../guides/context-pool.md).
+For a complete worked example of the LLM-driven query pattern, see [Building a Research Assistant](../guides/research-assistant.md).
