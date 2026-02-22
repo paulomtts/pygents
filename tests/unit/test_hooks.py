@@ -334,10 +334,7 @@ def test_tool_hooks_before_and_after_invoke():
     async def after_hook(result):
         events.append(("after", result))
 
-    before_hook.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-    after_hook.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[before_hook, after_hook])
+    @tool(before_invoke=before_hook, after_invoke=after_hook)
     async def hooked_tool(x: int) -> int:
         return x + 10
 
@@ -368,11 +365,7 @@ def test_tool_hooks_async_gen_before_on_yield_after():
     async def after_hook(value):
         events.append(("after", value))
 
-    before_hook.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-    on_yield_hook.type = ToolHook.ON_YIELD  # type: ignore[attr-defined]
-    after_hook.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[before_hook, on_yield_hook, after_hook])
+    @tool(before_invoke=before_hook, on_yield=on_yield_hook, after_invoke=after_hook)
     async def hooked_gen_tool():
         yield "a"
         yield "b"
@@ -403,6 +396,168 @@ def test_tool_with_decorated_hook_registered_in_registry():
         pass
 
     assert HookRegistry.get("registered_tool_hook") is registered_tool_hook
+
+
+# ---------------------------------------------------------------------------
+# Named hook params: auto-type assignment and dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_tool_named_params_auto_assign_type():
+    """Plain async functions passed via named params get .type set automatically."""
+    HookRegistry.clear()
+
+    async def before_fn(**kwargs): pass
+
+    async def on_yield_fn(value): pass
+
+    async def after_fn(result): pass
+
+    @tool(before_invoke=before_fn, on_yield=on_yield_fn, after_invoke=after_fn)
+    async def named_type_check_tool() -> None:
+        pass
+
+    assert before_fn.type == ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
+    assert on_yield_fn.type == ToolHook.ON_YIELD  # type: ignore[attr-defined]
+    assert after_fn.type == ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
+
+
+def test_tool_named_params_decorated_hook_type_preserved():
+    """A hook decorated with @hook keeps its .type when passed via named param."""
+    HookRegistry.clear()
+
+    @hook(ToolHook.BEFORE_INVOKE)
+    async def decorated_before(**kwargs): pass
+
+    @tool(before_invoke=decorated_before)
+    async def named_decorated_tool() -> None:
+        pass
+
+    assert decorated_before.type == ToolHook.BEFORE_INVOKE
+
+
+def test_tool_named_before_invoke_fires():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    received = []
+
+    async def before(x: int):
+        received.append(x)
+
+    @tool(before_invoke=before)
+    async def named_before_coroutine_tool(x: int) -> int:
+        return x * 2
+
+    agent = Agent("a_nb", "desc", [named_before_coroutine_tool])
+
+    async def run():
+        await agent.put(Turn("named_before_coroutine_tool", kwargs={"x": 7}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert received == [7]
+
+
+def test_tool_named_after_invoke_fires():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    received = []
+
+    async def after(result):
+        received.append(result)
+
+    @tool(after_invoke=after)
+    async def named_after_coroutine_tool(x: int) -> int:
+        return x + 100
+
+    agent = Agent("a_na", "desc", [named_after_coroutine_tool])
+
+    async def run():
+        await agent.put(Turn("named_after_coroutine_tool", kwargs={"x": 5}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert received == [105]
+
+
+def test_tool_named_on_yield_fires():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    received = []
+
+    async def on_yield_fn(value):
+        received.append(value)
+
+    @tool(on_yield=on_yield_fn)
+    async def named_on_yield_gen_tool():
+        yield "x"
+        yield "y"
+
+    agent = Agent("a_ny", "desc", [named_on_yield_gen_tool])
+
+    async def run():
+        await agent.put(Turn("named_on_yield_gen_tool", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert received == ["x", "y"]
+
+
+def test_tool_named_params_list():
+    """A list of callables passed via a named param all fire in order."""
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    received = []
+
+    async def before1(**kwargs): received.append("before1")
+
+    async def before2(**kwargs): received.append("before2")
+
+    @tool(before_invoke=[before1, before2])
+    async def named_list_tool(x: int) -> int:
+        return x
+
+    agent = Agent("a_nl", "desc", [named_list_tool])
+
+    async def run():
+        await agent.put(Turn("named_list_tool", kwargs={"x": 1}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert received == ["before1", "before2"]
+
+
+def test_tool_named_params_combined_with_hooks():
+    """Hooks from named params and hooks=[] are all collected and fire together."""
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    received = []
+
+    async def named_after(result):
+        received.append(("named", result))
+
+    @hook(ToolHook.AFTER_INVOKE)
+    async def hooks_list_after(result):
+        received.append(("hooks", result))
+
+    @tool(after_invoke=named_after, hooks=[hooks_list_after])
+    async def named_combined_tool(x: int) -> int:
+        return x + 1
+
+    agent = Agent("a_nc", "desc", [named_combined_tool])
+
+    async def run():
+        await agent.put(Turn("named_combined_tool", kwargs={"x": 9}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert ("named", 10) in received
+    assert ("hooks", 10) in received
 
 
 # ---------------------------------------------------------------------------

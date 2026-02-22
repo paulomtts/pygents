@@ -65,13 +65,13 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `ON_PAUSE` | When the run loop hits a paused gate | `(agent)` |
 | `ON_RESUME` | After the gate is released and before the next turn | `(agent)` |
 
-**Tool** — during tool invocation (see [Tools](tools.md#hooks)):
+**Tool** — during tool invocation (see [Tool hooks](#tool-hooks)):
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` |
-| `ON_YIELD` | Before each yielded value (async generator tools only) | `(value)` |
-| `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` — return value for coroutine tools; `list` of all yielded values for async-gen tools |
+| `BEFORE_INVOKE` | About to call the tool | `(**kwargs)` — same kwargs as the tool's own signature |
+| `ON_YIELD` | Each yielded value (async generator tools only) | `(value)` |
+| `AFTER_INVOKE` | After tool returns or finishes yielding | `(result)` — return value for coroutine tools; `list` of all yielded values for async-gen tools |
 
 **ContextQueue** — during append (see [ContextQueue](context.md#hooks)):
 
@@ -95,11 +95,55 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 
 - **Turns** — `turn.hooks.append(my_hook)`; serialized with the turn by name.
 - **Agents** — `agent.hooks.append(my_hook)`; serialized with the agent by name.
-- **Tools** — `@tool(hooks=[...])`; applied on every invocation of that tool.
+- **Tools** — named params on `@tool` (see [Tool hooks](#tool-hooks)); applied on every invocation.
 - **ContextQueue** — `ContextQueue(limit=..., hooks=[...])` or `cq.branch(hooks=[...])`; serialized by name.
 - **ContextPool** — `Agent(..., context_pool=ContextPool(hooks=[...]))` or `ContextPool(hooks=[...])`; serialized by name.
 
 The framework selects which hooks to run via `HookRegistry.get_by_type(type, list_of_hooks)`. All hooks whose type matches the event are invoked sequentially, in the order they appear in the list. If a hook raises, execution stops and the exception propagates; later hooks in the same event are not called.
+
+## Tool hooks
+
+Use named parameters on `@tool` to attach hooks without needing `@hook` or manual `.type` assignment. The framework automatically assigns the correct type to plain async callables.
+
+```python
+from pygents import tool
+
+async def log_before(x: int, y: str) -> None:
+    print(f"calling with x={x}, y={y}")
+
+async def log_after(result) -> None:
+    print(f"result: {result}")
+
+@tool(before_invoke=log_before, after_invoke=log_after)
+async def my_tool(x: int, y: str) -> str:
+    return f"{x}-{y}"
+```
+
+Each named parameter accepts a single callable or a list:
+
+| Parameter | Hook type | Callback receives |
+|-----------|-----------|-------------------|
+| `before_invoke` | `BEFORE_INVOKE` | `**kwargs` — the tool's own keyword arguments (plus context-injected deps if declared) |
+| `on_yield` | `ON_YIELD` | `(value,)` — each yielded value; only fires for async-generator tools |
+| `after_invoke` | `AFTER_INVOKE` | `(result,)` — return value for coroutine tools, or `list` of all yielded values for async-gen tools |
+
+```python
+# Multiple hooks of the same type — pass a list
+@tool(before_invoke=[log_input, validate_input])
+async def validated_tool(x: int) -> int:
+    return x * 2
+```
+
+Use `hooks=[...]` as an escape hatch when you need to pass a pre-decorated `@hook` instance or share a hook across multiple attach points. Both sources are combined — all hooks fire:
+
+```python
+@hook(ToolHook.AFTER_INVOKE)
+async def shared_after(result): ...
+
+@tool(after_invoke=my_after, hooks=[shared_after])
+async def my_tool(x: int) -> int:
+    return x
+```
 
 ## Multi-type hooks
 
