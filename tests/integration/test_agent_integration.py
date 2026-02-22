@@ -1,10 +1,10 @@
 """
 Integration test: agent run with hooks at every level and shared memory.
 
-Exercises Agent (BEFORE_PUT, AFTER_PUT, BEFORE_TURN, ON_TURN_VALUE, ON_TURN_COMPLETE,
-AFTER_TURN), Turn (BEFORE_RUN, AFTER_RUN), Tool (BEFORE_INVOKE), and
-ContextQueue (BEFORE_APPEND, AFTER_APPEND) in one flow. The agent holds a ContextQueue
-instance; agent hooks append to it so that context queue hooks also fire.
+Exercises Agent (BEFORE_PUT, AFTER_PUT, BEFORE_TURN, ON_TURN_VALUE,
+AFTER_TURN), Turn (BEFORE_RUN, AFTER_RUN, ON_COMPLETE), Tool (BEFORE_INVOKE),
+and ContextQueue (BEFORE_APPEND, AFTER_APPEND) in one flow. The agent holds a
+ContextQueue instance; agent hooks append to it so that context queue hooks also fire.
 """
 
 import asyncio
@@ -59,8 +59,8 @@ def test_agent_run_with_hooks_and_memory():
     async def agent_on_turn_value(agent, turn, value):
         events.append(("agent_on_turn_value", value))
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def agent_on_turn_complete(agent, turn, stop_reason):
+    @hook(TurnHook.ON_COMPLETE)
+    async def agent_on_turn_complete(turn, stop_reason):
         events.append("agent_on_turn_complete")
 
     @hook(AgentHook.AFTER_TURN)
@@ -86,10 +86,10 @@ def test_agent_run_with_hooks_and_memory():
             agent_after_put,
             agent_before_turn,
             agent_on_turn_value,
-            agent_on_turn_complete,
             agent_after_turn,
         ]
     )
+    agent.turn_hooks.append(agent_on_turn_complete)
 
     turn = Turn("integration_compute", kwargs={"a": 3, "b": 5})
     turn.hooks.extend([turn_before_run, turn_after_run])
@@ -117,8 +117,8 @@ def test_agent_run_with_hooks_and_memory():
         "turn_before_run",
         "tool_before_invoke",
         "turn_after_run",
-        ("agent_on_turn_value", 8),
         "agent_on_turn_complete",
+        ("agent_on_turn_value", 8),
         "agent_after_turn",
         "memory_before_append",
         "memory_after_append",
@@ -337,7 +337,8 @@ def test_agent_multi_type_hook_invoked_for_each_event():
     agent = Agent("multi_hook_agent", "Test", [simple_tool])
     agent.hooks.append(multi_type_log)
 
-    turn = Turn("simple_tool", kwargs={"x": 5}, hooks=[multi_type_log])
+    turn = Turn("simple_tool", kwargs={"x": 5})
+    turn.before_run(multi_type_log)
     asyncio.run(agent.put(turn))
 
     async def run():

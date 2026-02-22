@@ -16,9 +16,7 @@ from typing import (
     overload,
 )
 
-from pygents.errors import UnregisteredHookError
 from pygents.hooks import ToolHook
-from pygents.hooks import hook as _hook_decorator
 from pygents.registry import HookRegistry, ToolRegistry
 from pygents.utils import (
     _inject_context_deps,
@@ -29,29 +27,6 @@ from pygents.utils import (
 P = ParamSpec("P")
 R = TypeVar("R")
 Y = TypeVar("Y")
-
-
-def _as_tool_hook(fn: Callable[..., Any], hook_type: ToolHook) -> Any:
-    """Wrap a plain async function as a registered tool hook, or reuse an existing wrapper.
-
-    Case 1: fn already has .metadata (was processed by hook()) — reuse as-is.
-    Case 2: fn was previously wrapped under this name — reuse the existing wrapper.
-    Case 3: plain async fn, first time — delegate to hook() to wrap and register.
-    """
-    if hasattr(fn, "metadata"):
-        HookRegistry.register(fn)  # no-op if same object already registered
-        return fn
-
-    name = getattr(fn, "__name__", None)
-    if name:
-        try:
-            existing = HookRegistry.get(name)
-            if getattr(existing, "fn", None) is fn:
-                return existing
-        except UnregisteredHookError:
-            pass
-
-    return _hook_decorator(hook_type)(fn)
 
 
 @dataclass
@@ -121,7 +96,7 @@ class _BaseTool(Generic[P]):
         self, fn: Callable[P, Awaitable[None]]
     ) -> Callable[P, Awaitable[None]]:
         """Register fn as a BEFORE_INVOKE hook on this tool (method decorator)."""
-        wrapped = _as_tool_hook(fn, ToolHook.BEFORE_INVOKE)
+        wrapped = HookRegistry.wrap(fn, ToolHook.BEFORE_INVOKE)
         self.hooks.append((ToolHook.BEFORE_INVOKE, wrapped))
         return wrapped
 
@@ -129,7 +104,7 @@ class _BaseTool(Generic[P]):
         self, fn: Callable[..., Awaitable[None]]
     ) -> Callable[..., Awaitable[None]]:
         """Register fn as an AFTER_INVOKE hook on this tool (method decorator)."""
-        wrapped = _as_tool_hook(fn, ToolHook.AFTER_INVOKE)
+        wrapped = HookRegistry.wrap(fn, ToolHook.AFTER_INVOKE)
         self.hooks.append((ToolHook.AFTER_INVOKE, wrapped))
         return wrapped
 
@@ -143,7 +118,7 @@ class Tool(Generic[P, R], _BaseTool[P]):
         self, fn: Callable[[R], Awaitable[None]]
     ) -> Callable[[R], Awaitable[None]]:
         """Register fn as an AFTER_INVOKE hook; it receives the tool's return value."""
-        return super().after_invoke(fn)  # type: ignore[return-value]
+        return super().after_invoke(fn)
 
     async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
         async with self._invoke_context(args, kwargs) as merged:
@@ -165,7 +140,7 @@ class AsyncGenTool(Generic[P, Y], _BaseTool[P]):
         self, fn: Callable[[Y], Awaitable[None]]
     ) -> Callable[[Y], Awaitable[None]]:
         """Register fn as an ON_YIELD hook on this tool (method decorator)."""
-        wrapped = _as_tool_hook(fn, ToolHook.ON_YIELD)
+        wrapped = HookRegistry.wrap(fn, ToolHook.ON_YIELD)
         self.hooks.append((ToolHook.ON_YIELD, wrapped))
         return wrapped
 

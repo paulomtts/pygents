@@ -1,10 +1,12 @@
+from __future__ import annotations
+
 import asyncio
 import inspect
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, AsyncIterator, Callable, Iterable, TypeVar
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, TypeVar
 
 from pygents.context import ContextItem
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
@@ -75,8 +77,6 @@ class Turn[T]:
         Keyword arguments for the tool. Callables are evaluated at run time.
     timeout : int
         Max seconds for the turn to run. Default 60.
-    hooks : list[Hook] | None
-        Optional list of hooks (e.g. TurnHook). Applied during turn execution.
     """
 
     tool: Tool | AsyncGenTool
@@ -112,7 +112,6 @@ class Turn[T]:
         timeout: int = 60,
         args: Iterable[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
-        hooks: list[Hook] | None = None,
     ):
         if isinstance(tool, str):
             resolved = ToolRegistry.get(tool)
@@ -125,7 +124,7 @@ class Turn[T]:
         self.output = None
         self.metadata = TurnMetadata()
 
-        self.hooks: list[Hook] = list(hooks) if hooks else []
+        self.hooks: list[Hook] = []
         self._is_running = False
 
     def __repr__(self) -> str:
@@ -137,6 +136,41 @@ class Turn[T]:
     async def _run_hook(self, hook_type: TurnHook, *args: Any) -> None:
         for h in HookRegistry.get_by_type(hook_type, self.hooks):
             await h(self, *args)
+
+    def before_run(
+        self, fn: Callable[[Turn[T]], Awaitable[None]]
+    ) -> Callable[[Turn[T]], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, TurnHook.BEFORE_RUN)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def after_run(
+        self, fn: Callable[[Turn[T]], Awaitable[None]]
+    ) -> Callable[[Turn[T]], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, TurnHook.AFTER_RUN)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def on_timeout(
+        self, fn: Callable[[Turn[T]], Awaitable[None]]
+    ) -> Callable[[Turn[T]], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, TurnHook.ON_TIMEOUT)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def on_error(
+        self, fn: Callable[[Turn[T], Exception], Awaitable[None]]
+    ) -> Callable[[Turn[T], Exception], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, TurnHook.ON_ERROR)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def on_complete(
+        self, fn: Callable[[Turn[T], StopReason | None], Awaitable[None]]
+    ) -> Callable[[Turn[T], StopReason | None], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, TurnHook.ON_COMPLETE)
+        self.hooks.append(wrapped)
+        return wrapped
 
     # -- execution ------------------------------------------------------------
 
@@ -176,6 +210,7 @@ class Turn[T]:
             raise
         finally:
             self.metadata.end_time = datetime.now()
+            await self._run_hook(TurnHook.ON_COMPLETE, self.metadata.stop_reason)
             self._is_running = False
 
     @safe_execution
@@ -245,8 +280,6 @@ class Turn[T]:
                 ) from None
             self.output = aggregated
             self.metadata.stop_reason = StopReason.COMPLETED
-            # AFTER_RUN fires before the agent routes the output; use AgentHook.ON_TURN_VALUE
-            # if you need to observe post-routing context state.
             await self._run_hook(TurnHook.AFTER_RUN)
         except TurnTimeoutError:
             raise
@@ -256,6 +289,7 @@ class Turn[T]:
             raise
         finally:
             self.metadata.end_time = datetime.now()
+            await self._run_hook(TurnHook.ON_COMPLETE, self.metadata.stop_reason)
             self._is_running = False
 
     # -- serialization --------------------------------------------------------

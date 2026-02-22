@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 import functools
 from dataclasses import dataclass
-from datetime import datetime
 from enum import Enum
 from typing import Any, Awaitable, Callable, overload
 
-from pygents.utils import _null_lock
+from pygents.utils import _inject_context_deps, _null_lock, merge_kwargs
 
 
 class TurnHook(str, Enum):
@@ -15,15 +14,13 @@ class TurnHook(str, Enum):
     AFTER_RUN = "after_run"
     ON_TIMEOUT = "on_timeout"
     ON_ERROR = "on_error"
+    ON_COMPLETE = "on_complete"
 
 
 class AgentHook(str, Enum):
     BEFORE_TURN = "before_turn"
     AFTER_TURN = "after_turn"
-    ON_TURN_COMPLETE = "on_turn_complete"
     ON_TURN_VALUE = "on_turn_value"
-    ON_TURN_ERROR = "on_turn_error"
-    ON_TURN_TIMEOUT = "on_turn_timeout"
     BEFORE_PUT = "before_put"
     AFTER_PUT = "after_put"
     ON_PAUSE = "on_pause"
@@ -63,15 +60,11 @@ class HookMetadata:
 
     name: str
     description: str | None
-    start_time: datetime | None = None
-    end_time: datetime | None = None
 
     def dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "description": self.description,
-            "start_time": self.start_time.isoformat() if self.start_time else None,
-            "end_time": self.end_time.isoformat() if self.end_time else None,
         }
 
 
@@ -96,19 +89,15 @@ class Hook:
         functools.update_wrapper(self, fn)
 
     async def __call__(self, *args: Any, **kwargs: Any) -> None:
-        from pygents.utils import _inject_context_deps, merge_kwargs
 
-        merged = merge_kwargs(
-            self._fixed_kwargs, kwargs, f"hook {self.fn.__name__!r}"
-        )
+        merged = merge_kwargs(self._fixed_kwargs, kwargs, f"hook {self.fn.__name__!r}")
         merged = _inject_context_deps(self.fn, merged)
         lock_ctx = self.lock if self.lock is not None else _null_lock
         async with lock_ctx:
-            self.metadata.start_time = datetime.now()
-            try:
-                await self.fn(*args, **merged)
-            finally:
-                self.metadata.end_time = datetime.now()
+            await self.fn(*args, **merged)
+
+    def __repr__(self) -> str:
+        return f"Hook(type={self.type!r}, metadata={self.metadata!r})"
 
 
 @overload

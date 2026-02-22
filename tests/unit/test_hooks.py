@@ -4,9 +4,8 @@ Tests for pygents.hooks, driven by the following decision table.
 Decision table for pygents/hooks.py
 -----------------------------------
 HookMetadata:
-  M1  Construction: name, description, start_time/end_time default None
-  M2  dict() with start_time/end_time None -> None in output
-  M3  dict() with start_time/end_time set -> isoformat strings
+  M1  Construction: name, description
+  M2  dict() returns {name, description}
 
 hook() decorator:
   H1  Decorated callable gets hook_type, metadata (name from __name__, description from __doc__), registered in HookRegistry
@@ -14,18 +13,16 @@ hook() decorator:
   H3  lock=False (default) -> wrapper.lock is None
   H4  fixed_kwargs merged into invocation; call-time kwargs override
   H5  fixed_kwarg key not in signature and no **kwargs -> TypeError
-  H6  Wrapper call: start_time set, await fn(*args, **merged), end_time set in finally
+  H6  Wrapper call: await fn(*args, **merged)
   H7  get_by_type(hook_type, [wrapper]) returns wrapper
   H8  Multiple hooks same type: get_by_type returns all matches in order
 """
 
 import asyncio
-from datetime import datetime
-
 import pytest
 
 from pygents.agent import Agent
-from pygents.context import ContextItem, ContextPool, ContextQueue
+from pygents.context import ContextItem, ContextPool
 from pygents.hooks import (
     AgentHook,
     ContextPoolHook,
@@ -37,7 +34,7 @@ from pygents.hooks import (
 )
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
-from pygents.turn import Turn
+from pygents.turn import StopReason, Turn
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -65,33 +62,14 @@ def test_hook_metadata_construction():
     meta = HookMetadata("my_hook", "A hook.")
     assert meta.name == "my_hook"
     assert meta.description == "A hook."
-    assert meta.start_time is None
-    assert meta.end_time is None
 
 
-def test_hook_metadata_dict_with_none_times():
+def test_hook_metadata_dict():
     meta = HookMetadata("h", None)
     assert meta.dict() == {
         "name": "h",
         "description": None,
-        "start_time": None,
-        "end_time": None,
     }
-
-
-def test_hook_metadata_dict_after_run_returns_isoformat_times():
-    HookRegistry.clear()
-
-    @hook(TurnHook.BEFORE_RUN)
-    async def timed_hook(turn):
-        pass
-
-    asyncio.run(timed_hook(None))
-    data = timed_hook.metadata.dict()
-    assert data["start_time"] is not None
-    assert data["end_time"] is not None
-    datetime.fromisoformat(data["start_time"])
-    datetime.fromisoformat(data["end_time"])
 
 
 # ---------------------------------------------------------------------------
@@ -300,21 +278,6 @@ def test_hook_fixed_kwargs_allowed_with_kwargs():
 # ---------------------------------------------------------------------------
 # H6 – hook() decorator: timing
 # ---------------------------------------------------------------------------
-
-
-def test_hook_start_time_end_time_set_on_run():
-    HookRegistry.clear()
-
-    @hook(TurnHook.BEFORE_RUN)
-    async def timed_hook(turn):
-        pass
-
-    assert timed_hook.metadata.start_time is None
-    assert timed_hook.metadata.end_time is None
-    asyncio.run(timed_hook(None))
-    assert timed_hook.metadata.start_time is not None
-    assert timed_hook.metadata.end_time is not None
-    assert timed_hook.metadata.start_time <= timed_hook.metadata.end_time
 
 
 # ---------------------------------------------------------------------------
@@ -830,3 +793,382 @@ def test_method_decorator_plain_fn_registered_in_registry():
     assert HookRegistry.get(my_reg_hook.__name__) is returned
 
 
+# ---------------------------------------------------------------------------
+# Turn method-decorator hooks
+# ---------------------------------------------------------------------------
+
+
+def test_turn_before_run_method_decorator_registers_and_appends():
+    HookRegistry.clear()
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 1})
+
+    async def log_before(turn):
+        pass
+
+    returned = turn.before_run(log_before)
+    assert returned.fn is log_before
+    assert returned.type == TurnHook.BEFORE_RUN
+    assert returned in turn.hooks
+    assert HookRegistry.get("log_before") is returned
+
+
+def test_turn_after_run_method_decorator_registers_and_appends():
+    HookRegistry.clear()
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 1})
+
+    async def log_after(turn):
+        pass
+
+    returned = turn.after_run(log_after)
+    assert returned.fn is log_after
+    assert returned.type == TurnHook.AFTER_RUN
+    assert returned in turn.hooks
+    assert HookRegistry.get("log_after") is returned
+
+
+def test_turn_on_timeout_method_decorator_registers_and_appends():
+    HookRegistry.clear()
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 1})
+
+    async def log_timeout(turn):
+        pass
+
+    returned = turn.on_timeout(log_timeout)
+    assert returned.fn is log_timeout
+    assert returned.type == TurnHook.ON_TIMEOUT
+    assert returned in turn.hooks
+    assert HookRegistry.get("log_timeout") is returned
+
+
+def test_turn_on_error_method_decorator_registers_and_appends():
+    HookRegistry.clear()
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 1})
+
+    async def log_error(turn, exc):
+        pass
+
+    returned = turn.on_error(log_error)
+    assert returned.fn is log_error
+    assert returned.type == TurnHook.ON_ERROR
+    assert returned in turn.hooks
+    assert HookRegistry.get("log_error") is returned
+
+
+def test_turn_method_decorator_reuses_already_wrapped_hook():
+    HookRegistry.clear()
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def preexisting_hook(turn):
+        pass
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 1})
+    returned = turn.before_run(preexisting_hook)
+    assert returned is preexisting_hook
+    assert preexisting_hook in turn.hooks
+
+
+def test_turn_method_decorator_before_run_fires_end_to_end():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    events = []
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 5})
+
+    @turn.before_run
+    async def capture_before(turn):
+        events.append(("before", turn.tool.metadata.name))
+
+    result = asyncio.run(turn.returning())
+    assert result == 10
+    assert events == [("before", "tool_for_hook_test")]
+
+
+def test_turn_method_decorator_after_run_fires_end_to_end():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    events = []
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 3})
+
+    @turn.after_run
+    async def capture_after(turn):
+        events.append(("after", turn.output))
+
+    asyncio.run(turn.returning())
+    assert events == [("after", 6)]
+
+
+def test_turn_method_decorator_on_error_fires_end_to_end():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    events = []
+
+    @tool()
+    async def failing_tool_for_md() -> None:
+        raise RuntimeError("boom")
+
+    turn = Turn("failing_tool_for_md")
+
+    @turn.on_error
+    async def capture_error(turn, exc):
+        events.append(("error", str(exc)))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(turn.returning())
+    assert events == [("error", "boom")]
+
+
+def test_turn_method_decorator_serialization_roundtrip():
+    HookRegistry.clear()
+    events = []
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 4})
+
+    @turn.before_run
+    async def roundtrip_md_hook(turn):
+        events.append(id(turn))
+
+    data = turn.to_dict()
+    assert data["hooks"] == {"before_run": ["roundtrip_md_hook"]}
+
+    restored = Turn.from_dict(data)
+    assert len(restored.hooks) == 1
+    assert restored.hooks[0] is roundtrip_md_hook
+    asyncio.run(restored.returning())
+    assert events == [id(restored)]
+    assert restored.output == 8
+
+
+# ---------------------------------------------------------------------------
+# TurnHook.ON_COMPLETE — Turn method decorator
+# ---------------------------------------------------------------------------
+
+
+def test_turn_on_complete_fires_on_success():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    fired = []
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 5})
+
+    @turn.on_complete
+    async def capture(turn, stop_reason):
+        fired.append(stop_reason)
+
+    asyncio.run(turn.returning())
+    assert fired == [StopReason.COMPLETED]
+
+
+def test_turn_on_complete_fires_on_error():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    fired = []
+
+    @tool()
+    async def failing_on_complete() -> None:
+        raise RuntimeError("fail")
+
+    turn = Turn("failing_on_complete")
+
+    @turn.on_complete
+    async def capture(turn, stop_reason):
+        fired.append(stop_reason)
+
+    with pytest.raises(RuntimeError, match="fail"):
+        asyncio.run(turn.returning())
+    assert fired == [StopReason.ERROR]
+
+
+def test_turn_on_complete_fires_on_timeout():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    fired = []
+
+    @tool()
+    async def slow_on_complete():
+        await asyncio.sleep(10)
+
+    turn = Turn("slow_on_complete", timeout=1)
+
+    @turn.on_complete
+    async def capture(turn, stop_reason):
+        fired.append(stop_reason)
+
+    from pygents.errors import TurnTimeoutError
+
+    with pytest.raises(TurnTimeoutError):
+        asyncio.run(turn.returning())
+    assert fired == [StopReason.TIMEOUT]
+
+
+# ---------------------------------------------------------------------------
+# Agent turn_hooks propagation
+# ---------------------------------------------------------------------------
+
+
+def test_agent_turn_hooks_propagated_to_turn():
+    from pygents.agent import Agent
+    from pygents.registry import AgentRegistry
+
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    fired = []
+
+    agent = Agent("prop_agent", "test", [tool_for_hook_test])
+
+    @agent.on_complete
+    async def capture_complete(turn, stop_reason):
+        fired.append(("complete", stop_reason))
+
+    @agent.on_error
+    async def capture_error(turn, exc):
+        fired.append(("error", str(exc)))
+
+    assert len(agent.turn_hooks) == 2
+
+    async def run():
+        await agent.put(Turn("tool_for_hook_test", kwargs={"x": 1}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert ("complete", StopReason.COMPLETED) in fired
+
+
+def test_agent_turn_hooks_restored_after_run():
+    from pygents.agent import Agent
+    from pygents.registry import AgentRegistry
+
+    AgentRegistry.clear()
+    HookRegistry.clear()
+
+    agent = Agent("restore_agent", "test", [tool_for_hook_test])
+
+    @agent.on_complete
+    async def noop(turn, stop_reason):
+        pass
+
+    turn = Turn("tool_for_hook_test", kwargs={"x": 1})
+    original_count = len(turn.hooks)
+
+    async def run():
+        await agent.put(turn)
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(turn.hooks) == original_count
+
+
+# ---------------------------------------------------------------------------
+# Agent method decorators
+# ---------------------------------------------------------------------------
+
+
+def test_agent_before_turn_decorator():
+    from pygents.agent import Agent
+    from pygents.registry import AgentRegistry
+
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    fired = []
+
+    agent = Agent("dec_agent", "test", [tool_for_hook_test])
+
+    @agent.before_turn
+    async def bt(agent):
+        fired.append("before_turn")
+
+    @agent.after_turn
+    async def at(agent, turn):
+        fired.append("after_turn")
+
+    @agent.on_turn_value
+    async def otv(agent, turn, value):
+        fired.append(("value", value))
+
+    async def run():
+        await agent.put(Turn("tool_for_hook_test", kwargs={"x": 2}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert "before_turn" in fired
+    assert "after_turn" in fired
+    assert ("value", 4) in fired
+
+
+def test_agent_before_put_after_put_decorators():
+    from pygents.agent import Agent
+    from pygents.registry import AgentRegistry
+
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    fired = []
+
+    agent = Agent("put_agent", "test", [tool_for_hook_test])
+
+    @agent.before_put
+    async def bp(agent, turn):
+        fired.append("before_put")
+
+    @agent.after_put
+    async def ap(agent, turn):
+        fired.append("after_put")
+
+    asyncio.run(agent.put(Turn("tool_for_hook_test", kwargs={"x": 1})))
+    assert fired == ["before_put", "after_put"]
+
+
+def test_agent_branch_inherits_turn_hooks():
+    from pygents.agent import Agent
+    from pygents.registry import AgentRegistry
+
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    fired = []
+
+    parent = Agent("parent_th", "test", [tool_for_hook_test])
+
+    @parent.on_complete
+    async def log_complete(turn, stop_reason):
+        fired.append(("complete", stop_reason))
+
+    child = parent.branch("child_th")
+    assert len(child.turn_hooks) == 1
+    assert child.turn_hooks[0] is parent.turn_hooks[0]
+
+    async def run():
+        await child.put(Turn("tool_for_hook_test", kwargs={"x": 1}))
+        async for _ in child.run():
+            pass
+
+    asyncio.run(run())
+    assert fired == [("complete", StopReason.COMPLETED)]
+
+
+def test_agent_serialization_includes_turn_hooks():
+    from pygents.agent import Agent
+    from pygents.registry import AgentRegistry
+
+    AgentRegistry.clear()
+    HookRegistry.clear()
+
+    agent = Agent("serial_agent", "test", [tool_for_hook_test])
+
+    @agent.on_complete
+    async def ser_complete(turn, stop_reason):
+        pass
+
+    data = agent.to_dict()
+    assert "turn_hooks" in data
+    assert data["turn_hooks"] == {"on_complete": ["ser_complete"]}
+
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+    assert len(restored.turn_hooks) == 1
+    assert restored.turn_hooks[0] is ser_complete

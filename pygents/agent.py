@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 import inspect
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 from pygents.context import (
     ContextItem,
@@ -9,11 +11,11 @@ from pygents.context import (
     _current_context_pool,
     _current_context_queue,
 )
-from pygents.errors import SafeExecutionError, TurnTimeoutError
-from pygents.hooks import AgentHook, Hook
+from pygents.errors import SafeExecutionError
+from pygents.hooks import AgentHook, Hook, TurnHook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool
-from pygents.turn import Turn
+from pygents.turn import StopReason, Turn
 from pygents.utils import (
     rebuild_hooks_from_serialization,
     safe_execution,
@@ -74,7 +76,6 @@ class Agent:
         tools: list[Tool],
         context_pool: ContextPool | None = None,
         context_queue: ContextQueue | None = None,
-        hooks: list[Hook] | None = None,
     ):
         for t in tools:
             registered = ToolRegistry.get(t.metadata.name)
@@ -85,7 +86,8 @@ class Agent:
         self.name = name
         self.description = description
         self.tools = tools
-        self.hooks: list[Hook] = list(hooks) if hooks else []
+        self.hooks: list[Hook] = []
+        self.turn_hooks: list[Hook] = []
 
         self._tool_names = {t.metadata.name for t in tools}
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
@@ -143,6 +145,80 @@ class Agent:
         elif isinstance(value, Turn):
             await self.put(value)
 
+    # -- agent-scoped hook decorators (AgentHook → self.hooks) -----------------
+
+    def before_turn(
+        self, fn: Callable[[Agent], Awaitable[None]]
+    ) -> Callable[[Agent], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, AgentHook.BEFORE_TURN)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def after_turn(
+        self, fn: Callable[[Agent, Turn], Awaitable[None]]
+    ) -> Callable[[Agent, Turn], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, AgentHook.AFTER_TURN)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def on_turn_value(
+        self, fn: Callable[[Agent, Turn, Any], Awaitable[None]]
+    ) -> Callable[[Agent, Turn, Any], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, AgentHook.ON_TURN_VALUE)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def before_put(
+        self, fn: Callable[[Agent, Turn], Awaitable[None]]
+    ) -> Callable[[Agent, Turn], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, AgentHook.BEFORE_PUT)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def after_put(
+        self, fn: Callable[[Agent, Turn], Awaitable[None]]
+    ) -> Callable[[Agent, Turn], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, AgentHook.AFTER_PUT)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def on_pause(
+        self, fn: Callable[[Agent], Awaitable[None]]
+    ) -> Callable[[Agent], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, AgentHook.ON_PAUSE)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    def on_resume(
+        self, fn: Callable[[Agent], Awaitable[None]]
+    ) -> Callable[[Agent], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, AgentHook.ON_RESUME)
+        self.hooks.append(wrapped)
+        return wrapped
+
+    # -- turn-scoped hook decorators (TurnHook → self.turn_hooks) --------------
+
+    def on_error(
+        self, fn: Callable[[Turn, Exception], Awaitable[None]]
+    ) -> Callable[[Turn, Exception], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, TurnHook.ON_ERROR)
+        self.turn_hooks.append(wrapped)
+        return wrapped
+
+    def on_timeout(
+        self, fn: Callable[[Turn], Awaitable[None]]
+    ) -> Callable[[Turn], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, TurnHook.ON_TIMEOUT)
+        self.turn_hooks.append(wrapped)
+        return wrapped
+
+    def on_complete(
+        self, fn: Callable[[Turn, StopReason | None], Awaitable[None]]
+    ) -> Callable[[Turn, StopReason | None], Awaitable[None]]:
+        wrapped = HookRegistry.wrap(fn, TurnHook.ON_COMPLETE)
+        self.turn_hooks.append(wrapped)
+        return wrapped
+
     # -- queue -----------------------------------------------------------------
 
     async def put(self, turn: Turn) -> None:
@@ -198,13 +274,14 @@ class Agent:
         description: str | None = None,
         tools: list[Tool] | None = None,
         hooks: list[Hook] | None = ...,  # type: ignore[assignment]
-    ) -> "Agent":
+    ) -> Agent:
         """
         Create a child agent that inherits this agent's configuration.
 
         The child is fully independent after creation. By default, it
-        inherits this agent's hooks; pass hooks=[] or a new list to
-        override. The queue is copied to the child; current turn is not.
+        inherits this agent's hooks and turn_hooks; pass hooks=[] or a
+        new list to override hooks. The queue is copied to the child;
+        current turn is not.
 
         Parameters
         ----------
@@ -225,6 +302,7 @@ class Agent:
         )
         child = Agent(name, child_description, child_tools)
         child.hooks = list(child_hooks)
+        child.turn_hooks = list(self.turn_hooks)
         child.context_pool = self.context_pool.branch()
         child.context_queue = self.context_queue.branch()
         for turn in self._queue_snapshot():
@@ -258,6 +336,8 @@ class Agent:
                 prev_pool = _current_context_pool.get()
                 queue_token = _current_context_queue.set(self.context_queue)
                 pool_token = _current_context_pool.set(self.context_pool)
+                original_hooks = turn.hooks[:]
+                turn.hooks.extend(self.turn_hooks)
                 try:
                     if inspect.isasyncgenfunction(turn.tool.fn):
                         async for value in turn.yielding():
@@ -275,23 +355,14 @@ class Agent:
                         )
                         if not isinstance(output, (ContextItem, Turn)):
                             yield (turn, output)
-                except TurnTimeoutError:
-                    await self._run_hooks(AgentHook.ON_TURN_TIMEOUT, self, turn)
-                    raise
-                except Exception as e:
-                    await self._run_hooks(AgentHook.ON_TURN_ERROR, self, turn, e)
-                    raise
                 finally:
+                    turn.hooks = original_hooks
                     try:
                         _current_context_queue.reset(queue_token)
                         _current_context_pool.reset(pool_token)
                     except ValueError:
-                        # aclose() from an early break can run in a different Context copy;
-                        # reset() requires the same Context the token was created in.
-                        # Fall back to set() which is context-agnostic.
                         _current_context_queue.set(prev_queue)
                         _current_context_pool.set(prev_pool)
-                    await self._run_hooks(AgentHook.ON_TURN_COMPLETE, self, turn, turn.metadata.stop_reason)
                 await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
                 self._current_turn = None
         finally:
@@ -309,13 +380,14 @@ class Agent:
             if self._current_turn
             else None,
             "hooks": serialize_hooks_by_type(self.hooks),
+            "turn_hooks": serialize_hooks_by_type(self.turn_hooks),
             "context_pool": self.context_pool.to_dict(),
             "is_paused": self.is_paused,
             "context_queue": self.context_queue.to_dict(),
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Agent":
+    def from_dict(cls, data: dict[str, Any]) -> Agent:
         tools = [ToolRegistry.get(name) for name in data["tool_names"]]
         agent = cls(data["name"], data["description"], tools)
         for turn_data in data.get("queue", []):
@@ -323,6 +395,9 @@ class Agent:
         if data.get("current_turn") is not None:
             agent._current_turn = Turn.from_dict(data["current_turn"])
         agent.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
+        agent.turn_hooks = rebuild_hooks_from_serialization(
+            data.get("turn_hooks", {})
+        )
         agent.context_pool = ContextPool.from_dict(data.get("context_pool", {}))
         agent.context_queue = ContextQueue.from_dict(
             data.get("context_queue", {"limit": 10, "items": [], "hooks": {}})

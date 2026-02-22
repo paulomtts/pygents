@@ -207,9 +207,9 @@ from pygents import hook, TurnHook, AgentHook, ToolHook, ContextQueueHook, Conte
 async def log_start(turn):
     print(f"Starting {turn.tool.metadata.name}")
 
-@hook(AgentHook.ON_TURN_ERROR)
-async def on_error(agent, turn, exception):
-    print(f"Error in {agent.name}: {exception}")
+@hook(TurnHook.ON_ERROR)
+async def on_error(turn, exception):
+    print(f"Error: {exception}")
 
 @hook(ToolHook.AFTER_INVOKE)
 async def log_result(value):
@@ -225,8 +225,9 @@ async def log_pool(pool, item):
 ```
 
 Attach hooks:
-- Turns: `Turn(..., hooks=[h])` or `turn.hooks.append(h)`
-- Agents: `agent.hooks.append(h)`
+- Turns: `turn.hooks.append(h)` or method decorators (`@turn.before_run`, `@turn.on_complete`, etc.)
+- Agents: `agent.hooks.append(h)` or method decorators (`@agent.before_turn`, `@agent.on_error`, etc.)
+- Agent turn_hooks (propagated to all turns): `agent.turn_hooks.append(h)` or turn-scoped decorators (`@agent.on_error`, `@agent.on_timeout`, `@agent.on_complete`)
 - Tools: `@tool(hooks=[h])`
 - ContextQueue: `ContextQueue(limit=N, hooks=[h])` or `cq.branch(hooks=[h])`
 - ContextPool: `ContextPool(hooks=[h])` or via `Agent(..., context_pool=ContextPool(hooks=[h]))`
@@ -249,14 +250,12 @@ async def log_events(*args, **kwargs): ...
 - `AFTER_RUN(turn)` — after clean completion, before agent routing
 - `ON_TIMEOUT(turn)` — turn timed out
 - `ON_ERROR(turn, exception)` — non-timeout error
+- `ON_COMPLETE(turn, stop_reason)` — always fires in finally block (clean, error, or timeout)
 
 **AgentHook:**
 - `BEFORE_TURN(agent)` — before consuming next turn
-- `AFTER_TURN(agent, turn)` — after turn processed (clean completion only)
-- `ON_TURN_COMPLETE(agent, turn, stop_reason)` — always fires after a turn (clean, error, or timeout); fires in the finally block before AFTER_TURN
+- `AFTER_TURN(agent, turn)` — after turn processed
 - `ON_TURN_VALUE(agent, turn, value)` — after routing (context already updated), before yielding result
-- `ON_TURN_ERROR(agent, turn, exception)` — turn error
-- `ON_TURN_TIMEOUT(agent, turn)` — turn timeout
 - `BEFORE_PUT(agent, turn)` — before enqueue
 - `AFTER_PUT(agent, turn)` — after enqueue
 - `ON_PAUSE(agent)` — run loop hit a paused gate

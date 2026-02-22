@@ -263,3 +263,49 @@ def test_get_by_type_returns_empty_for_typeless_hook():
     # No .type attribute set — getattr returns None → matches() returns False
     result = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [typeless_hook])
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# HookRegistry.wrap
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_plain_fn_creates_and_registers_hook():
+    from pygents.hooks import TurnHook
+
+    HookRegistry.clear()
+
+    async def my_plain_hook(turn):
+        pass
+
+    wrapped = HookRegistry.wrap(my_plain_hook, TurnHook.BEFORE_RUN)
+    assert wrapped is not my_plain_hook
+    assert wrapped.fn is my_plain_hook
+    assert wrapped.type == TurnHook.BEFORE_RUN
+    assert HookRegistry.get("my_plain_hook") is wrapped
+
+
+def test_wrap_already_wrapped_hook_returns_same_object():
+    from pygents.hooks import TurnHook, hook
+
+    HookRegistry.clear()
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def existing_hook(turn):
+        pass
+
+    result = HookRegistry.wrap(existing_hook, TurnHook.BEFORE_RUN)
+    assert result is existing_hook
+
+
+def test_wrap_previously_registered_fn_reuses_wrapper():
+    from pygents.hooks import TurnHook
+
+    HookRegistry.clear()
+
+    async def reusable_hook(turn):
+        pass
+
+    first = HookRegistry.wrap(reusable_hook, TurnHook.BEFORE_RUN)
+    second = HookRegistry.wrap(reusable_hook, TurnHook.BEFORE_RUN)
+    assert first is second

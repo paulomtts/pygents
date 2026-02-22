@@ -49,6 +49,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `AFTER_RUN` | After successful completion | `(turn)` |
 | `ON_TIMEOUT` | Turn timed out | `(turn)` |
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
+| `ON_COMPLETE` | Always fires in finally block (clean, error, or timeout) | `(turn, stop_reason)` |
 | `ON_VALUE` | Before each yielded value (streaming only) | `(turn, value)` |
 
 **Agent** — during the agent run loop (see [Agents](agents.md#hooks)):
@@ -57,9 +58,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 |------|------|------|
 | `BEFORE_TURN` | Before consuming next turn from queue | `(agent)` |
 | `AFTER_TURN` | After turn fully processed | `(agent, turn)` |
-| `ON_TURN_VALUE` | Before yielding each result | `(agent, turn, value)` |
-| `ON_TURN_ERROR` | Turn raised an exception | `(agent, turn, exception)` |
-| `ON_TURN_TIMEOUT` | Turn timed out | `(agent, turn)` |
+| `ON_TURN_VALUE` | After routing, before yielding each result | `(agent, turn, value)` |
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
 | `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
 | `ON_PAUSE` | When the run loop hits a paused gate | `(agent)` |

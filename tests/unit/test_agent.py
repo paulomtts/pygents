@@ -28,8 +28,8 @@ run():
   R2  Loop: get turn from _current_turn or queue; BEFORE_TURN
   R3  Async gen tool -> yielding(), ON_TURN_VALUE per value, yield (turn, value) only if not ContextItem/Turn, _route_value(value) per value
   R4  Coroutine tool -> returning(), ON_TURN_VALUE, yield (turn, output) only if not ContextItem/Turn, _route_value(turn.output)
-  R5  TurnTimeoutError -> ON_TURN_TIMEOUT, re-raise
-  R6  Other exception -> ON_TURN_ERROR, re-raise
+  R5  TurnTimeoutError -> TurnHook.ON_TIMEOUT (via turn), re-raise
+  R6  Other exception -> TurnHook.ON_ERROR (via turn), re-raise
   R7  After: AFTER_TURN; clear _current_turn
   R8  finally: _is_running False, _current_turn None
   R9  Early break (coroutine tool) -> no ValueError; _is_running False
@@ -127,29 +127,22 @@ async def returns_context_item_id_no_description():
 # ---------------------------------------------------------------------------
 
 
-def test_agent_accepts_hooks_in_constructor():
+def test_agent_accepts_hooks_via_method_decorator():
     AgentRegistry.clear()
     HookRegistry.clear()
-
-    @hook(AgentHook.BEFORE_TURN)
-    async def my_hook_ctor(agent):
-        pass
-
-    agent = Agent("a", "desc", [add_agent], hooks=[my_hook_ctor])
-    assert my_hook_ctor in agent.hooks
-
     events = []
 
-    @hook(AgentHook.BEFORE_TURN)
+    agent = Agent("a", "desc", [add_agent])
+
+    @agent.before_turn
     async def capturing_hook(agent):
         events.append("before_turn")
 
-    AgentRegistry.clear()
-    agent2 = Agent("b", "desc", [add_agent], hooks=[capturing_hook])
+    assert capturing_hook in agent.hooks
 
     async def run():
-        await agent2.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
-        async for _ in agent2.run():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        async for _ in agent.run():
             pass
 
     asyncio.run(run())
@@ -741,14 +734,15 @@ def test_run_early_break_streaming_does_not_raise():
 
 def test_run_on_turn_timeout_hook_called():
     AgentRegistry.clear()
+    HookRegistry.clear()
     events = []
 
-    @hook(AgentHook.ON_TURN_TIMEOUT)
-    async def on_turn_timeout(agent, turn):
+    agent = Agent("a", "desc", [slow_tool_agent])
+
+    @agent.on_timeout
+    async def on_turn_timeout(turn):
         events.append("on_turn_timeout")
 
-    agent = Agent("a", "desc", [slow_tool_agent])
-    agent.hooks.append(on_turn_timeout)
     asyncio.run(agent.put(Turn("slow_tool_agent", kwargs={"duration": 2.0}, timeout=1)))
 
     async def consume():
@@ -762,14 +756,15 @@ def test_run_on_turn_timeout_hook_called():
 
 def test_run_on_turn_error_hook_called():
     AgentRegistry.clear()
+    HookRegistry.clear()
     events = []
 
-    @hook(AgentHook.ON_TURN_ERROR)
-    async def on_turn_error(agent, turn, exc):
+    agent = Agent("a", "desc", [raising_tool_agent])
+
+    @agent.on_error
+    async def on_turn_error(turn, exc):
         events.append(("on_turn_error", type(exc).__name__))
 
-    agent = Agent("a", "desc", [raising_tool_agent])
-    agent.hooks.append(on_turn_error)
     asyncio.run(agent.put(Turn("raising_tool_agent", kwargs={})))
 
     async def consume():
@@ -889,21 +884,20 @@ def test_on_turn_value_hook_fires_for_context_item_even_when_filtered():
 
 
 def test_on_turn_value_fires_after_context_item_routed():
-    # ON_TURN_VALUE fires after _route_value, so context_queue already has the item.
     AgentRegistry.clear()
     HookRegistry.clear()
     from pygents.context import ContextItem
     queue_len_at_hook = []
 
-    @hook(AgentHook.ON_TURN_VALUE)
-    async def capture_queue_len(agent, turn, value):
-        queue_len_at_hook.append(len(agent.context_queue))
-
     @tool()
     async def yields_ci_post_route():
         return ContextItem(content="x")
 
-    agent = Agent("a", "desc", [yields_ci_post_route], hooks=[capture_queue_len])
+    agent = Agent("a", "desc", [yields_ci_post_route])
+
+    @agent.on_turn_value
+    async def capture_queue_len(agent, turn, value):
+        queue_len_at_hook.append(len(agent.context_queue))
 
     async def run():
         await agent.put(Turn("yields_ci_post_route", kwargs={}))
@@ -1601,21 +1595,20 @@ def test_context_var_reset_after_each_turn():
 
 
 # ---------------------------------------------------------------------------
-# ON_TURN_COMPLETE hook
+# ON_COMPLETE hook (now TurnHook, propagated via agent.turn_hooks)
 # ---------------------------------------------------------------------------
 
 
-def test_on_turn_complete_fires_on_clean_turn():
+def test_on_complete_fires_on_clean_turn():
     AgentRegistry.clear()
     HookRegistry.clear()
     fired = []
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def on_complete(agent, turn, stop_reason):
-        fired.append(("complete", stop_reason))
-
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.append(on_complete)
+
+    @agent.on_complete
+    async def on_complete(turn, stop_reason):
+        fired.append(("complete", stop_reason))
 
     async def run():
         await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
@@ -1626,17 +1619,16 @@ def test_on_turn_complete_fires_on_clean_turn():
     assert fired == [("complete", StopReason.COMPLETED)]
 
 
-def test_on_turn_complete_fires_on_error():
+def test_on_complete_fires_on_error():
     AgentRegistry.clear()
     HookRegistry.clear()
     fired = []
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def on_complete_err(agent, turn, stop_reason):
-        fired.append(("complete", stop_reason))
-
     agent = Agent("a", "desc", [raising_tool_agent])
-    agent.hooks.append(on_complete_err)
+
+    @agent.on_complete
+    async def on_complete_err(turn, stop_reason):
+        fired.append(("complete", stop_reason))
 
     async def run():
         await agent.put(Turn("raising_tool_agent", kwargs={}))
@@ -1648,17 +1640,16 @@ def test_on_turn_complete_fires_on_error():
     assert fired == [("complete", StopReason.ERROR)]
 
 
-def test_on_turn_complete_fires_on_timeout():
+def test_on_complete_fires_on_timeout():
     AgentRegistry.clear()
     HookRegistry.clear()
     fired = []
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def on_complete_timeout(agent, turn, stop_reason):
-        fired.append(("complete", stop_reason))
-
     agent = Agent("a", "desc", [slow_tool_agent])
-    agent.hooks.append(on_complete_timeout)
+
+    @agent.on_complete
+    async def on_complete_timeout(turn, stop_reason):
+        fired.append(("complete", stop_reason))
 
     async def run():
         await agent.put(Turn("slow_tool_agent", kwargs={"duration": 2.0}, timeout=1))
@@ -1670,17 +1661,16 @@ def test_on_turn_complete_fires_on_timeout():
     assert fired == [("complete", StopReason.TIMEOUT)]
 
 
-def test_on_turn_complete_receives_stop_reason():
+def test_on_complete_receives_stop_reason():
     AgentRegistry.clear()
     HookRegistry.clear()
     captured = []
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def capture_reason(agent, turn, stop_reason):
-        captured.append(stop_reason)
-
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.append(capture_reason)
+
+    @agent.on_complete
+    async def capture_reason(turn, stop_reason):
+        captured.append(stop_reason)
 
     async def run():
         await agent.put(Turn("add_agent", kwargs={"a": 5, "b": 5}))
