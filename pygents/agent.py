@@ -132,7 +132,7 @@ class Agent:
         self._pause_event.set()
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
-        if h := HookRegistry.get_by_type(name, self.hooks):
+        for h in HookRegistry.get_by_type(name, self.hooks):
             await h(*args, **kwargs)
 
     async def _route_value(self, value: Any) -> None:
@@ -268,12 +268,12 @@ class Agent:
                             )
                             if not isinstance(value, (ContextItem, Turn)):
                                 yield (turn, value)
-                        if h := HookRegistry.get_by_type(ToolHook.AFTER_INVOKE, turn.tool.hooks):
+                        for h in HookRegistry.get_by_type(ToolHook.AFTER_INVOKE, turn.tool.hooks):
                             await h(turn.output)
                     else:
                         output = await turn.returning()
                         await self._route_value(turn.output)
-                        if h := HookRegistry.get_by_type(ToolHook.AFTER_INVOKE, turn.tool.hooks):
+                        for h in HookRegistry.get_by_type(ToolHook.AFTER_INVOKE, turn.tool.hooks):
                             await h(output)
                         await self._run_hooks(
                             AgentHook.ON_TURN_VALUE, self, turn, output

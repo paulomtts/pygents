@@ -204,8 +204,8 @@ class HookRegistry(ABC):
         return h
 
     @classmethod
-    def get_by_type(cls, hook_type: object, hooks: list[Hook]) -> Hook | None:
-        """Return the first hook in the given list that matches the hook_type."""
+    def get_by_type(cls, hook_type: object, hooks: list[Hook]) -> list[Hook]:
+        """Return all hooks in the given list that match the hook_type, in order."""
 
         def matches(h: "Hook") -> bool:
             ht = getattr(h, "type", None)
@@ -215,4 +215,4 @@ class HookRegistry(ABC):
                 return hook_type in ht
             return ht == hook_type
 
-        return next((h for h in hooks if matches(h)), None)
+        return [h for h in hooks if matches(h)]

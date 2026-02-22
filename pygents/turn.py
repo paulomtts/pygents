@@ -133,7 +133,7 @@ class Turn[T]:
     # -- hooks -----------------------------------------------------------------
 
     async def _run_hook(self, hook_type: TurnHook, *args: Any) -> None:
-        if h := HookRegistry.get_by_type(hook_type, self.hooks):
+        for h in HookRegistry.get_by_type(hook_type, self.hooks):
             await h(self, *args)
 
     # -- execution ------------------------------------------------------------

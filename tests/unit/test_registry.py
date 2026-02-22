@@ -180,7 +180,7 @@ def test_hook_registry_register_with_hook_type_stores_and_findable():
     HookRegistry.register(before_run, hook_type=TurnHook.BEFORE_RUN)
     assert getattr(before_run, "type", None) == TurnHook.BEFORE_RUN
     found = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [before_run])
-    assert found is before_run
+    assert found == [before_run]
 
 
 def test_hook_registry_clear():
@@ -212,13 +212,13 @@ def test_hook_registry_get_by_type():
     agent_after.type = AgentHook.AFTER_TURN  # type: ignore[attr-defined]
 
     before_run = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [turn_before])
-    assert before_run is turn_before
+    assert before_run == [turn_before]
 
     after_turn = HookRegistry.get_by_type(AgentHook.AFTER_TURN, [agent_after])
-    assert after_turn is agent_after
+    assert after_turn == [agent_after]
 
     empty = HookRegistry.get_by_type(TurnHook.AFTER_RUN, [])
-    assert empty is None
+    assert empty == []
 
 
 def test_hook_registry_get_by_type_with_frozenset():
@@ -232,12 +232,12 @@ def test_hook_registry_get_by_type_with_frozenset():
     object.__setattr__(my_hook, "type", frozenset({AgentHook.BEFORE_TURN}))
 
     result = HookRegistry.get_by_type(AgentHook.BEFORE_TURN, [my_hook])
-    assert result is my_hook
+    assert result == [my_hook]
     result_miss = HookRegistry.get_by_type(AgentHook.AFTER_TURN, [my_hook])
-    assert result_miss is None
+    assert result_miss == []
 
 
-def test_hook_registry_get_by_type_returns_first_match():
+def test_hook_registry_get_by_type_returns_all_matches():
     from pygents.hooks import TurnHook
 
     HookRegistry.clear()
@@ -251,17 +251,17 @@ def test_hook_registry_get_by_type_returns_first_match():
     first_hook.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
     second_hook.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
 
-    single = HookRegistry.get_by_type(
+    matches = HookRegistry.get_by_type(
         TurnHook.BEFORE_RUN, [first_hook, second_hook]
     )
-    assert single is first_hook
+    assert matches == [first_hook, second_hook]
 
 
-def test_get_by_type_returns_none_for_typeless_hook():
-    """Covers the `ht is None` guard (line 213 in registry.py).
+def test_get_by_type_returns_empty_for_typeless_hook():
+    """Covers the `ht is None` guard in registry.py.
 
     A plain callable without a `.type` attribute must be treated as
-    non-matching, returning None.
+    non-matching, returning an empty list.
     """
     from pygents.hooks import TurnHook
 
@@ -270,4 +270,4 @@ def test_get_by_type_returns_none_for_typeless_hook():
 
     # No .type attribute set — getattr returns None → matches() returns False
     result = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [typeless_hook])
-    assert result is None
+    assert result == []

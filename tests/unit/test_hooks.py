@@ -16,7 +16,7 @@ hook() decorator:
   H5  fixed_kwarg key not in signature and no **kwargs -> TypeError
   H6  Wrapper call: start_time set, await fn(*args, **merged), end_time set in finally
   H7  get_by_type(hook_type, [wrapper]) returns wrapper
-  H8  Multiple hooks same type: get_by_type returns first match
+  H8  Multiple hooks same type: get_by_type returns all matches in order
 """
 
 import asyncio
@@ -101,10 +101,9 @@ def test_hook_sets_type_metadata_and_registers():
     assert decorated_before_run.type == TurnHook.BEFORE_RUN
     assert decorated_before_run.metadata == HookMetadata("decorated_before_run", None)
     assert HookRegistry.get("decorated_before_run") is decorated_before_run
-    assert (
-        HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [decorated_before_run])
-        is decorated_before_run
-    )
+    assert HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [decorated_before_run]) == [
+        decorated_before_run
+    ]
 
 
 def test_hook_metadata_includes_docstring():
@@ -117,7 +116,7 @@ def test_hook_metadata_includes_docstring():
     assert my_hook.metadata.description == "Runs after the turn."
 
 
-def test_hook_get_by_type_returns_first_match():
+def test_hook_get_by_type_returns_all_matches_in_order():
     HookRegistry.clear()
 
     @hook(AgentHook.AFTER_TURN)
@@ -128,8 +127,8 @@ def test_hook_get_by_type_returns_first_match():
     async def second_after(agent, turn):
         pass
 
-    single = HookRegistry.get_by_type(AgentHook.AFTER_TURN, [first_after, second_after])
-    assert single is first_after
+    matches = HookRegistry.get_by_type(AgentHook.AFTER_TURN, [first_after, second_after])
+    assert matches == [first_after, second_after]
 
 
 def test_hook_memory_hook_type_accepted():
@@ -153,14 +152,12 @@ def test_hook_multi_type_matches_each_type():
     assert isinstance(multi_type_hook.type, tuple)
     assert AgentHook.BEFORE_TURN in multi_type_hook.type
     assert AgentHook.AFTER_TURN in multi_type_hook.type
-    assert (
-        HookRegistry.get_by_type(AgentHook.BEFORE_TURN, [multi_type_hook])
-        is multi_type_hook
-    )
-    assert (
-        HookRegistry.get_by_type(AgentHook.AFTER_TURN, [multi_type_hook])
-        is multi_type_hook
-    )
+    assert HookRegistry.get_by_type(AgentHook.BEFORE_TURN, [multi_type_hook]) == [
+        multi_type_hook
+    ]
+    assert HookRegistry.get_by_type(AgentHook.AFTER_TURN, [multi_type_hook]) == [
+        multi_type_hook
+    ]
 
 
 def test_hook_multi_type_serialization():
@@ -606,6 +603,60 @@ def test_agent_multiple_hooks_serialization():
     assert len(restored.hooks) == 2
     assert hook_one in restored.hooks
     assert hook_two in restored.hooks
+
+
+def test_agent_multiple_hooks_same_type_all_called():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    events = []
+
+    @hook(AgentHook.BEFORE_TURN)
+    async def first_before_turn_hook(agent):
+        events.append("first")
+
+    @hook(AgentHook.BEFORE_TURN)
+    async def second_before_turn_hook(agent):
+        events.append("second")
+
+    agent = Agent("multi_call_agent", "Test", [tool_for_hook_test])
+    agent.hooks = [first_before_turn_hook, second_before_turn_hook]
+
+    async def run():
+        await agent.put(Turn("tool_for_hook_test", kwargs={"x": 1}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert events == ["first", "second"]
+
+
+def test_tool_multiple_hooks_same_type_all_called():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    events = []
+
+    async def before_a(*args, **kwargs):
+        events.append("a")
+
+    async def before_b(*args, **kwargs):
+        events.append("b")
+
+    before_a.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
+    before_b.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
+
+    @tool(hooks=[before_a, before_b])
+    async def multi_before_tool(x: int) -> int:
+        return x
+
+    agent = Agent("multi_tool_hook_agent", "Test", [multi_before_tool])
+
+    async def run():
+        await agent.put(Turn("multi_before_tool", kwargs={"x": 1}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert events == ["a", "b"]
 
 
 def _collect_async(agen):

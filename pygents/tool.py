@@ -61,7 +61,7 @@ def tool(
         validate_fixed_kwargs(fn, fixed_kwargs, kind="Tool")
 
         async def _run_hook(hook_type: ToolHook, *args: Any, **kwargs: Any) -> None:
-            if h := HookRegistry.get_by_type(hook_type, wrapper.hooks):
+            for h in HookRegistry.get_by_type(hook_type, wrapper.hooks):
                 await h(*args, **kwargs)
 
         if inspect.isasyncgenfunction(fn):
