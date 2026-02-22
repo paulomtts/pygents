@@ -1,8 +1,7 @@
-# TODO: Postpone evaluation of annotations so `dict[str, Tool]` etc. are not evaluated at class body time, when `Tool` is only imported under TYPE_CHECKING.
 from __future__ import annotations
 
 from abc import ABC
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar
 
 from pygents.errors import (
     UnregisteredAgentError,
@@ -11,197 +10,68 @@ from pygents.errors import (
 )
 
 if TYPE_CHECKING:
-    from pygents.agent import Agent
     from pygents.hooks import Hook
-    from pygents.tool import Tool
+    from pygents.tool import AsyncGenTool, Tool
+
+T = TypeVar("T")
 
 
-class ToolRegistry(ABC):
-    """
-    Registry for Tools. Not meant to be instantiated or used directly.
-    """
-
-    _registry: dict[str, Tool] = {}
-
-    # -- registration ---------------------------------------------------------
-
-    @classmethod
-    def register(cls, tool: Tool) -> None:
-        """Register a Tool.
-
-        Parameters
-        ----------
-        tool : Tool
-            The Tool to register.
-
-        Raises
-        ------
-        ValueError
-            If the Tool is already registered.
-        """
-        if tool.__name__ in cls._registry:
-            raise ValueError(f"Tool {tool.__name__!r} already registered")
-        cls._registry[tool.__name__] = tool
-
-    # -- lookup ----------------------------------------------------------------
+class BaseRegistry(ABC, Generic[T]):
+    _registry: ClassVar[dict] = {}
+    _key_attr: ClassVar[str]
+    _not_found_error: ClassVar[type[Exception]]
+    _allow_reregister: ClassVar[bool] = False
 
     @classmethod
-    def get(cls, name: str) -> Tool:
-        """Get a Tool by name.
-
-        Parameters
-        ----------
-        name : str
-            The name of the Tool.
-
-        Returns
-        -------
-        Tool
-            The registered Tool.
-
-        Raises
-        ------
-        UnregisteredToolError
-            If the Tool is not found.
-        """
-        tool = cls._registry.get(name)
-        if tool is None:
-            raise UnregisteredToolError(f"Tool {name!r} not found")
-        return tool
+    def clear(cls) -> None:
+        cls._registry = {}
 
     @classmethod
-    def all(cls) -> list[Tool]:
+    def register(cls, item: T) -> None:
+        key = getattr(item, cls._key_attr)
+        existing = cls._registry.get(key)
+        if existing is not None:
+            if cls._allow_reregister and existing is item:
+                return
+            raise ValueError(f"{key!r} already registered")
+        cls._registry[key] = item
+
+    @classmethod
+    def get(cls, name: str) -> T:
+        item = cls._registry.get(name)
+        if item is None:
+            raise cls._not_found_error(f"{name!r} not found")
+        return item  # type: ignore[return-value]
+
+
+class ToolRegistry(BaseRegistry):  # type: ignore[type-arg]
+    """Registry for Tools. Not meant to be instantiated or used directly."""
+
+    _registry: ClassVar[dict] = {}
+    _key_attr = "__name__"
+    _not_found_error = UnregisteredToolError
+
+    @classmethod
+    def all(cls) -> list[Tool | AsyncGenTool]:
         """Return all registered Tools."""
         return list(cls._registry.values())
 
 
-class AgentRegistry(ABC):
-    """
-    Registry for Agents. Not meant to be instantiated or used directly.
-    """
+class AgentRegistry(BaseRegistry):  # type: ignore[type-arg]
+    """Registry for Agents. Not meant to be instantiated or used directly."""
 
-    _registry: dict[str, Agent] = {}
-
-    # -- registration ---------------------------------------------------------
-
-    @classmethod
-    def clear(cls) -> None:
-        cls._registry = {}
-
-    @classmethod
-    def register(cls, agent: Agent) -> None:
-        """Register an Agent.
-
-        Parameters
-        ----------
-        agent : Agent
-            The Agent to register.
-
-        Raises
-        ------
-        ValueError
-            If the Agent is already registered.
-        """
-        if agent.name in cls._registry:
-            raise ValueError(f"Agent {agent.name!r} already registered")
-        cls._registry[agent.name] = agent
-
-    # -- lookup ----------------------------------------------------------------
-
-    @classmethod
-    def get(cls, name: str) -> Agent:
-        """Get an Agent by name.
-
-        Parameters
-        ----------
-        name : str
-            The name of the Agent.
-
-        Returns
-        -------
-        Agent
-            The registered Agent.
-
-        Raises
-        ------
-        UnregisteredAgentError
-            If the Agent is not found.
-        """
-        agent = cls._registry.get(name)
-        if agent is None:
-            raise UnregisteredAgentError(f"Agent {name!r} not found")
-        return agent
+    _registry: ClassVar[dict] = {}
+    _key_attr = "name"
+    _not_found_error = UnregisteredAgentError
 
 
-class HookRegistry(ABC):
-    """
-    Registry for Hooks. Not meant to be instantiated or used directly.
-    """
+class HookRegistry(BaseRegistry):  # type: ignore[type-arg]
+    """Registry for Hooks. Not meant to be instantiated or used directly."""
 
-    _registry: dict[str, Hook] = {}
-
-    # -- registration ---------------------------------------------------------
-
-    @classmethod
-    def clear(cls) -> None:
-        cls._registry = {}
-
-    @classmethod
-    def register(
-        cls,
-        hook: Hook,
-        name: str | None = None,
-        hook_type: object | None = None,
-    ) -> None:
-        """Register a Hook.
-
-        Parameters
-        ----------
-        hook : Hook
-            The hook to register.
-        name : str | None
-            Name to register under; uses hook.__name__ if not provided.
-        hook_type : enum member | None
-            If provided, stored on the hook for get_by_type lookups.
-
-        Raises
-        ------
-        ValueError
-            If the hook is already registered.
-        """
-        hook_name = name or getattr(hook, "__name__", None) or "hook"
-        existing = cls._registry.get(hook_name)
-        if existing is not None and existing is not hook:
-            raise ValueError(f"Hook {hook_name!r} already registered")
-        cls._registry[hook_name] = hook
-        if hook_type is not None:
-            hook.type = hook_type  # type: ignore[attr-defined]
-
-    # -- lookup ----------------------------------------------------------------
-
-    @classmethod
-    def get(cls, name: str) -> Hook:
-        """Get a hook by name.
-
-        Parameters
-        ----------
-        name : str
-            The name of the hook.
-
-        Returns
-        -------
-        Hook
-            The registered hook.
-
-        Raises
-        ------
-        UnregisteredHookError
-            If the hook is not found.
-        """
-        h = cls._registry.get(name)
-        if h is None:
-            raise UnregisteredHookError(f"Hook {name!r} not found")
-        return h
+    _registry: ClassVar[dict] = {}
+    _key_attr = "__name__"
+    _not_found_error = UnregisteredHookError
+    _allow_reregister = True
 
     @classmethod
     def get_by_type(cls, hook_type: object, hooks: list[Hook]) -> list[Hook]:

@@ -44,26 +44,6 @@ def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
     return wrapper
 
 
-def validate_fixed_kwargs(
-    fn: Callable[..., Any],
-    fixed_kwargs: dict[str, Any],
-    kind: str = "Tool",
-) -> None:
-    """Raise TypeError if fixed_kwargs contains keys not in fn's signature and fn has no **kwargs."""
-    params = inspect.signature(fn).parameters
-    has_var_kwargs = any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-    )
-    if not has_var_kwargs:
-        valid_keys = set(params.keys())
-        invalid = set(fixed_kwargs.keys()) - valid_keys
-        if invalid:
-            raise TypeError(
-                f"{kind} {fn.__name__!r} fixed kwargs {sorted(invalid)} are not in "
-                "function signature and function does not accept **kwargs."
-            )
-
-
 def eval_args(args: Iterable[Any]) -> list[Any]:
     return [v() if isinstance(v, _function_type) else v for v in args]
 

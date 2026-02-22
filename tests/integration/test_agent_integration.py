@@ -2,7 +2,7 @@
 Integration test: agent run with hooks at every level and shared memory.
 
 Exercises Agent (BEFORE_PUT, AFTER_PUT, BEFORE_TURN, ON_TURN_VALUE, ON_TURN_COMPLETE,
-AFTER_TURN), Turn (BEFORE_RUN, AFTER_RUN), Tool (BEFORE_INVOKE, AFTER_INVOKE), and
+AFTER_TURN), Turn (BEFORE_RUN, AFTER_RUN), Tool (BEFORE_INVOKE), and
 ContextQueue (BEFORE_APPEND, AFTER_APPEND) in one flow. The agent holds a ContextQueue
 instance; agent hooks append to it so that context queue hooks also fire.
 """
@@ -36,13 +36,11 @@ def test_agent_run_with_hooks_and_memory():
     async def tool_before(*args, **kwargs):
         events.append("tool_before_invoke")
 
-    @hook(ToolHook.AFTER_INVOKE)
-    async def tool_after(result):
-        events.append("tool_after_invoke")
-
-    @tool(hooks=[tool_before, tool_after])
+    @tool()
     async def integration_compute(a: int, b: int) -> int:
         return a + b
+
+    integration_compute.before_invoke(tool_before)
 
     @hook(AgentHook.BEFORE_PUT)
     async def agent_before_put(agent, turn):
@@ -119,7 +117,6 @@ def test_agent_run_with_hooks_and_memory():
         "turn_before_run",
         "tool_before_invoke",
         "turn_after_run",
-        "tool_after_invoke",
         ("agent_on_turn_value", 8),
         "agent_on_turn_complete",
         "agent_after_turn",

@@ -22,8 +22,7 @@ Lock:
   L2  lock=True -> wrapper.lock is asyncio.Lock()
 
 Hooks:
-  H1  hooks=None -> wrapper.hooks = []
-  H2  hooks=[...] -> wrapper.hooks = list(hooks)
+  H1  wrapper.hooks starts empty; method decorators append to it
 
 Invocation (coroutine): start_time, BEFORE_INVOKE, await fn, end_time in finally.
 Invocation (async gen): start_time, BEFORE_INVOKE, async for + ON_YIELD, end_time in finally.
@@ -131,15 +130,6 @@ def test_decorated_tool_has_hooks_list_empty_when_none():
     assert no_hooks.hooks == []
 
 
-def test_decorated_tool_hooks_list_stored_when_provided():
-    hook = object()
-
-    @tool(hooks=[hook])
-    async def with_hooks() -> None:
-        pass
-
-    assert with_hooks.hooks == [hook]
-
 
 def test_tool_metadata_fields():
     metadata = ToolMetadata(
@@ -203,14 +193,6 @@ def test_tool_fixed_kwargs_async_gen_tool():
 
     results = _collect_async(yielding_fixed_tool(x=1))
     assert results == ["fixed-1", "fixed-2"]
-
-
-def test_tool_fixed_kwarg_not_in_signature_raises():
-    with pytest.raises(TypeError, match="fixed kwargs .* are not in function signature"):
-
-        @tool(unknown_param=1)
-        async def no_such_param(x: int) -> int:
-            return x
 
 
 def test_tool_fixed_kwargs_allowed_when_function_has_kwargs():
@@ -289,31 +271,58 @@ def _collect_async(agen):
 def test_before_invoke_hook_fires_on_coroutine_tool():
     events = []
 
-    async def before(x):
-        events.append(("before", x))
-
-    before.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[before])
+    @tool()
     async def add_one(x: int) -> int:
         return x + 1
+
+    @add_one.before_invoke
+    async def before(x):
+        events.append(("before", x))
 
     asyncio.run(add_one(7))
     assert events == [("before", 7)]
 
 
+def test_stacked_decorator_shared_hook_fires_for_both_tools():
+    """Sharing a hook via stacked decorators must fire for both tools."""
+    from pygents.hooks import ToolHook
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    events = []
+
+    @tool()
+    async def tool_a(x: int) -> int:
+        return x
+
+    @tool()
+    async def tool_b(x: int) -> int:
+        return x
+
+    @tool_a.after_invoke
+    @tool_b.before_invoke
+    async def shared_hook(x):
+        events.append(x)
+
+    async def run():
+        await tool_b._run_hook(ToolHook.BEFORE_INVOKE, 1)
+        await tool_a._run_hook(ToolHook.AFTER_INVOKE, 2)
+
+    asyncio.run(run())
+    assert events == [1, 2]
+
+
 def test_on_yield_hook_fires_on_async_gen_tool():
     yields_seen = []
 
-    async def on_yield(value):
-        yields_seen.append(value)
-
-    on_yield.type = ToolHook.ON_YIELD        # type: ignore[attr-defined]
-
-    @tool(hooks=[on_yield])
+    @tool()
     async def gen_two():
         yield 10
         yield 20
+
+    @gen_two.on_yield
+    async def on_yield(value):
+        yields_seen.append(value)
 
     _collect_async(gen_two())
     assert yields_seen == [10, 20]

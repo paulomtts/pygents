@@ -127,16 +127,6 @@ def test_hook_registry_register_and_get():
     assert retrieved is my_hook
 
 
-def test_hook_registry_register_with_custom_name():
-    HookRegistry.clear()
-
-    async def some_hook():
-        pass
-
-    HookRegistry.register(some_hook, name="custom_name")
-    retrieved = HookRegistry.get("custom_name")
-    assert retrieved is some_hook
-
 
 def test_hook_registry_get_missing_raises_unregistered_hook_error():
     HookRegistry.clear()
@@ -153,9 +143,11 @@ def test_hook_registry_register_duplicate_raises_value_error():
     async def other_hook():
         pass
 
+    other_hook.__name__ = "duplicate_hook"
+
     HookRegistry.register(duplicate_hook)
     with pytest.raises(ValueError, match=r"'duplicate_hook' already registered"):
-        HookRegistry.register(other_hook, name="duplicate_hook")
+        HookRegistry.register(other_hook)
 
 
 def test_hook_registry_reregister_same_hook_does_not_raise():
@@ -170,14 +162,14 @@ def test_hook_registry_reregister_same_hook_does_not_raise():
 
 
 def test_hook_registry_register_with_hook_type_stores_and_findable():
-    from pygents.hooks import TurnHook
+    from pygents.hooks import TurnHook, hook
 
     HookRegistry.clear()
 
+    @hook(TurnHook.BEFORE_RUN)
     async def before_run(turn):
         pass
 
-    HookRegistry.register(before_run, hook_type=TurnHook.BEFORE_RUN)
     assert getattr(before_run, "type", None) == TurnHook.BEFORE_RUN
     found = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [before_run])
     assert found == [before_run]

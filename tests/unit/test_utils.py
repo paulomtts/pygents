@@ -8,11 +8,6 @@ safe_execution(func):
   SE2  _is_running is True -> SafeExecutionError with func.__name__ and "running"
   SE3  self has no _is_running -> getattr returns False -> same as SE1
 
-validate_fixed_kwargs(fn, fixed_kwargs, kind):
-  V1   fn has **kwargs (VAR_KEYWORD) -> no raise
-  V2   fn has no **kwargs and fixed key not in params -> TypeError
-  V3   All fixed keys in params -> no raise
-
 eval_args(args): each item callable (_function_type) -> call and use return value; else pass through.
 eval_kwargs(kwargs): same per value, keys unchanged.
 
@@ -41,7 +36,6 @@ from pygents.utils import (
     merge_kwargs,
     safe_execution,
     serialize_hooks_by_type,
-    validate_fixed_kwargs,
 )
 
 
@@ -160,41 +154,6 @@ def test_eval_args_calls_at_eval_time():
 
     assert eval_args([make]) == [1]
     assert eval_args([make]) == [2]
-
-
-# --- validate_fixed_kwargs -----------------------------------------------------------
-
-
-def test_validate_fixed_kwargs_all_keys_in_signature_passes():
-    def fn(a: int, b: str) -> None:
-        pass
-
-    validate_fixed_kwargs(fn, {"a": 1, "b": "x"})
-
-
-def test_validate_fixed_kwargs_key_not_in_signature_raises():
-    def fn(x: int) -> None:
-        pass
-
-    with pytest.raises(
-        TypeError, match="fixed kwargs .* are not in function signature"
-    ):
-        validate_fixed_kwargs(fn, {"x": 1, "unknown": 2})
-
-
-def test_validate_fixed_kwargs_allowed_when_function_has_kwargs():
-    def fn(x: int, **kwargs) -> None:
-        pass
-
-    validate_fixed_kwargs(fn, {"x": 1, "extra": 2})
-
-
-def test_validate_fixed_kwargs_kind_in_error_message():
-    def fn(x: int) -> None:
-        pass
-
-    with pytest.raises(TypeError, match="Hook .* fixed kwargs"):
-        validate_fixed_kwargs(fn, {"bad": 1}, kind="Hook")
 
 
 # --- merge_kwargs --------------------------------------------------------------------

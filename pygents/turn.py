@@ -10,7 +10,7 @@ from pygents.context import ContextItem
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from pygents.hooks import Hook, TurnHook
 from pygents.registry import HookRegistry, ToolRegistry
-from pygents.tool import Tool
+from pygents.tool import AsyncGenTool, Tool
 from pygents.utils import (
     eval_args,
     eval_kwargs,
@@ -30,6 +30,9 @@ class StopReason(str, Enum):
     CANCELLED = "cancelled"
 
 
+TurnOutput = T | list[T] | ContextItem[T] | list[ContextItem[T]] | None
+
+
 @dataclass
 class TurnMetadata:
     start_time: datetime | None = None
@@ -44,12 +47,12 @@ class TurnMetadata:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TurnMetadata":
+    def from_dict(cls, data: dict[str, str]) -> "TurnMetadata":
         return cls(
-            start_time=datetime.fromisoformat(data.get("start_time"))
+            start_time=datetime.fromisoformat(data.get("start_time") or "")
             if data.get("start_time")
             else None,
-            end_time=datetime.fromisoformat(data.get("end_time"))
+            end_time=datetime.fromisoformat(data.get("end_time") or "")
             if data.get("end_time")
             else None,
             stop_reason=StopReason(data.get("stop_reason"))
@@ -76,15 +79,14 @@ class Turn[T]:
         Optional list of hooks (e.g. TurnHook). Applied during turn execution.
     """
 
-    tool: Tool | None = None
+    tool: Tool | AsyncGenTool
     args: list[Any]
     kwargs: dict[str, Any]
     timeout: int = 60
 
-    output: Any | ContextItem[Any] | None
+    output: TurnOutput[T]
     metadata: TurnMetadata
 
-    hooks: list[Hook]
     _is_running: bool = False
 
     # -- mutation guard -------------------------------------------------------
@@ -139,7 +141,7 @@ class Turn[T]:
     # -- execution ------------------------------------------------------------
 
     @safe_execution
-    async def returning(self) -> T:
+    async def returning(self) -> TurnOutput[T]:
         """Run the Turn and return a single result.
 
         Use yielding() for async generator tools.
@@ -154,6 +156,10 @@ class Turn[T]:
                 )
             runtime_args = eval_args(self.args)
             runtime_kwargs = eval_kwargs(self.kwargs)
+            if not isinstance(self.tool, Tool):
+                raise WrongRunMethodError(
+                    "Tool is not a coroutine; use yielding() instead."
+                )
             self.output = await asyncio.wait_for(
                 self.tool(*runtime_args, **runtime_kwargs), timeout=self.timeout
             )
@@ -192,6 +198,10 @@ class Turn[T]:
 
             async def produce() -> None:
                 try:
+                    if not isinstance(self.tool, AsyncGenTool):
+                        raise WrongRunMethodError(
+                            "Tool is not an async generator; use returning() for single value."
+                        )
                     async for value in self.tool(*runtime_args, **runtime_kwargs):
                         await queue.put(value)
                 finally:

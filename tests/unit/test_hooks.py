@@ -26,7 +26,15 @@ import pytest
 
 from pygents.agent import Agent
 from pygents.context import ContextItem, ContextPool, ContextQueue
-from pygents.hooks import AgentHook, ContextPoolHook, ContextQueueHook, HookMetadata, ToolHook, TurnHook, hook
+from pygents.hooks import (
+    AgentHook,
+    ContextPoolHook,
+    ContextQueueHook,
+    HookMetadata,
+    ToolHook,
+    TurnHook,
+    hook,
+)
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
@@ -127,7 +135,9 @@ def test_hook_get_by_type_returns_all_matches_in_order():
     async def second_after(agent, turn):
         pass
 
-    matches = HookRegistry.get_by_type(AgentHook.AFTER_TURN, [first_after, second_after])
+    matches = HookRegistry.get_by_type(
+        AgentHook.AFTER_TURN, [first_after, second_after]
+    )
     assert matches == [first_after, second_after]
 
 
@@ -275,17 +285,6 @@ def test_hook_call_kwargs_override_fixed_kwargs():
     assert received == ["override"]
 
 
-def test_hook_fixed_kwarg_not_in_signature_raises():
-    HookRegistry.clear()
-    with pytest.raises(
-        TypeError, match="fixed kwargs .* are not in function signature"
-    ):
-
-        @hook(TurnHook.BEFORE_RUN, unknown=1)
-        async def no_such_param(turn):
-            pass
-
-
 def test_hook_fixed_kwargs_allowed_with_kwargs():
     HookRegistry.clear()
     received = []
@@ -323,67 +322,6 @@ def test_hook_start_time_end_time_set_on_run():
 # ---------------------------------------------------------------------------
 
 
-def test_tool_hooks_before_and_after_invoke():
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    events = []
-
-    async def before_hook(*args, **kwargs):
-        events.append(("before", args, kwargs))
-
-    async def after_hook(result):
-        events.append(("after", result))
-
-    @tool(before_invoke=before_hook, after_invoke=after_hook)
-    async def hooked_tool(x: int) -> int:
-        return x + 10
-
-    agent = Agent("a", "desc", [hooked_tool])
-
-    async def run():
-        await agent.put(Turn("hooked_tool", kwargs={"x": 5}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert events[0][0] == "before"
-    assert events[0][2] == {"x": 5}
-    assert events[1] == ("after", 15)
-
-
-def test_tool_hooks_async_gen_before_on_yield_after():
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    events = []
-
-    async def before_hook(*args, **kwargs):
-        events.append(("before", kwargs))
-
-    async def on_yield_hook(value):
-        events.append(("on_yield", value))
-
-    async def after_hook(value):
-        events.append(("after", value))
-
-    @tool(before_invoke=before_hook, on_yield=on_yield_hook, after_invoke=after_hook)
-    async def hooked_gen_tool():
-        yield "a"
-        yield "b"
-
-    agent = Agent("a", "desc", [hooked_gen_tool])
-
-    async def run():
-        await agent.put(Turn("hooked_gen_tool", kwargs={}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert events[0] == ("before", {})
-    assert events[1] == ("on_yield", "a")
-    assert events[2] == ("on_yield", "b")
-    assert events[3] == ("after", ["a", "b"])
-
-
 def test_tool_with_decorated_hook_registered_in_registry():
     HookRegistry.clear()
 
@@ -391,173 +329,12 @@ def test_tool_with_decorated_hook_registered_in_registry():
     async def registered_tool_hook():
         pass
 
-    @tool(hooks=[registered_tool_hook])
+    @tool()
     async def tool_with_registered_hook() -> None:
         pass
 
+    tool_with_registered_hook.before_invoke(registered_tool_hook)
     assert HookRegistry.get("registered_tool_hook") is registered_tool_hook
-
-
-# ---------------------------------------------------------------------------
-# Named hook params: auto-type assignment and dispatch
-# ---------------------------------------------------------------------------
-
-
-def test_tool_named_params_auto_assign_type():
-    """Plain async functions passed via named params get .type set automatically."""
-    HookRegistry.clear()
-
-    async def before_fn(**kwargs): pass
-
-    async def on_yield_fn(value): pass
-
-    async def after_fn(result): pass
-
-    @tool(before_invoke=before_fn, on_yield=on_yield_fn, after_invoke=after_fn)
-    async def named_type_check_tool() -> None:
-        pass
-
-    assert before_fn.type == ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-    assert on_yield_fn.type == ToolHook.ON_YIELD  # type: ignore[attr-defined]
-    assert after_fn.type == ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-
-def test_tool_named_params_decorated_hook_type_preserved():
-    """A hook decorated with @hook keeps its .type when passed via named param."""
-    HookRegistry.clear()
-
-    @hook(ToolHook.BEFORE_INVOKE)
-    async def decorated_before(**kwargs): pass
-
-    @tool(before_invoke=decorated_before)
-    async def named_decorated_tool() -> None:
-        pass
-
-    assert decorated_before.type == ToolHook.BEFORE_INVOKE
-
-
-def test_tool_named_before_invoke_fires():
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    received = []
-
-    async def before(x: int):
-        received.append(x)
-
-    @tool(before_invoke=before)
-    async def named_before_coroutine_tool(x: int) -> int:
-        return x * 2
-
-    agent = Agent("a_nb", "desc", [named_before_coroutine_tool])
-
-    async def run():
-        await agent.put(Turn("named_before_coroutine_tool", kwargs={"x": 7}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert received == [7]
-
-
-def test_tool_named_after_invoke_fires():
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    received = []
-
-    async def after(result):
-        received.append(result)
-
-    @tool(after_invoke=after)
-    async def named_after_coroutine_tool(x: int) -> int:
-        return x + 100
-
-    agent = Agent("a_na", "desc", [named_after_coroutine_tool])
-
-    async def run():
-        await agent.put(Turn("named_after_coroutine_tool", kwargs={"x": 5}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert received == [105]
-
-
-def test_tool_named_on_yield_fires():
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    received = []
-
-    async def on_yield_fn(value):
-        received.append(value)
-
-    @tool(on_yield=on_yield_fn)
-    async def named_on_yield_gen_tool():
-        yield "x"
-        yield "y"
-
-    agent = Agent("a_ny", "desc", [named_on_yield_gen_tool])
-
-    async def run():
-        await agent.put(Turn("named_on_yield_gen_tool", kwargs={}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert received == ["x", "y"]
-
-
-def test_tool_named_params_list():
-    """A list of callables passed via a named param all fire in order."""
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    received = []
-
-    async def before1(**kwargs): received.append("before1")
-
-    async def before2(**kwargs): received.append("before2")
-
-    @tool(before_invoke=[before1, before2])
-    async def named_list_tool(x: int) -> int:
-        return x
-
-    agent = Agent("a_nl", "desc", [named_list_tool])
-
-    async def run():
-        await agent.put(Turn("named_list_tool", kwargs={"x": 1}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert received == ["before1", "before2"]
-
-
-def test_tool_named_params_combined_with_hooks():
-    """Hooks from named params and hooks=[] are all collected and fire together."""
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    received = []
-
-    async def named_after(result):
-        received.append(("named", result))
-
-    @hook(ToolHook.AFTER_INVOKE)
-    async def hooks_list_after(result):
-        received.append(("hooks", result))
-
-    @tool(after_invoke=named_after, hooks=[hooks_list_after])
-    async def named_combined_tool(x: int) -> int:
-        return x + 1
-
-    agent = Agent("a_nc", "desc", [named_combined_tool])
-
-    async def run():
-        await agent.put(Turn("named_combined_tool", kwargs={"x": 9}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert ("named", 10) in received
-    assert ("hooks", 10) in received
 
 
 # ---------------------------------------------------------------------------
@@ -578,19 +355,16 @@ def test_turn_hook_append_and_registered():
     assert HookRegistry.get("turn_hook") is turn_hook
 
 
-def test_turn_hook_custom_registry_name():
+def test_turn_hook_registered_under_own_name():
     HookRegistry.clear()
 
+    @hook(TurnHook.AFTER_RUN)
     async def another_turn_hook(turn):
         pass
 
-    another_turn_hook.type = TurnHook.AFTER_RUN  # type: ignore[attr-defined]
-    HookRegistry.register(
-        another_turn_hook, "custom_turn_hook", hook_type=TurnHook.AFTER_RUN
-    )
     turn = Turn("tool_for_hook_test", kwargs={"x": 5})
     turn.hooks.append(another_turn_hook)
-    assert HookRegistry.get("custom_turn_hook") is another_turn_hook
+    assert HookRegistry.get("another_turn_hook") is another_turn_hook
 
 
 def test_turn_to_dict_includes_hooks():
@@ -661,20 +435,17 @@ def test_agent_hook_append_and_registered():
     assert HookRegistry.get("agent_hook") is agent_hook
 
 
-def test_agent_hook_custom_registry_name():
+def test_agent_hook_registered_under_own_name():
     HookRegistry.clear()
     AgentRegistry.clear()
 
+    @hook(AgentHook.AFTER_TURN)
     async def another_agent_hook(agent):
         pass
 
-    another_agent_hook.type = AgentHook.AFTER_TURN  # type: ignore[attr-defined]
-    HookRegistry.register(
-        another_agent_hook, "custom_agent_hook", hook_type=AgentHook.AFTER_TURN
-    )
     agent = Agent("hook_agent2", "Test agent", [tool_for_hook_test])
     agent.hooks.append(another_agent_hook)
-    assert HookRegistry.get("custom_agent_hook") is another_agent_hook
+    assert HookRegistry.get("another_agent_hook") is another_agent_hook
 
 
 def test_agent_to_dict_includes_hooks():
@@ -796,12 +567,12 @@ def test_tool_multiple_hooks_same_type_all_called():
     async def before_b(*args, **kwargs):
         events.append("b")
 
-    before_a.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-    before_b.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[before_a, before_b])
+    @tool()
     async def multi_before_tool(x: int) -> int:
         return x
+
+    multi_before_tool.before_invoke(before_a)
+    multi_before_tool.before_invoke(before_b)
 
     agent = Agent("multi_tool_hook_agent", "Test", [multi_before_tool])
 
@@ -853,111 +624,209 @@ def test_context_pool_after_add_hook_fires():
 
 
 # ---------------------------------------------------------------------------
-# Context injection in hooks
+# Method-decorator hooks (Tool.before_invoke / .after_invoke,
+#                          AsyncGenTool.before_invoke / .on_yield / .after_invoke)
 # ---------------------------------------------------------------------------
 
 
-def test_tool_hook_injects_context_queue():
+def test_tool_method_before_invoke_registers_with_type():
     HookRegistry.clear()
-    AgentRegistry.clear()
-    received = []
 
-    @hook(ToolHook.AFTER_INVOKE)
-    async def after_hook(result, memory: ContextQueue):
-        received.append(memory)
-
-    @tool(hooks=[after_hook])
-    async def hook_inject_cq_tool(x: int) -> int:
-        return x * 2
-
-    cq = ContextQueue(limit=5)
-    agent = Agent("a", "desc", [hook_inject_cq_tool], context_queue=cq)
-
-    async def run():
-        await agent.put(Turn("hook_inject_cq_tool", kwargs={"x": 3}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert len(received) == 1
-    assert received[0] is cq
-
-
-def test_tool_hook_injects_context_pool():
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    received = []
-
-    @hook(ToolHook.AFTER_INVOKE)
-    async def after_pool_hook(result, pool: ContextPool):
-        received.append(pool)
-
-    @tool(hooks=[after_pool_hook])
-    async def hook_inject_cp_tool(x: int) -> int:
-        return x + 1
-
-    cp = ContextPool()
-    agent = Agent("a", "desc", [hook_inject_cp_tool], context_pool=cp)
-
-    async def run():
-        await agent.put(Turn("hook_inject_cp_tool", kwargs={"x": 7}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert len(received) == 1
-    assert received[0] is cp
-
-
-def test_tool_hook_optional_context_queue_injected_from_agent():
-    # When AFTER_INVOKE fires through the agent, context_queue is always set.
-    HookRegistry.clear()
-    AgentRegistry.clear()
-    received = []
-
-    @hook(ToolHook.AFTER_INVOKE)
-    async def after_opt_hook(result, memory: ContextQueue | None = None):
-        received.append(memory)
-
-    @tool(hooks=[after_opt_hook])
-    async def hook_inject_opt_cq_tool(x: int) -> int:
+    @tool()
+    async def md_before_tool(x: int) -> int:
         return x
 
-    cq = ContextQueue(limit=5)
-    agent = Agent("a", "desc", [hook_inject_opt_cq_tool], context_queue=cq)
+    async def log_before(x: int) -> None:
+        pass
 
-    async def run():
-        await agent.put(Turn("hook_inject_opt_cq_tool", kwargs={"x": 5}))
-        async for _ in agent.run():
-            pass
+    returned = md_before_tool.before_invoke(log_before)
+    assert returned is not log_before
+    assert returned.fn is log_before
+    assert returned.type == ToolHook.BEFORE_INVOKE
+    assert (ToolHook.BEFORE_INVOKE, returned) in md_before_tool.hooks
+    assert HookRegistry.get(log_before.__name__) is returned
 
-    asyncio.run(run())
-    assert received == [cq]
+
+def test_tool_method_after_invoke_registers_with_type():
+    HookRegistry.clear()
+
+    @tool()
+    async def md_after_tool(x: int) -> int:
+        return x
+
+    async def log_after(result: int) -> None:
+        pass
+
+    returned = md_after_tool.after_invoke(log_after)
+    assert returned is not log_after
+    assert returned.fn is log_after
+    assert returned.type == ToolHook.AFTER_INVOKE
+    assert (ToolHook.AFTER_INVOKE, returned) in md_after_tool.hooks
+    assert HookRegistry.get(log_after.__name__) is returned
 
 
-def test_tool_hook_explicit_kwarg_not_overridden_by_injection():
+def test_asyncgen_method_on_yield_registers_with_type():
+    HookRegistry.clear()
+
+    @tool()
+    async def md_gen_tool(n: int):
+        for i in range(n):
+            yield i
+
+    async def log_yield(value: int) -> None:
+        pass
+
+    returned = md_gen_tool.on_yield(log_yield)
+    assert returned is not log_yield
+    assert returned.fn is log_yield
+    assert returned.type == ToolHook.ON_YIELD
+    assert (ToolHook.ON_YIELD, returned) in md_gen_tool.hooks
+    assert HookRegistry.get(log_yield.__name__) is returned
+
+
+def test_asyncgen_method_after_invoke_registers_with_type():
+    HookRegistry.clear()
+
+    @tool()
+    async def md_gen_after_tool(n: int):
+        for i in range(n):
+            yield i
+
+    async def log_all(values: list) -> None:
+        pass
+
+    returned = md_gen_after_tool.after_invoke(log_all)
+    assert returned is not log_all
+    assert returned.fn is log_all
+    assert returned.type == ToolHook.AFTER_INVOKE
+    assert (ToolHook.AFTER_INVOKE, returned) in md_gen_after_tool.hooks
+    assert HookRegistry.get(log_all.__name__) is returned
+
+
+def test_tool_method_before_invoke_fires_end_to_end():
     HookRegistry.clear()
     AgentRegistry.clear()
     received = []
 
-    explicit_cq = ContextQueue(limit=3)
+    @tool()
+    async def md_before_e2e_tool(x: int) -> int:
+        return x * 3
 
-    @hook(ToolHook.AFTER_INVOKE, memory=explicit_cq)
-    async def after_explicit_hook(result, memory: ContextQueue):
-        received.append(memory)
+    @md_before_e2e_tool.before_invoke
+    async def capture_before(x: int) -> None:
+        received.append(x)
 
-    @tool(hooks=[after_explicit_hook])
-    async def hook_inject_explicit_cq_tool(x: int) -> int:
-        return x
-
-    agent = Agent("a", "desc", [hook_inject_explicit_cq_tool], context_queue=ContextQueue(limit=10))
+    agent = Agent("md_before_e2e_agent", "desc", [md_before_e2e_tool])
 
     async def run():
-        await agent.put(Turn("hook_inject_explicit_cq_tool", kwargs={"x": 2}))
+        await agent.put(Turn("md_before_e2e_tool", kwargs={"x": 4}))
         async for _ in agent.run():
             pass
 
     asyncio.run(run())
-    # explicit fixed_kwarg wins over injection
-    assert len(received) == 1
-    assert received[0] is explicit_cq
+    assert received == [4]
+
+
+def test_asyncgen_method_on_yield_fires_end_to_end():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    received = []
+
+    @tool()
+    async def md_on_yield_e2e_tool():
+        yield "p"
+        yield "q"
+
+    @md_on_yield_e2e_tool.on_yield
+    async def capture_yield(value: str) -> None:
+        received.append(value)
+
+    agent = Agent("md_on_yield_e2e_agent", "desc", [md_on_yield_e2e_tool])
+
+    async def run():
+        await agent.put(Turn("md_on_yield_e2e_tool", kwargs={}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert received == ["p", "q"]
+
+
+def test_tool_method_decorators_as_decorator_syntax():
+    """Verify the @tool.before_invoke decorator syntax works."""
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    log = []
+
+    @tool()
+    async def md_decorator_syntax_tool(value: str) -> str:
+        return value.upper()
+
+    @md_decorator_syntax_tool.before_invoke
+    async def on_before(value: str) -> None:
+        log.append(("before", value))
+
+    agent = Agent("md_syntax_agent", "desc", [md_decorator_syntax_tool])
+
+    async def run():
+        await agent.put(Turn("md_decorator_syntax_tool", kwargs={"value": "hello"}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert log == [("before", "hello")]
+
+
+def test_asyncgen_before_invoke_and_on_yield_method_decorators_fire():
+    """Verify before_invoke and on_yield fire for AsyncGenTool."""
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    log = []
+
+    @tool()
+    async def md_all_hooks_gen_tool(n: int):
+        for i in range(n):
+            yield i
+
+    @md_all_hooks_gen_tool.before_invoke
+    async def gen_before(n: int) -> None:
+        log.append(("before", n))
+
+    @md_all_hooks_gen_tool.on_yield
+    async def gen_on_yield(value: int) -> None:
+        log.append(("yield", value))
+
+    agent = Agent("md_all_hooks_gen_agent", "desc", [md_all_hooks_gen_tool])
+
+    async def run():
+        await agent.put(Turn("md_all_hooks_gen_tool", kwargs={"n": 3}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert log[0] == ("before", 3)
+    assert log[1] == ("yield", 0)
+    assert log[2] == ("yield", 1)
+    assert log[3] == ("yield", 2)
+
+
+# ---------------------------------------------------------------------------
+# Method-decorator hooks: registration, context injection, roundtrip
+# ---------------------------------------------------------------------------
+
+
+def test_method_decorator_plain_fn_registered_in_registry():
+    """Plain fn attached via method decorator is findable in HookRegistry by name."""
+    HookRegistry.clear()
+
+    @tool()
+    async def reg_md_tool(x: int) -> int:
+        return x
+
+    async def my_reg_hook(x: int) -> None:
+        pass
+
+    returned = reg_md_tool.before_invoke(my_reg_hook)
+    assert HookRegistry.get(my_reg_hook.__name__) is returned
+
+

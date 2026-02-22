@@ -10,7 +10,7 @@ from pygents.context import (
     _current_context_queue,
 )
 from pygents.errors import SafeExecutionError, TurnTimeoutError
-from pygents.hooks import AgentHook, Hook, ToolHook
+from pygents.hooks import AgentHook, Hook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import Tool
 from pygents.turn import Turn
@@ -44,7 +44,6 @@ class Agent:
 
     _is_running: bool = False
     _current_turn: Turn | None = None
-    _pause_event: asyncio.Event
     context_pool: ContextPool
     context_queue: ContextQueue
 
@@ -268,13 +267,9 @@ class Agent:
                             )
                             if not isinstance(value, (ContextItem, Turn)):
                                 yield (turn, value)
-                        for h in HookRegistry.get_by_type(ToolHook.AFTER_INVOKE, turn.tool.hooks):
-                            await h(turn.output)
                     else:
                         output = await turn.returning()
                         await self._route_value(turn.output)
-                        for h in HookRegistry.get_by_type(ToolHook.AFTER_INVOKE, turn.tool.hooks):
-                            await h(output)
                         await self._run_hooks(
                             AgentHook.ON_TURN_VALUE, self, turn, output
                         )

@@ -99,7 +99,9 @@ class ContextQueue:
         for item in items:
             if len(self._items) == self.limit:
                 evicted = self._items[0]
-                for h in HookRegistry.get_by_type(ContextQueueHook.ON_EVICT, self.hooks):
+                for h in HookRegistry.get_by_type(
+                    ContextQueueHook.ON_EVICT, self.hooks
+                ):
                     await h(evicted)
             self._items.append(item)
         for after_append_hook in HookRegistry.get_by_type(
@@ -124,6 +126,7 @@ class ContextQueue:
     async def clear(self) -> None:
         from pygents.hooks import ContextQueueHook
         from pygents.registry import HookRegistry
+
         for h in HookRegistry.get_by_type(ContextQueueHook.BEFORE_CLEAR, self.hooks):
             await h(list(self._items))
         self._items.clear()
@@ -298,7 +301,9 @@ class ContextPool:
         child_limit = self._limit if limit is ... else limit
         child = type(self)(limit=child_limit, hooks=list(self.hooks))
         for item in self.items:
-            # Replicate eviction logic inline — no hooks, no async overhead
+            if item.id is None:
+                raise ValueError("ContextPool requires a ContextItem with 'id' set")
+            # ? REASON: Replicate eviction logic inline — no hooks, no async overhead
             if (
                 child._limit is not None
                 and item.id not in child._items
@@ -341,7 +346,9 @@ class ContextPool:
         pool = cls(limit=data.get("limit"))
         for item_data in data.get("items", []):
             item = ContextItem.from_dict(item_data)
-            pool._items[item.id] = item  # bypass add() to avoid hooks
+            if item.id is None:
+                raise ValueError("ContextPool requires a ContextItem with 'id' set")
+            pool._items[item.id] = item  # ? REASON: bypass add() to avoid hooks
         pool.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
         return pool
 

@@ -5,14 +5,9 @@ import functools
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol, cast, overload
+from typing import Any, Awaitable, Callable, overload
 
 from pygents.utils import _null_lock
-
-if TYPE_CHECKING:
-    from pygents.agent import Agent
-    from pygents.context import ContextItem, ContextPool
-    from pygents.turn import StopReason, Turn
 
 
 class TurnHook(str, Enum):
@@ -31,7 +26,7 @@ class AgentHook(str, Enum):
     ON_TURN_TIMEOUT = "on_turn_timeout"
     BEFORE_PUT = "before_put"
     AFTER_PUT = "after_put"
-    ON_PAUSE  = "on_pause"
+    ON_PAUSE = "on_pause"
     ON_RESUME = "on_resume"
 
 
@@ -50,13 +45,13 @@ class ContextQueueHook(str, Enum):
 
 
 class ContextPoolHook(str, Enum):
-    BEFORE_ADD    = "before_add"
-    AFTER_ADD     = "after_add"
+    BEFORE_ADD = "before_add"
+    AFTER_ADD = "after_add"
     BEFORE_REMOVE = "before_remove"
-    AFTER_REMOVE  = "after_remove"
-    BEFORE_CLEAR  = "before_clear"
-    AFTER_CLEAR   = "after_clear"
-    ON_EVICT      = "on_evict"
+    AFTER_REMOVE = "after_remove"
+    BEFORE_CLEAR = "before_clear"
+    AFTER_CLEAR = "after_clear"
+    ON_EVICT = "on_evict"
 
 
 HookType = TurnHook | AgentHook | ToolHook | ContextQueueHook | ContextPoolHook
@@ -80,163 +75,49 @@ class HookMetadata:
         }
 
 
-class Hook(Protocol):
+class Hook:
     metadata: HookMetadata
     type: HookType | tuple[HookType, ...] | None
     fn: Callable[..., Awaitable[None]]
     lock: asyncio.Lock | None
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Awaitable[None]: ...
+    def __init__(
+        self,
+        fn: Callable[..., Awaitable[None]],
+        stored_type: HookType | tuple[HookType, ...],
+        asyncio_lock: asyncio.Lock | None,
+        fixed_kwargs: dict[str, Any],
+    ) -> None:
+        self.fn = fn
+        self.type = stored_type
+        self.lock = asyncio_lock
+        self.metadata = HookMetadata(fn.__name__, fn.__doc__)
+        self._fixed_kwargs = fixed_kwargs
+        functools.update_wrapper(self, fn)
+
+    async def __call__(self, *args: Any, **kwargs: Any) -> None:
+        from pygents.utils import _inject_context_deps, merge_kwargs
+
+        merged = merge_kwargs(
+            self._fixed_kwargs, kwargs, f"hook {self.fn.__name__!r}"
+        )
+        merged = _inject_context_deps(self.fn, merged)
+        lock_ctx = self.lock if self.lock is not None else _null_lock
+        async with lock_ctx:
+            self.metadata.start_time = datetime.now()
+            try:
+                await self.fn(*args, **merged)
+            finally:
+                self.metadata.end_time = datetime.now()
 
 
 @overload
 def hook(
-    type: TurnHook.BEFORE_RUN | TurnHook.AFTER_RUN | TurnHook.ON_TIMEOUT,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Turn"], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: TurnHook.ON_ERROR,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Turn", BaseException], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: AgentHook.BEFORE_TURN,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Agent"], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: AgentHook.ON_PAUSE | AgentHook.ON_RESUME,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Agent"], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: AgentHook.BEFORE_PUT
-    | AgentHook.AFTER_PUT
-    | AgentHook.ON_TURN_TIMEOUT
-    | AgentHook.AFTER_TURN,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Agent", "Turn"], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: AgentHook.ON_TURN_VALUE,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Agent", "Turn", Any], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: AgentHook.ON_TURN_ERROR,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Agent", "Turn", BaseException], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: AgentHook.ON_TURN_COMPLETE,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["Agent", "Turn", "StopReason | None"], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: ToolHook.BEFORE_INVOKE,
+    type: HookType,
     *,
     lock: bool = False,
     **fixed_kwargs: Any,
 ) -> Callable[[Callable[..., Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: ToolHook.ON_YIELD | ToolHook.AFTER_INVOKE,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[[Any], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: ContextQueueHook.BEFORE_APPEND | ContextQueueHook.AFTER_APPEND,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[[list[Any], list[Any]], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: ContextQueueHook.BEFORE_CLEAR | ContextQueueHook.AFTER_CLEAR,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[[list[Any]], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: ContextQueueHook.ON_EVICT,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["ContextItem[Any]"], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: ContextPoolHook.BEFORE_ADD
-    | ContextPoolHook.AFTER_ADD
-    | ContextPoolHook.BEFORE_REMOVE
-    | ContextPoolHook.AFTER_REMOVE,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["ContextPool", "ContextItem[Any]"], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: ContextPoolHook.BEFORE_CLEAR | ContextPoolHook.AFTER_CLEAR,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["ContextPool"], Awaitable[None]]], Hook]: ...
-
-
-@overload
-def hook(
-    type: ContextPoolHook.ON_EVICT,
-    *,
-    lock: bool = False,
-    **fixed_kwargs: Any,
-) -> Callable[[Callable[["ContextPool", "ContextItem[Any]"], Awaitable[None]]], Hook]: ...
 
 
 @overload
@@ -273,29 +154,10 @@ def hook(
 
     def decorator(fn: Callable[..., Awaitable[None]]) -> Hook:
         from pygents.registry import HookRegistry
-        from pygents.utils import merge_kwargs, validate_fixed_kwargs
 
-        validate_fixed_kwargs(fn, fixed_kwargs, kind="Hook")
         asyncio_lock = asyncio.Lock() if lock else None
-
-        @functools.wraps(fn)
-        async def wrapper(*args: Any, **kwargs: Any) -> None:
-            from pygents.utils import _inject_context_deps
-            merged = merge_kwargs(fixed_kwargs, kwargs, f"hook {fn.__name__!r}")
-            merged = _inject_context_deps(fn, merged)
-            lock_ctx = asyncio_lock if asyncio_lock is not None else _null_lock
-            async with lock_ctx:
-                wrapper.metadata.start_time = datetime.now()
-                try:
-                    await fn(*args, **merged)
-                finally:
-                    wrapper.metadata.end_time = datetime.now()
-
-        wrapper.metadata = HookMetadata(fn.__name__, fn.__doc__)
-        wrapper.fn = fn
-        wrapper.lock = asyncio_lock
-        wrapper.type = stored_type
-        HookRegistry.register(cast(Hook, wrapper), name=None, hook_type=stored_type)
+        wrapper = Hook(fn, stored_type, asyncio_lock, fixed_kwargs)
+        HookRegistry.register(wrapper)
         return wrapper
 
     return decorator
