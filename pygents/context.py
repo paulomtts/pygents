@@ -92,17 +92,17 @@ class ContextQueue:
         from pygents.hooks import ContextQueueHook
         from pygents.registry import HookRegistry
 
-        if before_append_hook := HookRegistry.get_by_type(
+        for before_append_hook in HookRegistry.get_by_type(
             ContextQueueHook.BEFORE_APPEND, self.hooks
         ):
             await before_append_hook(list(items), list(self._items))
         for item in items:
             if len(self._items) == self.limit:
                 evicted = self._items[0]
-                if h := HookRegistry.get_by_type(ContextQueueHook.ON_EVICT, self.hooks):
+                for h in HookRegistry.get_by_type(ContextQueueHook.ON_EVICT, self.hooks):
                     await h(evicted)
             self._items.append(item)
-        if after_append_hook := HookRegistry.get_by_type(
+        for after_append_hook in HookRegistry.get_by_type(
             ContextQueueHook.AFTER_APPEND, self.hooks
         ):
             await after_append_hook(list(items), list(self._items))
@@ -124,10 +124,10 @@ class ContextQueue:
     async def clear(self) -> None:
         from pygents.hooks import ContextQueueHook
         from pygents.registry import HookRegistry
-        if h := HookRegistry.get_by_type(ContextQueueHook.BEFORE_CLEAR, self.hooks):
+        for h in HookRegistry.get_by_type(ContextQueueHook.BEFORE_CLEAR, self.hooks):
             await h(list(self._items))
         self._items.clear()
-        if h := HookRegistry.get_by_type(ContextQueueHook.AFTER_CLEAR, self.hooks):
+        for h in HookRegistry.get_by_type(ContextQueueHook.AFTER_CLEAR, self.hooks):
             await h([])
 
     # -- branching ------------------------------------------------------------
@@ -242,7 +242,7 @@ class ContextPool:
     async def _run_hook(self, hook_type: Any, *args: Any) -> None:
         from pygents.registry import HookRegistry
 
-        if h := HookRegistry.get_by_type(hook_type, self.hooks):
+        for h in HookRegistry.get_by_type(hook_type, self.hooks):
             await h(self, *args)
 
     # -- mutation -------------------------------------------------------------

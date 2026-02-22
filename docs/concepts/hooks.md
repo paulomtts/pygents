@@ -99,7 +99,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 - **ContextQueue** — `ContextQueue(limit=..., hooks=[...])` or `cq.branch(hooks=[...])`; serialized by name.
 - **ContextPool** — `Agent(..., context_pool=ContextPool(hooks=[...]))` or `ContextPool(hooks=[...])`; serialized by name.
 
-The framework selects which hook to run via `HookRegistry.get_by_type(type, list_of_hooks)`. Only hooks whose type matches the event are invoked. Exceptions in hooks propagate.
+The framework selects which hooks to run via `HookRegistry.get_by_type(type, list_of_hooks)`. All hooks whose type matches the event are invoked sequentially, in the order they appear in the list. If a hook raises, execution stops and the exception propagates; later hooks in the same event are not called.
 
 ## Multi-type hooks
 
@@ -182,7 +182,7 @@ HookRegistry.clear()  # empty the registry (useful in tests)
 !!! warning "UnregisteredHookError"
     `HookRegistry.get(name)` raises `UnregisteredHookError` if no hook is registered with that name.
 
-`get_by_type` is used internally: given a list of hooks (e.g. `turn.hooks`), it returns the first hook whose type matches. You typically don't call it directly; you attach hooks to turns, agents, tools, or memory and the framework invokes the right one at each event.
+`get_by_type` is used internally: given a list of hooks (e.g. `turn.hooks`), it returns all hooks whose type matches, in the order they appear in the list. All matching hooks are called sequentially. You typically don't call it directly; you attach hooks to turns, agents, tools, or memory and the framework invokes them at each event.
 
 ## Protocol
 
