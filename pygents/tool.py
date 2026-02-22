@@ -3,7 +3,7 @@ import functools
 import inspect
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, AsyncIterator, Callable, Coroutine, Protocol, TypeVar, cast
+from typing import Any, AsyncIterator, Awaitable, Callable, Coroutine, Protocol, TypeVar, cast
 
 from pygents.hooks import Hook, ToolHook
 from pygents.registry import HookRegistry, ToolRegistry
@@ -38,18 +38,63 @@ class Tool(Protocol):
     def __call__(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
+def _coerce_hooks(
+    slot: Callable[..., Awaitable[None]] | list[Callable[..., Awaitable[None]]] | None,
+    hook_type: ToolHook,
+) -> list:
+    """Normalize a named-param hook slot to a list and auto-assign .type if missing."""
+    if slot is None:
+        return []
+    items = slot if isinstance(slot, list) else [slot]
+    for h in items:
+        if not hasattr(h, "type"):
+            h.type = hook_type
+    return list(items)
+
+
 def tool(
     func: Callable[..., T] | None = None,
     *,
     lock: bool = False,
+    before_invoke: Callable[..., Awaitable[None]] | list[Callable[..., Awaitable[None]]] | None = None,
+    on_yield: Callable[..., Awaitable[None]] | list[Callable[..., Awaitable[None]]] | None = None,
+    after_invoke: Callable[..., Awaitable[None]] | list[Callable[..., Awaitable[None]]] | None = None,
     hooks: list[Hook] | None = None,
     **fixed_kwargs: Any,
 ) -> Callable[..., T]:
     """
     Tools contain instructions for how something should be done.
 
-    Any keyword arguments passed to the decorator (other than lock/hooks) are
-    merged into every invocation; call-time kwargs override these.
+    Any keyword arguments passed to the decorator (other than lock/before_invoke/
+    on_yield/after_invoke/hooks) are merged into every invocation; call-time
+    kwargs override these.
+
+    Parameters
+    ----------
+    lock : bool, optional
+        If True, concurrent invocations of this tool are serialized with an
+        asyncio.Lock. Default False.
+    before_invoke : async callable or list of async callables, optional
+        Called immediately before the tool runs. Receives the tool's keyword
+        arguments as **kwargs (same as the tool's own signature). Also receives
+        any context-injected parameters (ContextQueue, ContextPool) if declared.
+        Example: async def before(x: int, y: str) -> None: ...
+    on_yield : async callable or list of async callables, optional
+        Called for each value yielded by an async-generator tool.
+        Receives a single positional argument: the yielded value.
+        Only fires for async-generator tools; ignored for coroutine tools.
+        Example: async def on_yield(value: Any) -> None: ...
+    after_invoke : async callable or list of async callables, optional
+        Called after the tool returns. Receives a single positional argument:
+        the return value for coroutine tools, or a list of all yielded values
+        for async-generator tools.
+        Example: async def after(result: Any) -> None: ...
+    hooks : list of Hook, optional
+        Escape hatch for passing pre-typed Hook instances (e.g. from @hook).
+        Hooks from named params and hooks= are all collected and fire together.
+    **fixed_kwargs
+        Fixed keyword arguments merged into every invocation. Call-time kwargs
+        override these.
     """
 
     def decorator(fn: Callable[..., T]) -> Callable[..., T]:
@@ -59,6 +104,13 @@ def tool(
             )
 
         validate_fixed_kwargs(fn, fixed_kwargs, kind="Tool")
+
+        all_hooks: list = (
+            _coerce_hooks(before_invoke, ToolHook.BEFORE_INVOKE)
+            + _coerce_hooks(on_yield, ToolHook.ON_YIELD)
+            + _coerce_hooks(after_invoke, ToolHook.AFTER_INVOKE)
+            + (list(hooks) if hooks else [])
+        )
 
         async def _run_hook(hook_type: ToolHook, *args: Any, **kwargs: Any) -> None:
             for h in HookRegistry.get_by_type(hook_type, wrapper.hooks):
@@ -101,7 +153,7 @@ def tool(
         wrapper.fn = fn
         wrapper.metadata = ToolMetadata(fn.__name__, fn.__doc__)
         wrapper.lock = asyncio.Lock() if lock else None
-        wrapper.hooks = list(hooks) if hooks else []
+        wrapper.hooks = all_hooks
         ToolRegistry.register(cast(Tool, wrapper))
         return wrapper
 
