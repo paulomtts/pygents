@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any, AsyncIterator, Sequence
 
 from pygents.context import (
     ContextItem,
@@ -13,9 +13,10 @@ from pygents.context import (
 )
 from pygents.errors import SafeExecutionError
 from pygents.hooks import AgentHook, Hook, TurnHook
+from pygents.utils import build_method_decorator
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
-from pygents.tool import Tool
-from pygents.turn import StopReason, Turn
+from pygents.tool import AsyncGenTool, Tool
+from pygents.turn import Turn
 from pygents.utils import (
     rebuild_hooks_from_serialization,
     safe_execution,
@@ -36,7 +37,7 @@ class Agent:
         Agent display name.
     description : str
         Agent description.
-    tools : list[Tool]
+    tools : Sequence[Tool | AsyncGenTool]
         Tools this agent can run. Each must be registered in ToolRegistry
         and be the same instance given here.
     """
@@ -73,11 +74,12 @@ class Agent:
         self,
         name: str,
         description: str,
-        tools: list[Tool],
+        tools: Sequence[Tool | AsyncGenTool],
         context_pool: ContextPool | None = None,
         context_queue: ContextQueue | None = None,
     ):
-        for t in tools:
+        tools_list = list(tools)
+        for t in tools_list:
             registered = ToolRegistry.get(t.metadata.name)
             if registered is not t:
                 raise ValueError(
@@ -85,11 +87,11 @@ class Agent:
                 )
         self.name = name
         self.description = description
-        self.tools = tools
+        self.tools = tools_list
         self.hooks: list[Hook] = []
         self.turn_hooks: list[Hook] = []
 
-        self._tool_names = {t.metadata.name for t in tools}
+        self._tool_names = {t.metadata.name for t in tools_list}
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
         self.context_pool = context_pool if context_pool is not None else ContextPool()
         self._pause_event: asyncio.Event = asyncio.Event()
@@ -133,8 +135,9 @@ class Agent:
         self._pause_event.set()
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
-        for h in HookRegistry.get_by_type(name, self.hooks):
-            await h(*args, **kwargs)
+        await HookRegistry.fire(
+            name, HookRegistry.get_by_type(name, self.hooks), *args, **kwargs
+        )
 
     async def _route_value(self, value: Any) -> None:
         if isinstance(value, ContextItem):
@@ -148,76 +151,190 @@ class Agent:
     # -- agent-scoped hook decorators (AgentHook → self.hooks) -----------------
 
     def before_turn(
-        self, fn: Callable[[Agent], Awaitable[None]]
-    ) -> Callable[[Agent], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, AgentHook.BEFORE_TURN)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires before the agent consumes the next turn from the queue.
+
+        Parameters
+        ----------
+        fn : async (agent: Agent) -> None
+            Receives the agent instance.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+
+        return build_method_decorator(
+            AgentHook.BEFORE_TURN, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def after_turn(
-        self, fn: Callable[[Agent, Turn], Awaitable[None]]
-    ) -> Callable[[Agent, Turn], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, AgentHook.AFTER_TURN)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after a turn is fully processed and its values routed.
+
+        Parameters
+        ----------
+        fn : async (agent: Agent, turn: Turn) -> None
+            Receives the agent instance and the completed turn.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            AgentHook.AFTER_TURN, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def on_turn_value(
-        self, fn: Callable[[Agent, Turn, Any], Awaitable[None]]
-    ) -> Callable[[Agent, Turn, Any], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, AgentHook.ON_TURN_VALUE)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after each produced value is routed.
+
+        Parameters
+        ----------
+        fn : async (agent: Agent, turn: Turn, value: Any) -> None
+            Receives the agent, the turn that produced the value, and
+            the value itself.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            AgentHook.ON_TURN_VALUE, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def before_put(
-        self, fn: Callable[[Agent, Turn], Awaitable[None]]
-    ) -> Callable[[Agent, Turn], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, AgentHook.BEFORE_PUT)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires before a turn is enqueued via ``put()``.
+
+        Parameters
+        ----------
+        fn : async (agent: Agent, turn: Turn) -> None
+            Receives the agent instance and the turn about to be
+            enqueued.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            AgentHook.BEFORE_PUT, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def after_put(
-        self, fn: Callable[[Agent, Turn], Awaitable[None]]
-    ) -> Callable[[Agent, Turn], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, AgentHook.AFTER_PUT)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after a turn is enqueued via ``put()``.
+
+        Parameters
+        ----------
+        fn : async (agent: Agent, turn: Turn) -> None
+            Receives the agent instance and the enqueued turn.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            AgentHook.AFTER_PUT, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def on_pause(
-        self, fn: Callable[[Agent], Awaitable[None]]
-    ) -> Callable[[Agent], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, AgentHook.ON_PAUSE)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires when the run loop hits a paused gate.
+
+        Parameters
+        ----------
+        fn : async (agent: Agent) -> None
+            Receives the agent instance.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            AgentHook.ON_PAUSE, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def on_resume(
-        self, fn: Callable[[Agent], Awaitable[None]]
-    ) -> Callable[[Agent], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, AgentHook.ON_RESUME)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires when the pause gate is released and the loop continues.
+
+        Parameters
+        ----------
+        fn : async (agent: Agent) -> None
+            Receives the agent instance.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            AgentHook.ON_RESUME, self.hooks, fn, lock, fixed_kwargs
+        )
 
     # -- turn-scoped hook decorators (TurnHook → self.turn_hooks) --------------
 
     def on_error(
-        self, fn: Callable[[Turn, Exception], Awaitable[None]]
-    ) -> Callable[[Turn, Exception], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, TurnHook.ON_ERROR)
-        self.turn_hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Propagated to every turn. Fires on non-timeout exceptions.
+
+        Parameters
+        ----------
+        fn : async (turn: Turn, exception: Exception) -> None
+            Receives the turn instance and the raised exception.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            TurnHook.ON_ERROR, self.turn_hooks, fn, lock, fixed_kwargs
+        )
 
     def on_timeout(
-        self, fn: Callable[[Turn], Awaitable[None]]
-    ) -> Callable[[Turn], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, TurnHook.ON_TIMEOUT)
-        self.turn_hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Propagated to every turn. Fires when a turn exceeds its timeout.
+
+        Parameters
+        ----------
+        fn : async (turn: Turn) -> None
+            Receives the turn instance.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            TurnHook.ON_TIMEOUT, self.turn_hooks, fn, lock, fixed_kwargs
+        )
 
     def on_complete(
-        self, fn: Callable[[Turn, StopReason | None], Awaitable[None]]
-    ) -> Callable[[Turn, StopReason | None], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, TurnHook.ON_COMPLETE)
-        self.turn_hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Propagated to every turn. Always fires after the turn ends.
+
+        Parameters
+        ----------
+        fn : async (turn: Turn, stop_reason: StopReason | None) -> None
+            Receives the turn instance and the reason it stopped (or
+            ``None`` if the stop reason has not been set yet).
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            TurnHook.ON_COMPLETE, self.turn_hooks, fn, lock, fixed_kwargs
+        )
 
     # -- queue -----------------------------------------------------------------
 
@@ -245,7 +362,7 @@ class Agent:
         self._queue.put_nowait(turn)
         await self._run_hooks(AgentHook.AFTER_PUT, self, turn)
 
-    async def send_turn(self, agent_name: str, turn: Turn) -> None:
+    async def send(self, agent_name: str, turn: Turn) -> None:
         """Enqueue a Turn on another agent's queue.
 
         Parameters
@@ -272,7 +389,7 @@ class Agent:
         self,
         name: str,
         description: str | None = None,
-        tools: list[Tool] | None = None,
+        tools: Sequence[Tool | AsyncGenTool] | None = None,
         hooks: list[Hook] | None = ...,  # type: ignore[assignment]
     ) -> Agent:
         """
@@ -289,7 +406,7 @@ class Agent:
             Name for the child agent (must be unique in AgentRegistry).
         description : str | None
             Description for the child. Defaults to this agent's description.
-        tools : list[Tool] | None
+        tools : Sequence[Tool | AsyncGenTool] | None
             Tools for the child. Defaults to this agent's tools.
         hooks : list[Hook] | None
             Hooks for the child. Sentinel ``...`` (default) inherits this
@@ -395,9 +512,7 @@ class Agent:
         if data.get("current_turn") is not None:
             agent._current_turn = Turn.from_dict(data["current_turn"])
         agent.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
-        agent.turn_hooks = rebuild_hooks_from_serialization(
-            data.get("turn_hooks", {})
-        )
+        agent.turn_hooks = rebuild_hooks_from_serialization(data.get("turn_hooks", {}))
         agent.context_pool = ContextPool.from_dict(data.get("context_pool", {}))
         agent.context_queue = ContextQueue.from_dict(
             data.get("context_queue", {"limit": 10, "items": [], "hooks": {}})

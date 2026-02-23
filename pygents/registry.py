@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from abc import ABC
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, TypeVar
 
@@ -19,8 +20,8 @@ T = TypeVar("T")
 class BaseRegistry(ABC, Generic[T]):
     _registry: ClassVar[dict] = {}
     _key_attr: ClassVar[str]
-    _not_found_error: ClassVar[type[Exception]]
     _allow_reregister: ClassVar[bool] = False
+    _not_found_error: ClassVar[type[Exception]] = UnregisteredHookError
 
     @classmethod
     def clear(cls) -> None:
@@ -41,10 +42,10 @@ class BaseRegistry(ABC, Generic[T]):
         item = cls._registry.get(name)
         if item is None:
             raise cls._not_found_error(f"{name!r} not found")
-        return item  # type: ignore[return-value]
+        return item
 
 
-class ToolRegistry(BaseRegistry):  # type: ignore[type-arg]
+class ToolRegistry(BaseRegistry):
     """Registry for Tools. Not meant to be instantiated or used directly."""
 
     _registry: ClassVar[dict] = {}
@@ -57,7 +58,7 @@ class ToolRegistry(BaseRegistry):  # type: ignore[type-arg]
         return list(cls._registry.values())
 
 
-class AgentRegistry(BaseRegistry):  # type: ignore[type-arg]
+class AgentRegistry(BaseRegistry):
     """Registry for Agents. Not meant to be instantiated or used directly."""
 
     _registry: ClassVar[dict] = {}
@@ -65,43 +66,97 @@ class AgentRegistry(BaseRegistry):  # type: ignore[type-arg]
     _not_found_error = UnregisteredAgentError
 
 
-class HookRegistry(BaseRegistry):  # type: ignore[type-arg]
+class HookRegistry(BaseRegistry):
     """Registry for Hooks. Not meant to be instantiated or used directly."""
 
     _registry: ClassVar[dict] = {}
+    _global_hooks: ClassVar[list] = []
     _key_attr = "__name__"
-    _not_found_error = UnregisteredHookError
     _allow_reregister = True
 
     @classmethod
-    def wrap(cls, fn: Callable[..., Any], hook_type: HookType) -> Hook:
+    def clear(cls) -> None:
+        super().clear()
+        cls._global_hooks = []
+
+    @classmethod
+    def register_global(cls, hook: "Hook") -> None:
+        """Register a hook both in the name registry and in the global hook list."""
+        cls.register(hook)
+        cls._global_hooks.append(hook)
+
+    @classmethod
+    def get_global_by_type(cls, hook_type: object) -> "list[Hook]":
+        """Return all globally-registered hooks matching hook_type, in order."""
+        return cls.get_by_type(hook_type, cls._global_hooks)
+
+    @classmethod
+    async def fire(
+        cls,
+        hook_type: object,
+        instance_hooks: list,
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        """Fire *instance_hooks* then matching global hooks, deduplicating by identity.
+
+        *instance_hooks* must already be filtered to the correct hook type by
+        the caller — ``fire`` iterates them directly without re-filtering.
+        Instance hooks run first; any global hook sharing identity with an
+        already-fired instance hook is skipped, preventing double-firing when
+        the same hook is registered both globally (``@hook``) and on the instance.
+        """
+        fired_ids: set[int] = set()
+        for h in instance_hooks:
+            await h(*args, **kwargs)
+            fired_ids.add(id(h))
+        for h in cls.get_global_by_type(hook_type):
+            if id(h) not in fired_ids:
+                await h(*args, **kwargs)
+
+    @classmethod
+    def wrap(
+        cls,
+        fn: Callable[..., Any],
+        hook_type: "HookType | list[HookType]",
+        *,
+        lock: bool = False,
+        **fixed_kwargs: Any,
+    ) -> "Hook" | Callable[..., Any]:
         """Wrap *fn* as a registered Hook, or return the existing wrapper.
 
         - If *fn* is already a Hook (has ``.metadata``), re-register and return it.
         - If a Hook wrapping the same underlying function was previously registered
           under the same ``__name__``, return that existing wrapper.
-        - Otherwise, delegate to ``hook(hook_type)`` to create, register, and return
-          a new Hook.
+        - Otherwise, create a new Hook, register it (instance-scope only), and return it.
+
+        Supports multi-type via a list, lock serialization, and fixed_kwargs injection.
         """
         if hasattr(fn, "metadata"):
             cls.register(fn)
-            return fn  # type: ignore[return-value]
+            return fn
 
         name = getattr(fn, "__name__", None)
         if name:
             try:
                 existing = cls.get(name)
                 if getattr(existing, "fn", None) is fn:
-                    return existing  # type: ignore[return-value]
+                    return existing
             except UnregisteredHookError:
                 pass
 
-        from pygents.hooks import hook as _hook_decorator
+        from pygents.hooks import Hook
 
-        return _hook_decorator(hook_type)(fn)
+        types = hook_type if isinstance(hook_type, list) else [hook_type]
+        stored_type = types[0] if len(types) == 1 else tuple(types)
+        asyncio_lock = asyncio.Lock() if lock else None
+        wrapper = Hook(fn, stored_type, asyncio_lock, fixed_kwargs)
+        cls.register(wrapper)
+        return wrapper
 
     @classmethod
-    def get_by_type(cls, hook_type: object, hooks: list[Hook]) -> list[Hook]:
+    def get_by_type(cls, hook_type: object, hooks: "list[Hook]") -> "list[Hook]":
         """Return all hooks in the given list that match the hook_type, in order."""
 
         def matches(h: "Hook") -> bool:

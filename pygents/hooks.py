@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Awaitable, Callable, overload
 
-from pygents.utils import _inject_context_deps, _null_lock, merge_kwargs
+from pygents.utils import inject_context_deps, merge_kwargs, null_lock
 
 
 class TurnHook(str, Enum):
@@ -91,8 +91,8 @@ class Hook:
     async def __call__(self, *args: Any, **kwargs: Any) -> None:
 
         merged = merge_kwargs(self._fixed_kwargs, kwargs, f"hook {self.fn.__name__!r}")
-        merged = _inject_context_deps(self.fn, merged)
-        lock_ctx = self.lock if self.lock is not None else _null_lock
+        merged = inject_context_deps(self.fn, merged)
+        lock_ctx = self.lock if self.lock is not None else null_lock
         async with lock_ctx:
             await self.fn(*args, **merged)
 
@@ -146,7 +146,7 @@ def hook(
 
         asyncio_lock = asyncio.Lock() if lock else None
         wrapper = Hook(fn, stored_type, asyncio_lock, fixed_kwargs)
-        HookRegistry.register(wrapper)
+        HookRegistry.register_global(wrapper)
         return wrapper
 
     return decorator

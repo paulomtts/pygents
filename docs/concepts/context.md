@@ -149,36 +149,43 @@ assert ContextItem(content="sub-step output") not in turn_cq.items
 When a child branches with a smaller `limit`, only the most recent items that fit are kept. By default, the child inherits the parent's hooks:
 
 ```python
-cq = ContextQueue(limit=10, hooks=[my_before_append_hook])
+cq = ContextQueue(limit=10)
+
+@cq.before_append
+async def my_before_append_hook(queue, incoming, current):
+    ...
+
 child = cq.branch(hooks=[])           # no hooks
 other = cq.branch(hooks=[other_hook]) # different hooks
 ```
 
 ### Hooks
 
-`ContextQueue` supports two hook types. Pass `hooks` as a list; each hook must carry its type (e.g. from `@hook(ContextQueueHook.BEFORE_APPEND)`).
+`ContextQueue` supports hook types for append, clear, and eviction. Attach via method decorators or `cq.hooks.append(h)`.
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_APPEND` | Before new items are inserted | `(items,)` — current items |
-| `AFTER_APPEND` | After new items have been added | `(items,)` — current items |
+| `BEFORE_APPEND` | Before new items are inserted | `(queue, incoming, current)` — queue instance, items being appended, snapshot before append |
+| `AFTER_APPEND` | After new items have been added | `(queue, appended_items, current)` — queue instance, items that were appended, snapshot after append |
+| `BEFORE_CLEAR` | Before items are cleared | `(queue, items)` — queue instance, snapshot before clear |
+| `AFTER_CLEAR` | After items are cleared | `(queue)` — queue instance (now empty) |
+| `ON_EVICT` | When an item is evicted to make room | `(queue, item)` — queue instance, evicted `ContextItem` |
 
 ```python
-from pygents import ContextQueue, hook, ContextQueueHook
+from pygents import ContextQueue
 
-@hook(ContextQueueHook.BEFORE_APPEND)
-async def log_before(items):
-    print(f"Current count: {len(items)}")
+cq = ContextQueue(limit=20)
 
-@hook(ContextQueueHook.AFTER_APPEND)
-async def log_after(items):
-    print(f"New count: {len(items)}")
+@cq.before_append
+async def log_before(queue, incoming, current):
+    print(f"Current count: {len(current)}")
 
-cq = ContextQueue(limit=20, hooks=[log_before, log_after])
+@cq.after_append
+async def log_after(queue, appended_items, current):
+    print(f"New count: {len(current)}")
+
 await cq.append(ContextItem(content="a"), ContextItem(content="b"), ContextItem(content="c"))
 ```
-
-If no hooks are provided, items are appended directly.
 
 ### Serialization
 
@@ -285,17 +292,16 @@ print(item.content)
 You can also pass a pre-configured pool at construction or assign one after:
 
 ```python
-from pygents import Agent, ContextPoolHook, hook
+from pygents import Agent
 from pygents.context import ContextPool
 
-@hook(ContextPoolHook.AFTER_ADD)
+pool = ContextPool()
+
+@pool.after_add
 async def on_item_added(pool, item):
     print(f"Added {item.id!r}: {item.description}")
 
-agent = Agent("reader", "Reads documents", [fetch_doc], context_pool=ContextPool(hooks=[on_item_added]))
-
-# or after construction (only while not running):
-agent.context_pool = ContextPool(limit=100, hooks=[on_item_added])
+agent = Agent("reader", "Reads documents", [fetch_doc], context_pool=pool)
 ```
 
 The `context_pool` is branched alongside `context_queue` when calling `agent.branch()`. It is also included in `agent.to_dict()` and restored by `Agent.from_dict()`.
@@ -364,7 +370,7 @@ The child starts with a copy of the parent's items. Mutations to either are inde
 
 ### Hooks
 
-ContextPool supports six hook events. Pass `hooks` as a list to `ContextPool(...)` or via the `context_pool` parameter on `Agent`.
+ContextPool supports hook events for add, remove, clear, and eviction. Attach via method decorators or `pool.hooks.append(h)`.
 
 | Hook | When | Args |
 |------|------|------|
@@ -372,22 +378,22 @@ ContextPool supports six hook events. Pass `hooks` as a list to `ContextPool(...
 | `AFTER_ADD` | After item inserted | `(pool, item)` |
 | `BEFORE_REMOVE` | Before item deleted | `(pool, item)` |
 | `AFTER_REMOVE` | After item deleted | `(pool, item)` |
-| `BEFORE_CLEAR` | Before all items cleared | `(pool)` |
+| `BEFORE_CLEAR` | Before all items cleared | `(pool, snapshot)` — dict copy of items taken before clear |
 | `AFTER_CLEAR` | After all items cleared | `(pool)` |
+| `ON_EVICT` | Oldest item evicted to stay within limit | `(pool, item)` |
 
 ```python
-from pygents import ContextPoolHook, hook
 from pygents.context import ContextPool
 
-@hook(ContextPoolHook.BEFORE_ADD)
+pool = ContextPool(limit=10)
+
+@pool.before_add
 async def log_before(pool, item):
     print(f"About to add {item.id!r}, pool size: {len(pool)}")
 
-@hook(ContextPoolHook.AFTER_ADD)
+@pool.after_add
 async def log_after(pool, item):
     print(f"Added {item.id!r}, pool size: {len(pool)}")
-
-pool = ContextPool(limit=10, hooks=[log_before, log_after])
 ```
 
 Hooks are inherited by children from `branch()`. No hooks fire during the snapshot copy inside `branch()`.

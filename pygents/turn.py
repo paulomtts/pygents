@@ -6,11 +6,12 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, AsyncIterator, Awaitable, Callable, Iterable, TypeVar
+from typing import Any, AsyncIterator, Callable, Iterable, TypeVar
 
 from pygents.context import ContextItem
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from pygents.hooks import Hook, TurnHook
+from pygents.utils import build_method_decorator
 from pygents.registry import HookRegistry, ToolRegistry
 from pygents.tool import AsyncGenTool, Tool
 from pygents.utils import (
@@ -133,44 +134,102 @@ class Turn[T]:
 
     # -- hooks -----------------------------------------------------------------
 
-    async def _run_hook(self, hook_type: TurnHook, *args: Any) -> None:
-        for h in HookRegistry.get_by_type(hook_type, self.hooks):
-            await h(self, *args)
+    async def _run_hooks(self, hook_type: TurnHook, *args: Any) -> None:
+        await HookRegistry.fire(
+            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), self, *args
+        )
 
     def before_run(
-        self, fn: Callable[[Turn[T]], Awaitable[None]]
-    ) -> Callable[[Turn[T]], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, TurnHook.BEFORE_RUN)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires before the tool executes.
+
+        Parameters
+        ----------
+        fn : async (turn: Turn[T]) -> None
+            Receives the turn instance.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+
+        return build_method_decorator(
+            TurnHook.BEFORE_RUN, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def after_run(
-        self, fn: Callable[[Turn[T]], Awaitable[None]]
-    ) -> Callable[[Turn[T]], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, TurnHook.AFTER_RUN)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after the tool completes successfully.
+
+        Parameters
+        ----------
+        fn : async (turn: Turn[T], output: TurnOutput) -> None
+            Receives the turn instance and its output value.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            TurnHook.AFTER_RUN, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def on_timeout(
-        self, fn: Callable[[Turn[T]], Awaitable[None]]
-    ) -> Callable[[Turn[T]], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, TurnHook.ON_TIMEOUT)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires when the turn exceeds its timeout.
+
+        Parameters
+        ----------
+        fn : async (turn: Turn[T]) -> None
+            Receives the turn instance.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            TurnHook.ON_TIMEOUT, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def on_error(
-        self, fn: Callable[[Turn[T], Exception], Awaitable[None]]
-    ) -> Callable[[Turn[T], Exception], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, TurnHook.ON_ERROR)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires when the tool raises a non-timeout exception.
+
+        Parameters
+        ----------
+        fn : async (turn: Turn[T], exception: Exception) -> None
+            Receives the turn instance and the raised exception.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            TurnHook.ON_ERROR, self.hooks, fn, lock, fixed_kwargs
+        )
 
     def on_complete(
-        self, fn: Callable[[Turn[T], StopReason | None], Awaitable[None]]
-    ) -> Callable[[Turn[T], StopReason | None], Awaitable[None]]:
-        wrapped = HookRegistry.wrap(fn, TurnHook.ON_COMPLETE)
-        self.hooks.append(wrapped)
-        return wrapped
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Always fires in the finally block after the turn ends.
+
+        Parameters
+        ----------
+        fn : async (turn: Turn[T], stop_reason: StopReason | None) -> None
+            Receives the turn instance and the reason it stopped (or
+            ``None`` if the stop reason has not been set yet).
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            TurnHook.ON_COMPLETE, self.hooks, fn, lock, fixed_kwargs
+        )
 
     # -- execution ------------------------------------------------------------
 
@@ -183,7 +242,7 @@ class Turn[T]:
         try:
             self._is_running = True
             self.metadata.start_time = datetime.now()
-            await self._run_hook(TurnHook.BEFORE_RUN)
+            await self._run_hooks(TurnHook.BEFORE_RUN)
             if inspect.isasyncgenfunction(self.tool.fn):
                 raise WrongRunMethodError(
                     "Tool is async generator; use yielding() instead."
@@ -198,19 +257,19 @@ class Turn[T]:
                 self.tool(*runtime_args, **runtime_kwargs), timeout=self.timeout
             )
             self.metadata.stop_reason = StopReason.COMPLETED
-            await self._run_hook(TurnHook.AFTER_RUN)
+            await self._run_hooks(TurnHook.AFTER_RUN, self.output)
             return self.output
         except (asyncio.TimeoutError, TimeoutError):
             self.metadata.stop_reason = StopReason.TIMEOUT
-            await self._run_hook(TurnHook.ON_TIMEOUT)
+            await self._run_hooks(TurnHook.ON_TIMEOUT)
             raise TurnTimeoutError(f"Turn timed out after {self.timeout}s") from None
         except Exception as e:
             self.metadata.stop_reason = StopReason.ERROR
-            await self._run_hook(TurnHook.ON_ERROR, e)
+            await self._run_hooks(TurnHook.ON_ERROR, e)
             raise
         finally:
             self.metadata.end_time = datetime.now()
-            await self._run_hook(TurnHook.ON_COMPLETE, self.metadata.stop_reason)
+            await self._run_hooks(TurnHook.ON_COMPLETE, self.metadata.stop_reason)
             self._is_running = False
 
     @safe_execution
@@ -222,7 +281,7 @@ class Turn[T]:
         try:
             self._is_running = True
             self.metadata.start_time = datetime.now()
-            await self._run_hook(TurnHook.BEFORE_RUN)
+            await self._run_hooks(TurnHook.BEFORE_RUN)
             if not inspect.isasyncgenfunction(self.tool.fn):
                 raise WrongRunMethodError(
                     "Tool is not an async generator; use returning() for single value."
@@ -255,7 +314,7 @@ class Turn[T]:
                         except asyncio.CancelledError:
                             pass
                         self.metadata.stop_reason = StopReason.TIMEOUT
-                        await self._run_hook(TurnHook.ON_TIMEOUT)
+                        await self._run_hooks(TurnHook.ON_TIMEOUT)
                         raise TurnTimeoutError(
                             f"Turn timed out after {self.timeout}s"
                         ) from None
@@ -274,22 +333,22 @@ class Turn[T]:
                 except asyncio.CancelledError:
                     pass
                 self.metadata.stop_reason = StopReason.TIMEOUT
-                await self._run_hook(TurnHook.ON_TIMEOUT)
+                await self._run_hooks(TurnHook.ON_TIMEOUT)
                 raise TurnTimeoutError(
                     f"Turn timed out after {self.timeout}s"
                 ) from None
             self.output = aggregated
             self.metadata.stop_reason = StopReason.COMPLETED
-            await self._run_hook(TurnHook.AFTER_RUN)
+            await self._run_hooks(TurnHook.AFTER_RUN, self.output)
         except TurnTimeoutError:
             raise
         except Exception as e:
             self.metadata.stop_reason = StopReason.ERROR
-            await self._run_hook(TurnHook.ON_ERROR, e)
+            await self._run_hooks(TurnHook.ON_ERROR, e)
             raise
         finally:
             self.metadata.end_time = datetime.now()
-            await self._run_hook(TurnHook.ON_COMPLETE, self.metadata.stop_reason)
+            await self._run_hooks(TurnHook.ON_COMPLETE, self.metadata.stop_reason)
             self._is_running = False
 
     # -- serialization --------------------------------------------------------

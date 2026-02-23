@@ -31,8 +31,8 @@ The code blocks below are meant to be combined into one script.
     toolkit = PyAIToolkit(main_model_config=LLMConfig())
 
     @hook(ContextQueueHook.AFTER_APPEND)
-    async def log_memory(items: list) -> None:
-        logger.debug("ContextQueue: %d items", len(items))
+    async def log_memory(queue, appended_items, current) -> None:
+        logger.debug("ContextQueue: %d items", len(current))
 
     DOCUMENTS = {
         "q3-earnings": {
@@ -145,11 +145,13 @@ The code blocks below are meant to be combined into one script.
 
         yield ContextItem(content=f"Assistant: {full_text}")  # id=None → auto-appended to context_queue
 
+    memory = ContextQueue(limit=30)
+    memory.hooks.append(log_memory)
     agent = Agent(
         "researcher",
         "Answers questions from a document pool",
         [fetch_document, think, select_context, answer],
-        context_queue=ContextQueue(limit=30, hooks=[log_memory]),
+        context_queue=memory,
         context_pool=ContextPool(limit=50),
     )
 
@@ -191,8 +193,8 @@ logger = logging.getLogger(__name__)
 toolkit = PyAIToolkit(main_model_config=LLMConfig())
 
 @hook(ContextQueueHook.AFTER_APPEND)
-async def log_memory(items: list) -> None:
-    logger.debug("ContextQueue: %d items", len(items))
+async def log_memory(queue, appended_items, current) -> None:
+    logger.debug("ContextQueue: %d items", len(current))
 ```
 
 !!! info "LLM configuration"
@@ -376,11 +378,13 @@ Pass a `ContextQueue` and `ContextPool` directly to the agent — this is what m
 import asyncio
 from pygents import Agent, ContextPool, ContextQueue, Turn
 
+memory = ContextQueue(limit=30)
+memory.hooks.append(log_memory)
 agent = Agent(
     "researcher",
     "Answers questions from a document pool",
     [fetch_document, think, select_context, answer],
-    context_queue=ContextQueue(limit=30, hooks=[log_memory]),
+    context_queue=memory,
     context_pool=ContextPool(limit=50),
 )
 ```

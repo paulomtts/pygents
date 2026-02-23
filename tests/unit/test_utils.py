@@ -16,7 +16,7 @@ merge_kwargs(fixed_kwargs, call_kwargs, label):
   MK2  key in call_kwargs also in evaluated -> log.warning
   MK3  return {**evaluated, **call_kwargs} (call overrides)
 
-hooks_by_type_for_serialization(hooks):
+serialize_hooks_by_type(hooks):
   HT1  hook has no hook_type or None -> skipped
   HT2  hook_type has .value (enum) -> key = hook_type.value
   HT3  hook_type no .value -> key = str(hook_type)
@@ -34,6 +34,7 @@ from pygents.utils import (
     eval_args,
     eval_kwargs,
     merge_kwargs,
+    rebuild_hooks_from_serialization,
     safe_execution,
     serialize_hooks_by_type,
 )
@@ -171,28 +172,64 @@ def test_merge_kwargs_override_logs_warning(caplog):
     assert "my_label" in caplog.text
 
 
-# --- hooks_by_type_for_serialization --------------------------------------------------
+# --- serialize_hooks_by_type ----------------------------------------------------------
 
 
-def test_hooks_by_type_for_serialization_empty():
+def test_serialize_hooks_by_type_empty():
     assert serialize_hooks_by_type([]) == {}
 
 
-def test_hooks_by_type_for_serialization_uses_enum_value_and_name():
+def test_serialize_hooks_by_type_uses_enum_value_and_name():
     hook1 = type("H", (), {"type": TurnHook.BEFORE_RUN, "__name__": "my_hook"})()
     result = serialize_hooks_by_type([hook1])
     assert result == {"before_run": ["my_hook"]}
 
 
-def test_hooks_by_type_for_serialization_skips_hook_without_type():
+def test_serialize_hooks_by_type_skips_hook_without_type():
     hook_no_type = type("H", (), {"__name__": "anonymous"})()
     assert serialize_hooks_by_type([hook_no_type]) == {}
 
 
-def test_hooks_by_type_for_serialization_name_fallback():
+def test_serialize_hooks_by_type_name_fallback():
     class E:
         value = "ev"
 
     hook_no_name = type("H", (), {"type": E()})()
     result = serialize_hooks_by_type([hook_no_name])
     assert result == {"ev": ["hook"]}
+
+
+# --- rebuild_hooks_from_serialization --------------------------------------------------
+
+
+def test_rebuild_hooks_from_serialization_returns_registered_hooks():
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+
+    async def my_rebuild_hook(turn):
+        pass
+
+    wrapped = HookRegistry.wrap(my_rebuild_hook, TurnHook.BEFORE_RUN)
+    hooks_data = {"before_run": ["my_rebuild_hook"]}
+    result = rebuild_hooks_from_serialization(hooks_data)
+    assert len(result) == 1
+    assert result[0] is wrapped
+
+
+def test_rebuild_hooks_from_serialization_deduplicates_by_name():
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+
+    async def dedup_hook(turn):
+        pass
+
+    wrapped = HookRegistry.wrap(dedup_hook, TurnHook.BEFORE_RUN)
+    hooks_data = {
+        "before_run": ["dedup_hook"],
+        "after_run": ["dedup_hook"],
+    }
+    result = rebuild_hooks_from_serialization(hooks_data)
+    assert len(result) == 1
+    assert result[0] is wrapped

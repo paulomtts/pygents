@@ -37,11 +37,15 @@ from typing import Any
 
 import pytest
 
-from pygents.context import ContextPool, ContextQueue
-from pygents.context import _current_context_pool, _current_context_queue
+from pygents.context import (
+    ContextPool,
+    ContextQueue,
+    _current_context_pool,
+    _current_context_queue,
+)
 from pygents.hooks import ToolHook
 from pygents.registry import ToolRegistry
-from pygents.tool import ToolMetadata, _inject_context_deps, tool
+from pygents.tool import ToolMetadata, inject_context_deps, tool
 
 
 def test_decorated_function_preserves_behavior():
@@ -98,7 +102,7 @@ def test_decorator_without_parentheses():
 def test_tool_sync_function_raises_type_error():
     with pytest.raises(TypeError, match="Tool must be async"):
 
-        @tool()
+        @tool()  # type: ignore[arg-type]
         def sync_tool() -> int:
             return 1
 
@@ -130,7 +134,6 @@ def test_decorated_tool_has_hooks_list_empty_when_none():
     assert no_hooks.hooks == []
 
 
-
 def test_tool_metadata_fields():
     metadata = ToolMetadata(
         name="foo",
@@ -147,7 +150,7 @@ def test_tool_fixed_kwargs_merged_into_invocation():
     async def fixed_kwargs_tool(value: int, permission: str) -> tuple[int, str]:
         return (value, permission)
 
-    result = asyncio.run(fixed_kwargs_tool(10))
+    result = asyncio.run(fixed_kwargs_tool(10))  # type: ignore[call-arg]  # permission autoinjected
     assert result == (10, "admin")
 
 
@@ -168,7 +171,7 @@ def test_tool_fixed_kwargs_multiple_keys():
     async def multi_fixed(a: int, b: int, c: int) -> int:
         return a + b + c
 
-    result = asyncio.run(multi_fixed(c=3))
+    result = asyncio.run(multi_fixed(c=3))  # type: ignore[call-arg]  # c autoinjected
     assert result == 6
 
 
@@ -180,18 +183,18 @@ def test_tool_fixed_kwargs_lambda_evaluated_at_invoke_time():
         return n
 
     counter[0] = 5
-    assert asyncio.run(lambda_fixed_tool()) == 5
+    assert asyncio.run(lambda_fixed_tool()) == 5  # type: ignore[call-arg]  # n autoinjected
     counter[0] = 11
-    assert asyncio.run(lambda_fixed_tool()) == 11
+    assert asyncio.run(lambda_fixed_tool()) == 11  # type: ignore[call-arg]  # n autoinjected
 
 
-def test_tool_fixed_kwargs_async_gen_tool():
+def test_tool_fixed_kwargs_async_gen_tool(collect_async):
     @tool(prefix="fixed-")
     async def yielding_fixed_tool(prefix: str, x: int):
         yield f"{prefix}{x}"
         yield f"{prefix}{x + 1}"
 
-    results = _collect_async(yielding_fixed_tool(x=1))
+    results = collect_async(yielding_fixed_tool(x=1))  # type: ignore[call-arg]  # prefix autoinjected
     assert results == ["fixed-1", "fixed-2"]
 
 
@@ -258,16 +261,6 @@ def test_tool_lock_serializes_concurrent_calls():
     assert order == [("start", 1), ("end", 1), ("start", 2), ("end", 2)]
 
 
-def _collect_async(agen):
-    async def run():
-        out = []
-        async for x in agen:
-            out.append(x)
-        return out
-
-    return asyncio.run(run())
-
-
 def test_before_invoke_hook_fires_on_coroutine_tool():
     events = []
 
@@ -285,7 +278,6 @@ def test_before_invoke_hook_fires_on_coroutine_tool():
 
 def test_stacked_decorator_shared_hook_fires_for_both_tools():
     """Sharing a hook via stacked decorators must fire for both tools."""
-    from pygents.hooks import ToolHook
     from pygents.registry import HookRegistry
 
     HookRegistry.clear()
@@ -305,14 +297,14 @@ def test_stacked_decorator_shared_hook_fires_for_both_tools():
         events.append(x)
 
     async def run():
-        await tool_b._run_hook(ToolHook.BEFORE_INVOKE, 1)
-        await tool_a._run_hook(ToolHook.AFTER_INVOKE, 2)
+        await tool_b._run_hooks(ToolHook.BEFORE_INVOKE, 1)
+        await tool_a._run_hooks(ToolHook.AFTER_INVOKE, 2)
 
     asyncio.run(run())
     assert events == [1, 2]
 
 
-def test_on_yield_hook_fires_on_async_gen_tool():
+def test_on_yield_hook_fires_on_async_gen_tool(collect_async):
     yields_seen = []
 
     @tool()
@@ -324,7 +316,7 @@ def test_on_yield_hook_fires_on_async_gen_tool():
     async def on_yield(value):
         yields_seen.append(value)
 
-    _collect_async(gen_two())
+    collect_async(gen_two())
     assert yields_seen == [10, 20]
 
 
@@ -346,7 +338,7 @@ def test_tool_injects_context_queue_when_var_is_set():
     async def run():
         token = _current_context_queue.set(cq)
         try:
-            return await needs_queue(x=3)
+            return await needs_queue(x=3)  # type: ignore[call-arg]  # memory autoinjected
         finally:
             _current_context_queue.reset(token)
 
@@ -369,7 +361,7 @@ def test_tool_injects_context_pool_when_var_is_set():
     async def run():
         token = _current_context_pool.set(cp)
         try:
-            return await needs_pool(x=7)
+            return await needs_pool(x=7)  # type: ignore[call-arg]  # pool autoinjected
         finally:
             _current_context_pool.reset(token)
 
@@ -465,19 +457,11 @@ def test_async_gen_tool_injects_context_queue():
 
     cq = ContextQueue(limit=5)
 
-    async def run():
-        token = _current_context_queue.set(cq)
-        try:
-            return _collect_async(gen_needs_queue())
-        finally:
-            _current_context_queue.reset(token)
-
-    # Must set ContextVar before collection starts
     async def run_inner():
         token = _current_context_queue.set(cq)
         try:
             out = []
-            async for v in gen_needs_queue():
+            async for v in gen_needs_queue():  # type: ignore[call-arg]  # memory autoinjected
                 out.append(v)
             return out
         finally:
@@ -503,7 +487,7 @@ def test_async_gen_tool_injects_context_pool():
         token = _current_context_pool.set(cp)
         try:
             out = []
-            async for v in gen_needs_pool():
+            async for v in gen_needs_pool():  # type: ignore[call-arg]  # pool autoinjected
                 out.append(v)
             return out
         finally:
@@ -522,5 +506,79 @@ def test_inject_context_deps_handles_unresolvable_hints():
         pass
 
     merged = {"x": 1}
-    result = _inject_context_deps(bad_hints_fn, merged)
+    result = inject_context_deps(bad_hints_fn, merged)
     assert result == {"x": 1}
+
+
+# ---------------------------------------------------------------------------
+# AFTER_INVOKE dispatch (verification tests)
+# ---------------------------------------------------------------------------
+
+
+def test_tool_after_invoke_receives_result():
+    """after_invoke fires with the tool's return value."""
+    received = []
+
+    @tool()
+    async def verify_after_invoke(x: int) -> int:
+        return x * 3
+
+    @verify_after_invoke.after_invoke
+    async def capture(result: int) -> None:
+        received.append(result)
+
+    asyncio.run(verify_after_invoke(x=4))
+    assert received == [12]
+
+
+def test_asyncgen_after_invoke_receives_aggregated_list(collect_async):
+    """after_invoke on AsyncGenTool fires with a list of all yielded values."""
+    received = []
+
+    @tool()
+    async def verify_gen_after_invoke():
+        yield "a"
+        yield "b"
+        yield "c"
+
+    @verify_gen_after_invoke.after_invoke
+    async def capture_gen(values: list) -> None:
+        received.append(values)
+
+    collect_async(verify_gen_after_invoke())
+    assert received == [["a", "b", "c"]]
+
+
+def test_after_invoke_does_not_fire_when_tool_raises():
+    """AFTER_INVOKE must NOT dispatch if the coroutine tool raises."""
+    fired = []
+
+    @tool()
+    async def raising_ai_tool() -> None:
+        raise RuntimeError("boom")
+
+    @raising_ai_tool.after_invoke
+    async def should_not_run(result) -> None:
+        fired.append(result)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(raising_ai_tool())
+    assert fired == []
+
+
+def test_after_invoke_does_not_fire_when_async_gen_raises(collect_async):
+    """AFTER_INVOKE must NOT dispatch if the async gen tool raises mid-iteration."""
+    fired = []
+
+    @tool()
+    async def raising_gen_tool():
+        yield 1
+        raise RuntimeError("gen boom")
+
+    @raising_gen_tool.after_invoke
+    async def should_not_run_gen(values: list) -> None:
+        fired.append(values)
+
+    with pytest.raises(RuntimeError, match="gen boom"):
+        collect_async(raising_gen_tool())
+    assert fired == []

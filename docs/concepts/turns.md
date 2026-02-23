@@ -107,10 +107,10 @@ Turn hooks fire at specific points during execution. Hooks are stored as a list 
 | Hook | When | Args |
 |------|------|------|
 | `BEFORE_RUN` | Before tool runs (after lock acquired) | `(turn)` |
-| `AFTER_RUN` | After successful completion | `(turn)` |
+| `AFTER_RUN` | After successful completion | `(turn, output)` |
 | `ON_TIMEOUT` | Turn timed out | `(turn)` |
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
-| `ON_VALUE` | Before each yielded value (streaming only) | `(turn, value)` |
+| `ON_COMPLETE` | Always fires in finally block (clean, error, or timeout) | `(turn, stop_reason)` |
 
 Use the `@hook(type)` decorator so the hook is registered and carries its type. Pass hooks in the constructor:
 

@@ -194,7 +194,7 @@ from pygents import Agent, AgentHook, hook
 
 @hook(AgentHook.AFTER_TURN)
 async def on_complete(agent, turn):
-    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.stop_reason}")
+    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.metadata.stop_reason}")
 
 agent = Agent("my_agent", "Description", [my_tool])
 agent.hooks.append(on_complete)

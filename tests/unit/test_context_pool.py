@@ -360,6 +360,18 @@ def test_from_dict_restores_exact_state_bypasses_eviction():
     assert pool.get("b").content == 2
 
 
+def test_from_dict_raises_when_item_missing_id():
+    data = {
+        "limit": 2,
+        "items": [
+            {"content": 1, "description": "d"},
+        ],
+        "hooks": {},
+    }
+    with pytest.raises(ValueError, match="ContextPool requires a ContextItem with 'id' set"):
+        ContextPool.from_dict(data)
+
+
 # ---------------------------------------------------------------------------
 # H1–H9 – ContextPoolHook
 # ---------------------------------------------------------------------------
@@ -373,7 +385,7 @@ def test_before_add_fires_before_insertion():
     async def before_add(pool, item):
         seen_in_pool.append(item.id in pool._items)
 
-    pool = ContextPool(hooks=[before_add])
+    pool = ContextPool()
     asyncio.run(pool.add(_item("x")))
     assert seen_in_pool == [False]  # item not yet inserted
 
@@ -386,7 +398,7 @@ def test_after_add_fires_after_insertion():
     async def after_add(pool, item):
         seen_in_pool.append(item.id in pool._items)
 
-    pool = ContextPool(hooks=[after_add])
+    pool = ContextPool()
     asyncio.run(pool.add(_item("y")))
     assert seen_in_pool == [True]  # item already inserted
 
@@ -399,7 +411,7 @@ def test_before_remove_fires_with_item_still_present():
     async def before_remove(pool, item):
         seen_in_pool.append(item.id in pool._items)
 
-    pool = ContextPool(hooks=[before_remove])
+    pool = ContextPool()
     asyncio.run(pool.add(_item("r")))
     asyncio.run(pool.remove("r"))
     assert seen_in_pool == [True]  # item still present before removal
@@ -413,7 +425,7 @@ def test_after_remove_fires_with_item_gone():
     async def after_remove(pool, item):
         seen_in_pool.append(item.id in pool._items)
 
-    pool = ContextPool(hooks=[after_remove])
+    pool = ContextPool()
     asyncio.run(pool.add(_item("r")))
     asyncio.run(pool.remove("r"))
     assert seen_in_pool == [False]  # item gone after removal
@@ -424,14 +436,14 @@ def test_before_clear_fires():
     fired = []
 
     @hook(ContextPoolHook.BEFORE_CLEAR)
-    async def before_clear(pool):
-        fired.append(len(pool))
+    async def before_clear(pool, snapshot):
+        fired.append(len(snapshot))
 
-    pool = ContextPool(hooks=[before_clear])
+    pool = ContextPool()
     asyncio.run(pool.add(_item("a")))
     asyncio.run(pool.add(_item("b")))
     asyncio.run(pool.clear())
-    assert fired == [2]  # pool still had 2 items before clear
+    assert fired == [2]  # snapshot had 2 items before clear
 
 
 def test_after_clear_fires_with_empty_pool():
@@ -442,7 +454,7 @@ def test_after_clear_fires_with_empty_pool():
     async def after_clear(pool):
         fired.append(len(pool))
 
-    pool = ContextPool(hooks=[after_clear])
+    pool = ContextPool()
     asyncio.run(pool.add(_item("a")))
     asyncio.run(pool.clear())
     assert fired == [0]  # pool empty after clear
@@ -455,9 +467,9 @@ def test_hooks_passed_in_init_stored_on_instance():
     async def my_hook(pool, item):
         pass
 
-    pool = ContextPool(hooks=[my_hook])
+    pool = ContextPool()
+    pool.hooks.append(my_hook)
     assert my_hook in pool.hooks
-    assert pool.hooks is not None
 
 
 def test_branch_inherits_hooks():
@@ -467,7 +479,8 @@ def test_branch_inherits_hooks():
     async def parent_hook(pool, item):
         pass
 
-    pool = ContextPool(hooks=[parent_hook])
+    pool = ContextPool()
+    pool.hooks.append(parent_hook)
     child = pool.branch()
     assert parent_hook in child.hooks
     # child has a copy, not the same list
@@ -508,7 +521,8 @@ def test_context_pool_hooks_to_dict_from_dict_roundtrip():
     async def roundtrip_hook(pool, item):
         pass
 
-    pool = ContextPool(hooks=[roundtrip_hook])
+    pool = ContextPool()
+    pool.hooks.append(roundtrip_hook)
     asyncio.run(pool.add(_item("a")))
     data = pool.to_dict()
     assert "before_add" in data["hooks"]
@@ -527,7 +541,8 @@ def test_from_dict_restored_hooks_fire():
     async def cp_restored_hook(pool, item):
         fired.append(item.id)
 
-    pool = ContextPool(hooks=[cp_restored_hook])
+    pool = ContextPool()
+    pool.hooks.append(cp_restored_hook)
     data = pool.to_dict()
     assert "before_add" in data["hooks"]
 
@@ -551,7 +566,7 @@ def test_on_evict_hook_fires_when_pool_at_limit():
     async def on_evict(pool, item):
         evicted.append(item.id)
 
-    pool = ContextPool(limit=2, hooks=[on_evict])
+    pool = ContextPool(limit=2)
     asyncio.run(pool.add(_item("a")))
     asyncio.run(pool.add(_item("b")))
     assert evicted == []
@@ -569,7 +584,7 @@ def test_on_evict_not_fired_when_pool_not_full():
     async def on_evict_nf(pool, item):
         evicted.append(item.id)
 
-    pool = ContextPool(limit=5, hooks=[on_evict_nf])
+    pool = ContextPool(limit=5)
     asyncio.run(pool.add(_item("a")))
     asyncio.run(pool.add(_item("b")))
     assert evicted == []
@@ -583,7 +598,7 @@ def test_on_evict_not_fired_when_updating_existing_id():
     async def on_evict_upd(pool, item):
         evicted.append(item.id)
 
-    pool = ContextPool(limit=2, hooks=[on_evict_upd])
+    pool = ContextPool(limit=2)
     asyncio.run(pool.add(_item("a")))
     asyncio.run(pool.add(_item("b")))
     # Update "a" in place — no eviction expected
@@ -591,3 +606,27 @@ def test_on_evict_not_fired_when_updating_existing_id():
     asyncio.run(pool.add(updated))
     assert evicted == []
     assert pool.get("a").content == "new"
+
+
+# ---------------------------------------------------------------------------
+# ContextPoolHook.BEFORE_CLEAR snapshot verification
+# ---------------------------------------------------------------------------
+
+
+def test_before_clear_snapshot_is_non_empty_dict_taken_before_clear():
+    """BEFORE_CLEAR hook receives a snapshot dict of items before they are cleared."""
+    HookRegistry.clear()
+    snapshots = []
+
+    @hook(ContextPoolHook.BEFORE_CLEAR)
+    async def capture_snapshot(pool, snapshot):
+        snapshots.append(dict(snapshot))
+
+    pool = ContextPool()
+    asyncio.run(pool.add(_item("x")))
+    asyncio.run(pool.add(_item("y")))
+    asyncio.run(pool.clear())
+
+    assert len(snapshots) == 1
+    assert set(snapshots[0].keys()) == {"x", "y"}
+    assert len(pool) == 0  # pool itself was cleared

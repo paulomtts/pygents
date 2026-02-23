@@ -6,7 +6,9 @@ Hooks are async callables that run at specific points in the lifecycle of turns,
 
 ## Defining hooks
 
-Decorate an async function with `@hook(type)`. The decorator registers the hook and sets its type so run-time code can select it by type.
+There are two ways to attach a hook: the **global** `@hook(Type)` decorator, which fires for every matching object across the entire process, and **instance-scoped** method decorators (e.g. `@my_tool.before_invoke`, `@turn.before_run`), which fire only for the specific object they are attached to. See [Global vs instance-scoped hooks](#global-vs-instance-scoped-hooks) for a full comparison.
+
+`@hook(type)` registers the hook globally and sets its type so the framework can select it by event.
 
 ```python
 from pygents import hook, TurnHook
@@ -46,11 +48,10 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | Hook | When | Args |
 |------|------|------|
 | `BEFORE_RUN` | Before tool runs (after lock acquired) | `(turn)` |
-| `AFTER_RUN` | After successful completion | `(turn)` |
+| `AFTER_RUN` | After successful completion | `(turn, output)` |
 | `ON_TIMEOUT` | Turn timed out | `(turn)` |
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
 | `ON_COMPLETE` | Always fires in finally block (clean, error, or timeout) | `(turn, stop_reason)` |
-| `ON_VALUE` | Before each yielded value (streaming only) | `(turn, value)` |
 
 **Agent** — during the agent run loop (see [Agents](agents.md#hooks)):
 
@@ -72,12 +73,15 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `ON_YIELD` | Each yielded value (async generator tools only) | `(value)` |
 | `AFTER_INVOKE` | After tool returns or finishes yielding | `(result)` — return value for coroutine tools; `list` of all yielded values for async-gen tools |
 
-**ContextQueue** — during append (see [ContextQueue](context.md#hooks)):
+**ContextQueue** — during append and clear (see [ContextQueue](context.md#hooks)):
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_APPEND` | Before new items are inserted | `(items,)` — current items (read-only; does not clear or replace the window) |
-| `AFTER_APPEND` | After new items have been added | `(items,)` — current items |
+| `BEFORE_APPEND` | Before new items are inserted | `(queue, incoming, current)` — queue instance, items being appended, snapshot of items before append |
+| `AFTER_APPEND` | After new items have been added | `(queue, appended_items, current)` — queue instance, items that were appended, snapshot of items after append |
+| `BEFORE_CLEAR` | Before items are cleared | `(queue, items)` — queue instance, snapshot of items before clear |
+| `AFTER_CLEAR` | After items are cleared | `(queue)` — queue instance (now empty) |
+| `ON_EVICT` | When an item is evicted to make room | `(queue, item)` — queue instance, evicted `ContextItem` |
 
 **ContextPool** — during pool mutation (see [Context Pool](context.md#hooks_1)):
 
@@ -87,61 +91,149 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `AFTER_ADD` | After item inserted | `(pool, item)` |
 | `BEFORE_REMOVE` | Before item deleted | `(pool, item)` |
 | `AFTER_REMOVE` | After item deleted | `(pool, item)` |
-| `BEFORE_CLEAR` | Before all items cleared | `(pool)` |
+| `BEFORE_CLEAR` | Before all items cleared | `(pool, snapshot)` — dict copy of items taken before clear |
 | `AFTER_CLEAR` | After all items cleared | `(pool)` |
 
-## Where hooks attach
+## Global vs instance-scoped hooks
 
-- **Turns** — `turn.hooks.append(my_hook)`; serialized with the turn by name.
-- **Agents** — `agent.hooks.append(my_hook)`; serialized with the agent by name.
-- **Tools** — named params on `@tool` (see [Tool hooks](#tool-hooks)); applied on every invocation.
-- **ContextQueue** — `ContextQueue(limit=..., hooks=[...])` or `cq.branch(hooks=[...])`; serialized by name.
-- **ContextPool** — `Agent(..., context_pool=ContextPool(hooks=[...]))` or `ContextPool(hooks=[...])`; serialized by name.
+There are two ways to attach a hook, and they have very different reach.
 
-The framework selects which hooks to run via `HookRegistry.get_by_type(type, list_of_hooks)`. All hooks whose type matches the event are invoked sequentially, in the order they appear in the list. If a hook raises, execution stops and the exception propagates; later hooks in the same event are not called.
+### Global hooks — `@hook(Type)`
 
-## Tool hooks
+A hook decorated with `@hook(Type)` is **global**: it fires for every object of every matching type, across the entire process. It is stored in `HookRegistry._global_hooks` and is automatically included when any turn, agent, tool, queue, or pool dispatches that event.
 
-Use named parameters on `@tool` to attach hooks without needing `@hook` or manual `.type` assignment. The framework automatically assigns the correct type to plain async callables.
+```python
+from pygents import hook, TurnHook
+
+@hook(TurnHook.BEFORE_RUN)
+async def log_all_turns(turn):
+    print(f"Starting {turn.tool.metadata.name}")
+```
+
+`log_all_turns` fires before every turn, regardless of which tool it runs or which agent owns it. Use global hooks for cross-cutting concerns: logging, metrics, auditing.
+
+### Instance-scoped hooks — method decorators
+
+A hook attached via a method decorator (`@my_tool.before_invoke`, `@turn.before_run`, `@agent.before_turn`, `@cq.before_append`, `@pool.before_add`, etc.) fires **only for that specific object**. It is stored in the object's own `.hooks` list and is invisible to other instances.
 
 ```python
 from pygents import tool
 
+@tool()
+async def my_tool(x: int) -> int:
+    return x * 2
+
+@my_tool.before_invoke
+async def validate_input(x: int) -> None:
+    if x < 0:
+        raise ValueError("x must be non-negative")
+```
+
+`validate_input` fires only when `my_tool` is invoked. A different tool in the same process is unaffected.
+
+The same principle applies to turns, agents, context queues, and context pools:
+
+```python
+turn = Turn("my_tool", kwargs={"x": 5})
+
+@turn.on_error
+async def handle_error(turn, exc):
+    print(f"This turn failed: {exc}")
+
+agent = Agent("worker", "desc", [my_tool])
+
+@agent.before_turn
+async def before_each_turn(agent):
+    print("agent worker starting a turn")
+```
+
+`handle_error` fires only if this particular turn fails. `before_each_turn` fires only for `agent`, not for any other agent instance.
+
+### Both can coexist
+
+Global and instance hooks for the same event are merged at dispatch time and fire together. Instance hooks run first (in list order), then any global hooks that are not already in the instance list. If the exact same hook object appears in both, it fires only once (deduplication prevents double-firing).
+
+```python
+@hook(ToolHook.BEFORE_INVOKE)
+async def global_before(**kwargs):
+    print("fires for every tool")
+
+@my_tool.before_invoke
+async def instance_before(**kwargs):
+    print("fires only for my_tool")
+
+# When my_tool is invoked, both hooks fire:
+# 1. instance_before  (instance list)
+# 2. global_before    (global list, not a duplicate)
+```
+
+### Where hooks attach
+
+| Object | Instance-scoped | Global equivalent |
+|--------|----------------|-------------------|
+| Tool | `@my_tool.before_invoke`, `.on_yield`, `.after_invoke` | `@hook(ToolHook.*)` |
+| Turn | `@turn.before_run`, `.after_run`, `.on_timeout`, `.on_error`, `.on_complete` | `@hook(TurnHook.*)` |
+| Agent | `@agent.before_turn`, `.after_turn`, `.on_turn_value`, `.before_put`, `.after_put`, `.on_pause`, `.on_resume` | `@hook(AgentHook.*)` |
+| Agent (turn-scoped) | `@agent.on_error`, `.on_timeout`, `.on_complete` → stored in `agent.turn_hooks`, propagated to each turn | `@hook(TurnHook.*)` |
+| ContextQueue | `@cq.before_append`, `.after_append`, `.before_clear`, `.after_clear`, `.on_evict` | `@hook(ContextQueueHook.*)` |
+| ContextPool | `@pool.before_add`, `.after_add`, `.before_remove`, `.after_remove`, `.before_clear`, `.after_clear`, `.on_evict` | `@hook(ContextPoolHook.*)` |
+
+All hooks whose type matches the event are invoked sequentially, in the order they appear in the merged list. If a hook raises, execution stops and the exception propagates; later hooks in the same event are not called.
+
+## Tool hooks
+
+Attach lifecycle hooks to a tool using **method decorators** after the tool is defined. The decorator syntax registers the hook, assigns its type, and stores it on the tool instance.
+
+```python
+from pygents import tool
+
+@tool()
+async def my_tool(x: int, y: str) -> str:
+    return f"{x}-{y}"
+
+@my_tool.before_invoke
 async def log_before(x: int, y: str) -> None:
     print(f"calling with x={x}, y={y}")
 
+@my_tool.after_invoke
 async def log_after(result) -> None:
     print(f"result: {result}")
-
-@tool(before_invoke=log_before, after_invoke=log_after)
-async def my_tool(x: int, y: str) -> str:
-    return f"{x}-{y}"
 ```
 
-Each named parameter accepts a single callable or a list:
-
-| Parameter | Hook type | Callback receives |
-|-----------|-----------|-------------------|
-| `before_invoke` | `BEFORE_INVOKE` | `**kwargs` — the tool's own keyword arguments (plus context-injected deps if declared) |
-| `on_yield` | `ON_YIELD` | `(value,)` — each yielded value; only fires for async-generator tools |
-| `after_invoke` | `AFTER_INVOKE` | `(result,)` — return value for coroutine tools, or `list` of all yielded values for async-gen tools |
+You can also call the method directly with a plain async function (without the `@` syntax):
 
 ```python
-# Multiple hooks of the same type — pass a list
-@tool(before_invoke=[log_input, validate_input])
-async def validated_tool(x: int) -> int:
-    return x * 2
+async def validate(x: int, y: str) -> None:
+    assert x > 0
+
+my_tool.before_invoke(validate)
 ```
 
-Use `hooks=[...]` as an escape hatch when you need to pass a pre-decorated `@hook` instance or share a hook across multiple attach points. Both sources are combined — all hooks fire:
+The three hook points available on tools:
+
+| Method | Hook type | Callback receives |
+|--------|-----------|-------------------|
+| `.before_invoke` | `BEFORE_INVOKE` | `**kwargs` — the tool's own keyword arguments (plus context-injected deps if declared) |
+| `.on_yield` | `ON_YIELD` | `(value,)` — each yielded value; only fires for async-generator tools |
+| `.after_invoke` | `AFTER_INVOKE` | `(result,)` — return value for coroutine tools, or `list` of all yielded values for async-gen tools |
+
+`AFTER_INVOKE` does **not** fire if the tool raises an exception.
+
+To share a hook across multiple tools, use stacked decorators:
 
 ```python
-@hook(ToolHook.AFTER_INVOKE)
-async def shared_after(result): ...
-
-@tool(after_invoke=my_after, hooks=[shared_after])
-async def my_tool(x: int) -> int:
+@tool()
+async def tool_a(x: int) -> int:
     return x
+
+@tool()
+async def tool_b(x: int) -> int:
+    return x
+
+@tool_a.after_invoke
+@tool_b.before_invoke
+async def shared_hook(x):
+    print(x)
 ```
 
 ## Multi-type hooks
@@ -164,7 +256,7 @@ Pass keyword arguments to the decorator to inject the same values into every cal
 
 ```python
 @hook(TurnHook.AFTER_RUN, env="production")
-async def report(turn, env):
+async def report(turn, output, env):
     send_metric(turn.tool.metadata.name, env=env)
 ```
 
@@ -190,7 +282,7 @@ Set `lock=True` to serialize concurrent executions of the same hook with an `asy
 
 ```python
 @hook(TurnHook.AFTER_RUN, lock=True)
-async def write_log(turn):
+async def write_log(turn, output):
     async with open("run.log", "a") as f:
         await f.write(f"{turn.tool.metadata.name}\n")
 ```

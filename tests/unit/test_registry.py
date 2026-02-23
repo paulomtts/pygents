@@ -18,14 +18,14 @@ AgentRegistry:
   AR5  get(name): in _registry -> return agent
 
 HookRegistry:
-  HR1  clear() -> _registry = {}
-  HR2  register(hook, name=None, hook_type=None): hook_name = name or __name__ or "hook"
-  HR3  register: different hook already under hook_name -> ValueError "already registered"
-  HR4  register: same hook instance again -> no error (overwrite)
-  HR5  register(..., hook_type=X) -> hook.hook_type = X
+  HR1  clear() -> _registry = {}; _global_hooks = []
+  HR2  register(item): key = getattr(item, _key_attr) i.e. __name__; used by wrap() and @hook()
+  HR3  register: different hook already under key -> ValueError "already registered"
+  HR4  register: same hook instance again -> no error (allow_reregister)
+  HR5  register_global(hook): register(hook) then append to _global_hooks
   HR6  get(name): not in _registry -> UnregisteredHookError
   HR7  get(name): in _registry -> return hook
-  HR8  get_by_type(hook_type, hooks) -> first h in hooks with hook_type match, else None
+  HR8  get_by_type(hook_type, hooks) -> list of all hooks in hooks matching hook_type, in order
 """
 
 import pytest
@@ -161,7 +161,7 @@ def test_hook_registry_reregister_same_hook_does_not_raise():
     assert HookRegistry.get("same_hook") is same_hook
 
 
-def test_hook_registry_register_with_hook_type_stores_and_findable():
+def test_hook_decorator_sets_type_and_get_by_type_finds_it():
     from pygents.hooks import TurnHook, hook
 
     HookRegistry.clear()

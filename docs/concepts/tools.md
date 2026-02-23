@@ -26,7 +26,6 @@ async def write_file(path: str, content: str) -> None:
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `lock` | `False` | If `True`, concurrent runs of this tool are serialized via `asyncio.Lock` |
-| `hooks` | `None` | Optional list of hooks (e.g. `@hook(ToolHook.BEFORE_INVOKE)`). Applied on every invocation. |
 | `**kwargs` | — | Any other keyword arguments are merged into every invocation. Call-time kwargs override these (with a warning). |
 
 !!! info "Opt-in Locking"
@@ -107,31 +106,31 @@ The sections below cover advanced configuration. If you're getting started, cont
 
 ## Hooks
 
-Tool hooks fire during invocation. Pass a list of hooks; each must have `type` (e.g. from `@hook(ToolHook.BEFORE_INVOKE)`):
+Tool hooks fire during invocation. Attach them via method decorators after the tool is defined:
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` |
-| `ON_YIELD` | Before each yielded value (async generator tools only) | `(value)` |
-| `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` — the return value (coroutine) or list of all yielded values (async gen) |
+| `BEFORE_INVOKE` | About to call the tool | `(**kwargs)` — same kwargs as the tool's own signature |
+| `ON_YIELD` | Each yielded value (async generator tools only) | `(value)` |
+| `AFTER_INVOKE` | After tool returns or finishes yielding | `(result)` — the return value (coroutine) or list of all yielded values (async gen); not dispatched if the tool raises |
 
 ```python
-from pygents import tool, hook, ToolHook
+from pygents import tool
 
-@hook(ToolHook.BEFORE_INVOKE)
-async def audit(*args, **kwargs):
-    print(f"Called with {kwargs}")
-
-@hook(ToolHook.AFTER_INVOKE)
-async def log_result(value):
-    print(f"Result: {value}")
-
-@tool(hooks=[audit, log_result])
+@tool()
 async def my_tool(x: int) -> int:
     return x * 2
+
+@my_tool.before_invoke
+async def audit(x: int) -> None:
+    print(f"Called with x={x}")
+
+@my_tool.after_invoke
+async def log_result(result: int) -> None:
+    print(f"Result: {result}")
 ```
 
-Tool hooks are registered in `HookRegistry` and apply to **all** invocations of that tool. Hooks are also accessible at runtime via `tool_instance.hooks`. Exceptions in hooks propagate.
+Use `@my_tool.on_yield` for async generator tools. Hooks attached this way fire only for that specific tool instance. For process-wide hooks that fire for every tool, use `@hook(ToolHook.*)` (see [Hooks](hooks.md)). Exceptions in hooks propagate.
 
 ## Registry
 

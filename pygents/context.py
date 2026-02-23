@@ -3,14 +3,19 @@ from __future__ import annotations
 from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import Any, Iterator
 
-from pygents.hooks import ContextPoolHook, ContextQueueHook
+from pygents.hooks import (
+    ContextPoolHook,
+    ContextQueueHook,
+    Hook,
+)
 from pygents.registry import HookRegistry
-from pygents.utils import rebuild_hooks_from_serialization, serialize_hooks_by_type
-
-if TYPE_CHECKING:
-    from pygents.hooks import Hook
+from pygents.utils import (
+    build_method_decorator,
+    rebuild_hooks_from_serialization,
+    serialize_hooks_by_type,
+)
 
 
 @dataclass(frozen=True)
@@ -49,20 +54,16 @@ class ContextQueue:
     limit : int
         Maximum number of items the window can hold. When a new item is
         appended and the window is full, the oldest item is evicted.
-    hooks : list[Hook] | None
-        Optional list of hooks (BEFORE_APPEND and/or AFTER_APPEND). Each
-        must have type set (e.g. via @hook(ContextQueueHook.BEFORE_APPEND)).
     """
 
     def __init__(
         self,
         limit: int,
-        hooks: list["Hook"] | None = None,
     ) -> None:
         if limit < 1:
             raise ValueError("limit must be >= 1")
         self._items: deque[ContextItem[Any]] = deque(maxlen=limit)
-        self.hooks: list[Hook] = list(hooks) if hooks else []
+        self.hooks: list[Hook] = []
 
     # -- properties ----------------------------------------------------------
 
@@ -79,7 +80,107 @@ class ContextQueue:
         self._items.clear()
         self._items.extend(items)
 
+    # -- hook decorators ------------------------------------------------------
+
+    def before_append(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires before items are inserted.
+
+        Parameters
+        ----------
+        fn : async (queue: ContextQueue, incoming: list[ContextItem], current: list[ContextItem]) -> None
+            Receives the queue, items about to be appended, and a snapshot of
+            the current queue contents.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+
+        return build_method_decorator(
+            ContextQueueHook.BEFORE_APPEND, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def after_append(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after items are inserted.
+
+        Parameters
+        ----------
+        fn : async (queue: ContextQueue, appended: list[ContextItem], current: list[ContextItem]) -> None
+            Receives the queue, items that were appended, and a snapshot of the
+            queue contents after insertion.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextQueueHook.AFTER_APPEND, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def before_clear(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires before the queue is cleared.
+
+        Parameters
+        ----------
+        fn : async (queue: ContextQueue, items: list[ContextItem]) -> None
+            Receives the queue and a snapshot of its contents before clearing.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextQueueHook.BEFORE_CLEAR, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def after_clear(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after the queue is cleared.
+
+        Parameters
+        ----------
+        fn : async (queue: ContextQueue) -> None
+            Receives the now-empty queue.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextQueueHook.AFTER_CLEAR, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def on_evict(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires when the oldest item is evicted to make room.
+
+        Parameters
+        ----------
+        fn : async (queue: ContextQueue, evicted: ContextItem) -> None
+            Receives the queue and the item being evicted.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextQueueHook.ON_EVICT, self.hooks, fn, lock, fixed_kwargs
+        )
+
     # -- mutation -------------------------------------------------------------
+
+    async def _run_hooks(self, hook_type: Any, *args: Any) -> None:
+        await HookRegistry.fire(
+            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), *args
+        )
 
     async def append(self, *items: ContextItem[Any]) -> None:
         """Add one or more ContextItems. Oldest items are evicted when full.
@@ -93,22 +194,17 @@ class ContextQueue:
                 raise TypeError(
                     f"ContextQueue only accepts ContextItem instances, got {type(item).__name__!r}"
                 )
-        for before_append_hook in HookRegistry.get_by_type(
-            ContextQueueHook.BEFORE_APPEND, self.hooks
-        ):
-            await before_append_hook(list(items), list(self._items))
+        await self._run_hooks(
+            ContextQueueHook.BEFORE_APPEND, self, list(items), list(self._items)
+        )
         for item in items:
             if len(self._items) == self.limit:
                 evicted = self._items[0]
-                for h in HookRegistry.get_by_type(
-                    ContextQueueHook.ON_EVICT, self.hooks
-                ):
-                    await h(evicted)
+                await self._run_hooks(ContextQueueHook.ON_EVICT, self, evicted)
             self._items.append(item)
-        for after_append_hook in HookRegistry.get_by_type(
-            ContextQueueHook.AFTER_APPEND, self.hooks
-        ):
-            await after_append_hook(list(items), list(self._items))
+        await self._run_hooks(
+            ContextQueueHook.AFTER_APPEND, self, list(items), list(self._items)
+        )
 
     def history(self, last: int | None = None) -> str:
         """Return the queue contents as a newline-joined string.
@@ -125,18 +221,16 @@ class ContextQueue:
         return "\n".join(str(item.content) for item in items)
 
     async def clear(self) -> None:
-        for h in HookRegistry.get_by_type(ContextQueueHook.BEFORE_CLEAR, self.hooks):
-            await h(list(self._items))
+        await self._run_hooks(ContextQueueHook.BEFORE_CLEAR, self, list(self._items))
         self._items.clear()
-        for h in HookRegistry.get_by_type(ContextQueueHook.AFTER_CLEAR, self.hooks):
-            await h([])
+        await self._run_hooks(ContextQueueHook.AFTER_CLEAR, self)
 
     # -- branching ------------------------------------------------------------
 
     def branch(
         self,
         limit: int | None = None,
-        hooks: list["Hook"] | None = ...,  # type: ignore[assignment]
+        hooks: list[Hook] | None = ...,  # type: ignore[assignment]
     ) -> ContextQueue:
         """
         Create a child context queue that starts with a snapshot of this
@@ -149,7 +243,8 @@ class ContextQueue:
         child_hooks = (
             self.hooks if hooks is ... else (hooks if hooks is not None else [])
         )
-        child = ContextQueue(child_limit, hooks=child_hooks)
+        child = ContextQueue(child_limit)
+        child.hooks = list(child_hooks)
         for item in self._items:
             child._items.append(item)
         return child
@@ -200,18 +295,14 @@ class ContextPool:
         Maximum number of items the pool can hold. When a new item is added
         and the pool is full, the oldest item (by insertion order) is evicted.
         ``None`` means unbounded.
-    hooks : list[Hook] | None
-        Lifecycle hooks to attach to this pool.
     """
 
-    def __init__(
-        self, limit: int | None = None, hooks: list["Hook"] | None = None
-    ) -> None:
+    def __init__(self, limit: int | None = None) -> None:
         if limit is not None and limit < 1:
             raise ValueError("limit must be >= 1")
         self._items: dict[str, ContextItem[Any]] = {}
         self._limit = limit
-        self.hooks: list[Hook] = list(hooks) if hooks else []
+        self.hooks: list[Hook] = []
 
     # -- properties -----------------------------------------------------------
 
@@ -234,11 +325,139 @@ class ContextPool:
             f"- [{item.id}] {item.description}" for item in self._items.values()
         )
 
-    # -- hooks ----------------------------------------------------------------
+    # -- hook decorators ------------------------------------------------------
 
-    async def _run_hook(self, hook_type: Any, *args: Any) -> None:
-        for h in HookRegistry.get_by_type(hook_type, self.hooks):
-            await h(self, *args)
+    def before_add(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires before an item is inserted into the pool.
+
+        Parameters
+        ----------
+        fn : async (pool: ContextPool, item: ContextItem) -> None
+            Receives the pool instance and the item about to be added.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+
+        return build_method_decorator(
+            ContextPoolHook.BEFORE_ADD, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def after_add(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after an item is inserted into the pool.
+
+        Parameters
+        ----------
+        fn : async (pool: ContextPool, item: ContextItem) -> None
+            Receives the pool instance and the item that was added.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextPoolHook.AFTER_ADD, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def before_remove(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires before an item is removed from the pool.
+
+        Parameters
+        ----------
+        fn : async (pool: ContextPool, item: ContextItem) -> None
+            Receives the pool instance and the item about to be removed.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextPoolHook.BEFORE_REMOVE, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def after_remove(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after an item is removed from the pool.
+
+        Parameters
+        ----------
+        fn : async (pool: ContextPool, item: ContextItem) -> None
+            Receives the pool instance and the item that was removed.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextPoolHook.AFTER_REMOVE, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def before_clear(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires before the pool is cleared.
+
+        Parameters
+        ----------
+        fn : async (pool: ContextPool, snapshot: dict[str, ContextItem]) -> None
+            Receives the pool and a snapshot of its items taken before clearing.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextPoolHook.BEFORE_CLEAR, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def after_clear(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires after the pool is cleared.
+
+        Parameters
+        ----------
+        fn : async (pool: ContextPool) -> None
+            Receives the pool instance.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextPoolHook.AFTER_CLEAR, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    def on_evict(
+        self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
+    ) -> Any:
+        """Fires when the oldest item is evicted to make room.
+
+        Parameters
+        ----------
+        fn : async (pool: ContextPool, item: ContextItem) -> None
+            Receives the pool instance and the item being evicted.
+        lock : bool, optional
+            If True, concurrent calls are serialized with an asyncio.Lock.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        return build_method_decorator(
+            ContextPoolHook.ON_EVICT, self.hooks, fn, lock, fixed_kwargs
+        )
+
+    async def _run_hooks(self, hook_type: Any, *args: Any) -> None:
+        await HookRegistry.fire(
+            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), self, *args
+        )
 
     # -- mutation -------------------------------------------------------------
 
@@ -253,25 +472,25 @@ class ContextPool:
             and len(self._items) >= self._limit
         ):
             oldest_key = next(iter(self._items))
-            await self._run_hook(ContextPoolHook.ON_EVICT, self._items[oldest_key])
+            await self._run_hooks(ContextPoolHook.ON_EVICT, self._items[oldest_key])
             del self._items[oldest_key]
-        await self._run_hook(ContextPoolHook.BEFORE_ADD, item)
+        await self._run_hooks(ContextPoolHook.BEFORE_ADD, item)
         self._items[item.id] = item
-        await self._run_hook(ContextPoolHook.AFTER_ADD, item)
+        await self._run_hooks(ContextPoolHook.AFTER_ADD, item)
 
     def get(self, id: str) -> ContextItem[Any]:
         return self._items[id]
 
     async def remove(self, id: str) -> None:
         item = self._items[id]  # raises KeyError early if missing
-        await self._run_hook(ContextPoolHook.BEFORE_REMOVE, item)
+        await self._run_hooks(ContextPoolHook.BEFORE_REMOVE, item)
         del self._items[id]
-        await self._run_hook(ContextPoolHook.AFTER_REMOVE, item)
+        await self._run_hooks(ContextPoolHook.AFTER_REMOVE, item)
 
     async def clear(self) -> None:
-        await self._run_hook(ContextPoolHook.BEFORE_CLEAR)
+        await self._run_hooks(ContextPoolHook.BEFORE_CLEAR, dict(self._items))
         self._items.clear()
-        await self._run_hook(ContextPoolHook.AFTER_CLEAR)
+        await self._run_hooks(ContextPoolHook.AFTER_CLEAR)
 
     # -- branching ------------------------------------------------------------
 
@@ -285,7 +504,8 @@ class ContextPool:
         copied to the child; no hooks fire during the snapshot copy.
         """
         child_limit = self._limit if limit is ... else limit
-        child = type(self)(limit=child_limit, hooks=list(self.hooks))
+        child = type(self)(limit=child_limit)
+        child.hooks = list(self.hooks)
         for item in self.items:
             if item.id is None:
                 raise ValueError("ContextPool requires a ContextItem with 'id' set")
