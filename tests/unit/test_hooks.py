@@ -19,10 +19,11 @@ hook() decorator:
 """
 
 import asyncio
+
 import pytest
 
 from pygents.agent import Agent
-from pygents.context import ContextItem, ContextPool
+from pygents.context import ContextItem, ContextPool, ContextQueue
 from pygents.hooks import (
     AgentHook,
     ContextPoolHook,
@@ -96,7 +97,7 @@ def test_hook_metadata_includes_docstring():
     HookRegistry.clear()
 
     @hook(TurnHook.AFTER_RUN)
-    async def my_hook(turn):
+    async def my_hook(turn, output):
         """Runs after the turn."""
 
     assert my_hook.metadata.description == "Runs after the turn."
@@ -123,7 +124,7 @@ def test_hook_memory_hook_type_accepted():
     HookRegistry.clear()
 
     @hook(ContextQueueHook.BEFORE_APPEND)
-    async def before_append(incoming, current):
+    async def before_append(queue, incoming, current):
         pass
 
     assert before_append.type == ContextQueueHook.BEFORE_APPEND
@@ -224,7 +225,6 @@ def test_hook_lock_true_serializes_invocation():
         order.append("end")
 
     agent = Agent("lock_test_agent", "Test", [tool_for_hook_test])
-    agent.hooks = [slow_hook]
     turn = Turn("tool_for_hook_test", kwargs={})
 
     async def concurrent_put():
@@ -300,6 +300,31 @@ def test_tool_with_decorated_hook_registered_in_registry():
     assert HookRegistry.get("registered_tool_hook") is registered_tool_hook
 
 
+def test_global_after_invoke_hook_fires_for_coroutine_tool():
+    """@hook(ToolHook.AFTER_INVOKE) global registration path fires with result."""
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    received = []
+
+    @hook(ToolHook.AFTER_INVOKE)
+    async def global_after(result):
+        received.append(result)
+
+    @tool()
+    async def global_ai_tool(x: int) -> int:
+        return x * 5
+
+    agent = Agent("global_ai_agent", "desc", [global_ai_tool])
+
+    async def run():
+        await agent.put(Turn("global_ai_tool", kwargs={"x": 3}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert received == [15]
+
+
 # ---------------------------------------------------------------------------
 # Turn hooks integration
 # ---------------------------------------------------------------------------
@@ -322,7 +347,7 @@ def test_turn_hook_registered_under_own_name():
     HookRegistry.clear()
 
     @hook(TurnHook.AFTER_RUN)
-    async def another_turn_hook(turn):
+    async def another_turn_hook(turn, output):
         pass
 
     turn = Turn("tool_for_hook_test", kwargs={"x": 5})
@@ -409,6 +434,27 @@ def test_agent_hook_registered_under_own_name():
     agent = Agent("hook_agent2", "Test agent", [tool_for_hook_test])
     agent.hooks.append(another_agent_hook)
     assert HookRegistry.get("another_agent_hook") is another_agent_hook
+
+
+def test_hook_registry_fire_deduplicates_when_same_hook_instance_and_global():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    calls = []
+
+    @hook(AgentHook.BEFORE_TURN)
+    async def shared_hook(agent):
+        calls.append(1)
+
+    agent = Agent("dedup_agent", "Test", [tool_for_hook_test])
+    agent.hooks.append(shared_hook)
+
+    async def run():
+        await agent.put(Turn("tool_for_hook_test", kwargs={"x": 1}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run())
+    assert len(calls) == 1
 
 
 def test_agent_to_dict_includes_hooks():
@@ -546,44 +592,6 @@ def test_tool_multiple_hooks_same_type_all_called():
 
     asyncio.run(run())
     assert events == ["a", "b"]
-
-
-def _collect_async(agen):
-    async def run():
-        return [x async for x in agen]
-
-    return asyncio.run(run())
-
-
-# ---------------------------------------------------------------------------
-# ContextPool hooks integration
-# ---------------------------------------------------------------------------
-
-
-def test_context_pool_before_add_hook_fires():
-    HookRegistry.clear()
-    fired = []
-
-    @hook(ContextPoolHook.BEFORE_ADD)
-    async def cp_before_add(pool, item):
-        fired.append(("before_add", item.id, item.id not in pool._items))
-
-    pool = ContextPool(hooks=[cp_before_add])
-    asyncio.run(pool.add(ContextItem(id="hello", description="d", content=1)))
-    assert fired == [("before_add", "hello", True)]
-
-
-def test_context_pool_after_add_hook_fires():
-    HookRegistry.clear()
-    fired = []
-
-    @hook(ContextPoolHook.AFTER_ADD)
-    async def cp_after_add(pool, item):
-        fired.append(("after_add", item.id, item.id in pool._items))
-
-    pool = ContextPool(hooks=[cp_after_add])
-    asyncio.run(pool.add(ContextItem(id="world", description="d", content=2)))
-    assert fired == [("after_add", "world", True)]
 
 
 # ---------------------------------------------------------------------------
@@ -895,8 +903,8 @@ def test_turn_method_decorator_after_run_fires_end_to_end():
     turn = Turn("tool_for_hook_test", kwargs={"x": 3})
 
     @turn.after_run
-    async def capture_after(turn):
-        events.append(("after", turn.output))
+    async def capture_after(turn, output):
+        events.append(("after", output))
 
     asyncio.run(turn.returning())
     assert events == [("after", 6)]
@@ -1172,3 +1180,184 @@ def test_agent_serialization_includes_turn_hooks():
     restored = Agent.from_dict(data)
     assert len(restored.turn_hooks) == 1
     assert restored.turn_hooks[0] is ser_complete
+
+
+# ---------------------------------------------------------------------------
+# ContextQueue method-decorator hooks
+# ---------------------------------------------------------------------------
+
+
+def test_cq_before_append_decorator_registers_and_fires():
+    HookRegistry.clear()
+    fired = []
+
+    cq = ContextQueue(5)
+
+    @cq.before_append
+    async def capture_before(queue, incoming, current):
+        fired.append(("before", len(current)))
+
+    assert len(cq.hooks) == 1
+
+    asyncio.run(cq.append(ContextItem(content="a")))
+    assert fired == [("before", 0)]
+
+
+def test_cq_after_append_decorator_fires():
+    HookRegistry.clear()
+    fired = []
+
+    cq = ContextQueue(5)
+
+    @cq.after_append
+    async def capture_after(queue, incoming, current):
+        fired.append(("after", len(current)))
+
+    asyncio.run(cq.append(ContextItem(content="a")))
+    assert fired == [("after", 1)]
+
+
+def test_cq_on_evict_decorator_fires():
+    HookRegistry.clear()
+    evicted = []
+
+    cq = ContextQueue(2)
+
+    @cq.on_evict
+    async def capture_evict(queue, item):
+        evicted.append(item.content)
+
+    async def _():
+        await cq.append(ContextItem(content="a"), ContextItem(content="b"))
+        await cq.append(ContextItem(content="c"))
+
+    asyncio.run(_())
+    assert evicted == ["a"]
+
+
+def test_cq_before_clear_decorator_fires():
+    HookRegistry.clear()
+    fired = []
+
+    cq = ContextQueue(5)
+
+    @cq.before_clear
+    async def capture(queue, items):
+        fired.append(len(items))
+
+    async def _():
+        await cq.append(ContextItem(content="a"), ContextItem(content="b"))
+        await cq.clear()
+
+    asyncio.run(_())
+    assert fired == [2]
+
+
+def test_cq_after_clear_decorator_fires():
+    HookRegistry.clear()
+    fired = []
+
+    cq = ContextQueue(5)
+
+    @cq.after_clear
+    async def capture(queue):
+        fired.append(len(queue))
+
+    async def _():
+        await cq.append(ContextItem(content="a"))
+        await cq.clear()
+
+    asyncio.run(_())
+    assert fired == [0]
+
+
+def test_cq_decorator_reuses_existing_hook():
+    HookRegistry.clear()
+
+    @hook(ContextQueueHook.BEFORE_APPEND)
+    async def existing(queue, incoming, current):
+        pass
+
+    cq = ContextQueue(5)
+    result = cq.before_append(existing)
+    assert result is existing
+    assert existing in cq.hooks
+
+
+# ---------------------------------------------------------------------------
+# ContextPool method-decorator hooks
+# ---------------------------------------------------------------------------
+
+
+def test_cp_before_add_decorator_registers_and_fires():
+    HookRegistry.clear()
+    fired = []
+
+    pool = ContextPool()
+
+    @pool.before_add
+    async def capture_before(pool, item):
+        fired.append(("before", item.id))
+
+    assert len(pool.hooks) == 1
+
+    asyncio.run(pool.add(ContextItem(id="x", description="d", content=1)))
+    assert fired == [("before", "x")]
+
+
+def test_cp_after_add_decorator_fires():
+    HookRegistry.clear()
+    fired = []
+
+    pool = ContextPool()
+
+    @pool.after_add
+    async def capture_after(pool, item):
+        fired.append(("after", item.id))
+
+    asyncio.run(pool.add(ContextItem(id="y", description="d", content=2)))
+    assert fired == [("after", "y")]
+
+
+def test_cp_before_remove_decorator_fires():
+    HookRegistry.clear()
+    fired = []
+
+    pool = ContextPool()
+
+    @pool.before_remove
+    async def capture(pool, item):
+        fired.append(("before_remove", item.id))
+
+    asyncio.run(pool.add(ContextItem(id="r", description="d", content=1)))
+    asyncio.run(pool.remove("r"))
+    assert fired == [("before_remove", "r")]
+
+
+def test_cp_on_evict_decorator_fires():
+    HookRegistry.clear()
+    evicted = []
+
+    pool = ContextPool(limit=2)
+
+    @pool.on_evict
+    async def capture(pool, item):
+        evicted.append(item.id)
+
+    asyncio.run(pool.add(ContextItem(id="a", description="d", content=1)))
+    asyncio.run(pool.add(ContextItem(id="b", description="d", content=2)))
+    asyncio.run(pool.add(ContextItem(id="c", description="d", content=3)))
+    assert evicted == ["a"]
+
+
+def test_cp_decorator_reuses_existing_hook():
+    HookRegistry.clear()
+
+    @hook(ContextPoolHook.BEFORE_ADD)
+    async def existing(pool, item):
+        pass
+
+    pool = ContextPool()
+    result = pool.before_add(existing)
+    assert result is existing
+    assert existing in pool.hooks
