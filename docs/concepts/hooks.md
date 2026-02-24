@@ -47,7 +47,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_RUN` | Before tool runs (after lock acquired) | `(turn)` |
+| `BEFORE_RUN` | Before tool runs | `(turn)` |
 | `AFTER_RUN` | After successful completion | `(turn, output)` |
 | `ON_TIMEOUT` | Turn timed out | `(turn)` |
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
@@ -67,11 +67,11 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 
 **Tool** — during tool invocation (see [Tool hooks](#tool-hooks)):
 
-| Hook | When | Args |
-|------|------|------|
-| `BEFORE_INVOKE` | About to call the tool | `(**kwargs)` — same kwargs as the tool's own signature |
-| `ON_YIELD` | Each yielded value (async generator tools only) | `(value)` |
-| `AFTER_INVOKE` | After tool returns or finishes yielding | `(result)` — return value for coroutine tools; `list` of all yielded values for async-gen tools |
+| Hook | When | Args (minimal payload) |
+|------|------|------------------------|
+| `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` — same args/kwargs as the tool itself |
+| `ON_YIELD` | Each yielded value (async generator tools only) | `(value, ...)` — first argument is the yielded value; hooks may accept additional parameters |
+| `AFTER_INVOKE` | After tool returns or finishes yielding | `(result, ...)` — first argument is the coroutine result; for async-gen tools it is `values: list` of all yielded values; hooks may accept additional parameters |
 
 **ContextQueue** — during append and clear (see [ContextQueue](context.md#hooks)):
 
@@ -171,7 +171,8 @@ async def instance_before(**kwargs):
 
 | Object | Instance-scoped | Global equivalent |
 |--------|----------------|-------------------|
-| Tool | `@my_tool.before_invoke`, `.on_yield`, `.after_invoke` | `@hook(ToolHook.*)` |
+| Tool (coroutine) | `@my_tool.before_invoke`, `.after_invoke` | `@hook(ToolHook.*)` |
+| Tool (async gen) | `@my_tool.before_invoke`, `.on_yield`, `.after_invoke` | `@hook(ToolHook.*)` |
 | Turn | `@turn.before_run`, `.after_run`, `.on_timeout`, `.on_error`, `.on_complete` | `@hook(TurnHook.*)` |
 | Agent | `@agent.before_turn`, `.after_turn`, `.on_turn_value`, `.before_put`, `.after_put`, `.on_pause`, `.on_resume` | `@hook(AgentHook.*)` |
 | Agent (turn-scoped) | `@agent.on_error`, `.on_timeout`, `.on_complete` → stored in `agent.turn_hooks`, propagated to each turn | `@hook(TurnHook.*)` |
@@ -200,6 +201,14 @@ async def log_after(result) -> None:
     print(f"result: {result}")
 ```
 
+The decorator also accepts parameters — `lock` and fixed kwargs — in parenthesized form:
+
+```python
+@my_tool.before_invoke(lock=True, env="production")
+async def validate(x: int, y: str, env: str) -> None:
+    assert x > 0
+```
+
 You can also call the method directly with a plain async function (without the `@` syntax):
 
 ```python
@@ -211,11 +220,11 @@ my_tool.before_invoke(validate)
 
 The three hook points available on tools:
 
-| Method | Hook type | Callback receives |
-|--------|-----------|-------------------|
-| `.before_invoke` | `BEFORE_INVOKE` | `**kwargs` — the tool's own keyword arguments (plus context-injected deps if declared) |
-| `.on_yield` | `ON_YIELD` | `(value,)` — each yielded value; only fires for async-generator tools |
-| `.after_invoke` | `AFTER_INVOKE` | `(result,)` — return value for coroutine tools, or `list` of all yielded values for async-gen tools |
+| Method | Hook type | Callback receives (minimal) |
+|--------|-----------|-----------------------------|
+| `.before_invoke` | `BEFORE_INVOKE` | `(*args, **kwargs)` — the same positional and keyword arguments the tool itself receives |
+| `.on_yield` | `ON_YIELD` | `(value, *extra_args, **extra_kwargs)` — first argument is each yielded value; only fires for async-generator tools |
+| `.after_invoke` | `AFTER_INVOKE` | `(result, *extra_args, **extra_kwargs)` — first argument is the coroutine result, or `values: list` of all yielded values for async-gen tools |
 
 `AFTER_INVOKE` does **not** fire if the tool raises an exception.
 
@@ -271,9 +280,9 @@ from pygents import hook, ToolHook
 from pygents.context import ContextQueue
 
 @hook(ToolHook.AFTER_INVOKE)
-async def log_result(value, memory: ContextQueue | None = None):
+async def log_result(result: object, memory: ContextQueue | None = None):
     if memory is not None:
-        print(f"Result: {value}, context items: {len(memory)}")
+        print(f"Result: {result}, context items: {len(memory)}")
 ```
 
 ## Locking
@@ -287,9 +296,9 @@ async def write_log(turn, output):
         await f.write(f"{turn.tool.metadata.name}\n")
 ```
 
-## Metadata and timing
+## Metadata
 
-Each hook has a `metadata` attribute: `HookMetadata(name, description, start_time, end_time)`. The decorator sets `name` and `description` (docstring). `start_time` and `end_time` are set around each invocation.
+Each hook has a `metadata` attribute of type `HookMetadata(name, description)`. The decorator sets `name` from the function name and `description` from its docstring.
 
 ```python
 @hook(TurnHook.BEFORE_RUN)
@@ -297,10 +306,9 @@ async def timed(turn):
     """Logs turn start."""
     pass
 
-# after invocation
-timed.metadata.start_time  # datetime when wrapper entered
-timed.metadata.end_time    # datetime when wrapper exited
-timed.metadata.dict()      # ISO strings for serialization
+timed.metadata.name         # "timed"
+timed.metadata.description  # "Logs turn start."
+timed.metadata.dict()       # {"name": "timed", "description": "Logs turn start."}
 ```
 
 ## Registry
@@ -319,13 +327,13 @@ HookRegistry.clear()  # empty the registry (useful in tests)
 
 `get_by_type` is used internally: given a list of hooks (e.g. `turn.hooks`), it returns all hooks whose type matches, in the order they appear in the list. All matching hooks are called sequentially. You typically don't call it directly; you attach hooks to turns, agents, tools, or memory and the framework invokes them at each event.
 
-## Protocol
+## Hook class
 
-The `Hook` protocol defines the shape every decorated hook conforms to:
+`Hook` is a concrete class. Every decorated hook is an instance of it:
 
 ```python
-class Hook(Protocol):
-    metadata: HookMetadata          # name, description, start_time, end_time
+class Hook:
+    metadata: HookMetadata                        # name, description
     type: HookType | tuple[HookType, ...] | None
     fn: Callable[..., Awaitable[None]]
     lock: asyncio.Lock | None
