@@ -3,6 +3,7 @@ import logging
 from typing import Any, Callable, Iterable, TypeVar, get_args, get_type_hints
 
 from pygents.errors import SafeExecutionError
+from pygents.registry import HookRegistry
 
 R = TypeVar("R")
 _function_type = type(lambda: None)
@@ -69,7 +70,7 @@ def merge_kwargs(
     return {**evaluated, **call_kwargs}
 
 
-def _injectable_type(hint: Any) -> type | None:
+def injectable_type(hint: Any) -> type | None:
     """Return ContextQueue or ContextPool if hint is or wraps one; else None."""
     from pygents.context import ContextPool, ContextQueue
 
@@ -102,7 +103,7 @@ def inject_context_deps(
     for name, hint in hints.items():
         if name == "return" or name in merged:
             continue
-        t = _injectable_type(hint)
+        t = injectable_type(hint)
         if t is ContextQueue:
             val = _current_context_queue.get()
             if val is not None:
@@ -144,8 +145,6 @@ def build_method_decorator(
     """
 
     def decorator(f: Any) -> Any:
-        from pygents.registry import HookRegistry
-
         wrapped = HookRegistry.wrap(f, hook_type, lock=lock, **fixed_kwargs)
         store.append((hook_type, wrapped) if as_tuple else wrapped)
         return wrapped
@@ -157,8 +156,6 @@ def build_method_decorator(
 
 def rebuild_hooks_from_serialization(hooks_data: dict[str, list[str]]) -> list[Any]:
     """Rebuild hook list from serialized data by looking up names in HookRegistry."""
-    from pygents.registry import HookRegistry
-
     seen: set[str] = set()
     result: list[Any] = []
     for _type_str, hook_names in hooks_data.items():

@@ -97,6 +97,7 @@ class HookRegistry(BaseRegistry):
         instance_hooks: list,
         /,
         *args: Any,
+        _source_tags: frozenset = frozenset(),
         **kwargs: Any,
     ) -> None:
         """Fire *instance_hooks* then matching global hooks, deduplicating by identity.
@@ -106,6 +107,10 @@ class HookRegistry(BaseRegistry):
         Instance hooks run first; any global hook sharing identity with an
         already-fired instance hook is skipped, preventing double-firing when
         the same hook is registered both globally (``@hook``) and on the instance.
+
+        ``_source_tags`` is consumed by ``fire`` and not forwarded to hooks.
+        Global hooks with ``tags`` set only fire if the source has at least one
+        matching tag (OR semantics). Hooks with ``tags=None`` always fire.
         """
         fired_ids: set[int] = set()
         for h in instance_hooks:
@@ -113,7 +118,9 @@ class HookRegistry(BaseRegistry):
             fired_ids.add(id(h))
         for h in cls.get_global_by_type(hook_type):
             if id(h) not in fired_ids:
-                await h(*args, **kwargs)
+                hook_tags = getattr(h, "tags", None)
+                if hook_tags is None or (_source_tags and hook_tags & _source_tags):
+                    await h(*args, **kwargs)
 
     @classmethod
     def wrap(
@@ -156,15 +163,19 @@ class HookRegistry(BaseRegistry):
         return wrapper
 
     @classmethod
-    def get_by_type(cls, hook_type: object, hooks: "list[Hook]") -> "list[Hook]":
-        """Return all hooks in the given list that match the hook_type, in order."""
+    def get_by_type(cls, hook_type: object, hooks: "list[Any]") -> "list[Any]":
+        """Return all hooks in the given list that match the hook_type, in order.
 
-        def matches(h: "Hook") -> bool:
+        The *hooks* list can contain either real ``Hook`` instances or plain
+        callables with a ``.type`` attribute (as used in tests).
+        """
+
+        def matches(h: Any) -> bool:
             ht = getattr(h, "type", None)
             if ht is None:
                 return False
             if isinstance(ht, (tuple, frozenset)):
-                return hook_type in ht
-            return ht == hook_type
+                return any(hook_type is t for t in ht)
+            return ht is hook_type
 
         return [h for h in hooks if matches(h)]

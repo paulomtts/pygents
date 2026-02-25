@@ -582,3 +582,253 @@ def test_after_invoke_does_not_fire_when_async_gen_raises(collect_async):
     with pytest.raises(RuntimeError, match="gen boom"):
         collect_async(raising_gen_tool())
     assert fired == []
+
+
+# ---------------------------------------------------------------------------
+# ON_ERROR tests
+# ---------------------------------------------------------------------------
+
+
+def test_on_error_fires_when_tool_raises():
+    """ON_ERROR hook receives the exception when a coroutine tool raises."""
+    received = []
+
+    @tool()
+    async def erroring_tool() -> None:
+        raise ValueError("boom")
+
+    @erroring_tool.on_error
+    async def capture_err(exc) -> None:
+        received.append(exc)
+
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(erroring_tool())
+    assert len(received) == 1
+    assert isinstance(received[0], ValueError)
+
+
+def test_on_error_does_not_fire_when_tool_succeeds():
+    """ON_ERROR must NOT fire when the tool returns normally."""
+    fired = []
+
+    @tool()
+    async def happy_tool() -> int:
+        return 42
+
+    @happy_tool.on_error
+    async def on_error_not_called_on_success(exc) -> None:
+        fired.append(exc)
+
+    asyncio.run(happy_tool())
+    assert fired == []
+
+
+def test_after_invoke_does_not_fire_when_tool_raises_with_on_error():
+    """AFTER_INVOKE must NOT fire when the tool raises, even with ON_ERROR registered."""
+    after_fired = []
+    error_fired = []
+
+    @tool()
+    async def raising_both_hooks() -> None:
+        raise RuntimeError("expected")
+
+    @raising_both_hooks.after_invoke
+    async def after_hook(result) -> None:
+        after_fired.append(result)
+
+    @raising_both_hooks.on_error
+    async def error_hook(exc) -> None:
+        error_fired.append(exc)
+
+    with pytest.raises(RuntimeError, match="expected"):
+        asyncio.run(raising_both_hooks())
+    assert after_fired == []
+    assert len(error_fired) == 1
+
+
+def test_on_error_fires_when_async_gen_raises_mid_iteration(collect_async):
+    """ON_ERROR fires when async gen raises mid-iteration; AFTER_INVOKE does not."""
+    error_received = []
+    after_fired = []
+
+    @tool()
+    async def partial_gen():
+        yield 1
+        raise RuntimeError("mid-gen error")
+
+    @partial_gen.on_error
+    async def capture_gen_err(exc) -> None:
+        error_received.append(exc)
+
+    @partial_gen.after_invoke
+    async def after_gen(values: list) -> None:
+        after_fired.append(values)
+
+    with pytest.raises(RuntimeError, match="mid-gen error"):
+        collect_async(partial_gen())
+    assert len(error_received) == 1
+    assert isinstance(error_received[0], RuntimeError)
+    assert after_fired == []
+
+
+# ---------------------------------------------------------------------------
+# AFTER_INVOKE fires on early break (AsyncGenTool)
+# ---------------------------------------------------------------------------
+
+
+def test_after_invoke_fires_with_partial_list_on_early_break():
+    """AFTER_INVOKE fires with partial collected values when caller breaks early."""
+    received = []
+
+    @tool()
+    async def three_values():
+        yield 10
+        yield 20
+        yield 30
+
+    @three_values.after_invoke
+    async def capture_partial_break(values: list) -> None:
+        received.append(list(values))
+
+    async def run_break():
+        async for v in three_values():
+            if v == 10:
+                break  # stop after first value
+
+    asyncio.run(run_break())
+    assert received == [[10]]
+
+
+# ---------------------------------------------------------------------------
+# Lock behaviour: lock covers only fn, AFTER_INVOKE is outside lock
+# ---------------------------------------------------------------------------
+
+
+def test_lock_covers_fn_not_after_invoke():
+    """With lock=True, the lock is released before AFTER_INVOKE runs, so a second
+    concurrent call can acquire the lock while the first call's AFTER_INVOKE is
+    still executing."""
+    order = []
+
+    @tool(lock=True)
+    async def locked_tool(x: int) -> int:
+        order.append(("fn_start", x))
+        await asyncio.sleep(0.02)
+        order.append(("fn_end", x))
+        return x
+
+    @locked_tool.after_invoke
+    async def slow_after(result: int) -> None:
+        order.append(("after_start", result))
+        await asyncio.sleep(0.05)
+        order.append(("after_end", result))
+
+    async def run():
+        await asyncio.gather(locked_tool(1), locked_tool(2))
+
+    asyncio.run(run())
+    # fn calls must be serialized (no overlap between call 1 and call 2's fn)
+    fn1_end = order.index(("fn_end", 1))
+    fn2_start = order.index(("fn_start", 2))
+    assert fn1_end < fn2_start
+    # after_invoke of call 1 must start AFTER fn_end of call 1
+    after1_start = order.index(("after_start", 1))
+    assert fn1_end < after1_start
+    # fn_start of call 2 must come BEFORE after_end of call 1 (lock released before after)
+    after1_end = order.index(("after_end", 1))
+    assert fn2_start < after1_end
+
+
+# ---------------------------------------------------------------------------
+# Tag system tests
+# ---------------------------------------------------------------------------
+
+
+def test_tool_tags_set_from_decorator():
+    """@tool(tags=[...]) stores the frozenset on the instance."""
+
+    @tool(tags=["foo", "bar"])
+    async def tagged_tool() -> None:
+        pass
+
+    assert tagged_tool.tags == frozenset({"foo", "bar"})
+
+
+def test_tool_no_tags_gives_empty_frozenset():
+    """@tool without tags gives an empty frozenset."""
+
+    @tool()
+    async def untagged_tool() -> None:
+        pass
+
+    assert untagged_tool.tags == frozenset()
+
+
+def test_global_hook_with_tags_fires_only_for_matching_tools():
+    """A global hook with tags only fires for tools that share at least one tag."""
+    from pygents.hooks import hook
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    fired_for = []
+
+    @tool(tags=["foo"])
+    async def foo_tool() -> int:
+        return 1
+
+    @tool(tags=["bar"])
+    async def bar_tool() -> int:
+        return 2
+
+    @hook(ToolHook.AFTER_INVOKE, tags={"foo"})
+    async def foo_only_hook(result: int) -> None:
+        fired_for.append(result)
+
+    asyncio.run(foo_tool())
+    asyncio.run(bar_tool())
+    assert fired_for == [1]  # fired only for foo_tool
+
+
+def test_global_hook_without_tags_fires_for_all_tools():
+    """A global hook without tags fires for all tools regardless of their tags."""
+    from pygents.hooks import hook
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    fired_for = []
+
+    @tool(tags=["alpha"])
+    async def alpha_tool() -> int:
+        return 10
+
+    @tool()
+    async def no_tag_tool() -> int:
+        return 20
+
+    @hook(ToolHook.AFTER_INVOKE)
+    async def fires_for_all(result: int) -> None:
+        fired_for.append(result)
+
+    asyncio.run(alpha_tool())
+    asyncio.run(no_tag_tool())
+    assert fired_for == [10, 20]
+
+
+def test_global_hook_with_tags_does_not_fire_for_untagged_tool():
+    """A tagged global hook does not fire for a tool with no tags."""
+    from pygents.hooks import hook
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    fired = []
+
+    @tool()
+    async def untagged_for_tag_test() -> int:
+        return 99
+
+    @hook(ToolHook.AFTER_INVOKE, tags={"special"})
+    async def special_hook(result: int) -> None:
+        fired.append(result)
+
+    asyncio.run(untagged_for_tag_test())
+    assert fired == []

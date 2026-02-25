@@ -28,6 +28,7 @@ async def on_error(turn, exception):
 |-----------|---------|---------|
 | `type` | required | One or more of `TurnHook`, `AgentHook`, `ToolHook`, `ContextQueueHook`, `ContextPoolHook`. Stored on the hook for filtering. Pass a list (e.g. `@hook([TurnHook.BEFORE_RUN, AgentHook.AFTER_TURN])`) to register for several events. |
 | `lock` | `False` | If `True`, concurrent runs of this hook are serialized via `asyncio.Lock`. |
+| `tags` | `None` | A set or frozenset of strings. When provided, this global hook only fires for tools that share at least one tag (OR semantics). Has no effect on non-tool hook types. See [Tag filtering](tools.md#tag-filtering). |
 | `**kwargs` | — | Fixed keyword arguments merged into every invocation. Call-time kwargs override these (with a warning). |
 
 !!! warning "TypeError"
@@ -71,7 +72,8 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 |------|------|------------------------|
 | `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` — same args/kwargs as the tool itself |
 | `ON_YIELD` | Each yielded value (async generator tools only) | `(value, ...)` — first argument is the yielded value; hooks may accept additional parameters |
-| `AFTER_INVOKE` | After tool returns or finishes yielding | `(result, ...)` — first argument is the coroutine result; for async-gen tools it is `values: list` of all yielded values; hooks may accept additional parameters |
+| `AFTER_INVOKE` | After tool returns or finishes yielding (including early break) | `(result, ...)` — first argument is the coroutine result; for async-gen tools it is `values: list` of all yielded values (partial on early break); not dispatched on error |
+| `ON_ERROR` | Tool raised an exception | `(exc=exc)` — the exception instance passed as keyword argument; not dispatched on success; `AFTER_INVOKE` does not fire when `ON_ERROR` fires |
 
 **ContextQueue** — during append and clear (see [ContextQueue](context.md#hooks)):
 
@@ -171,8 +173,8 @@ async def instance_before(**kwargs):
 
 | Object | Instance-scoped | Global equivalent |
 |--------|----------------|-------------------|
-| Tool (coroutine) | `@my_tool.before_invoke`, `.after_invoke` | `@hook(ToolHook.*)` |
-| Tool (async gen) | `@my_tool.before_invoke`, `.on_yield`, `.after_invoke` | `@hook(ToolHook.*)` |
+| Tool (coroutine) | `@my_tool.before_invoke`, `.after_invoke`, `.on_error` | `@hook(ToolHook.*)` |
+| Tool (async gen) | `@my_tool.before_invoke`, `.on_yield`, `.after_invoke`, `.on_error` | `@hook(ToolHook.*)` |
 | Turn | `@turn.before_run`, `.after_run`, `.on_timeout`, `.on_error`, `.on_complete` | `@hook(TurnHook.*)` |
 | Agent | `@agent.before_turn`, `.after_turn`, `.on_turn_value`, `.before_put`, `.after_put`, `.on_pause`, `.on_resume` | `@hook(AgentHook.*)` |
 | Agent (turn-scoped) | `@agent.on_error`, `.on_timeout`, `.on_complete` → stored in `agent.turn_hooks`, propagated to each turn | `@hook(TurnHook.*)` |
@@ -218,15 +220,16 @@ async def validate(x: int, y: str) -> None:
 my_tool.before_invoke(validate)
 ```
 
-The three hook points available on tools:
+The four hook points available on tools:
 
 | Method | Hook type | Callback receives (minimal) |
 |--------|-----------|-----------------------------|
 | `.before_invoke` | `BEFORE_INVOKE` | `(*args, **kwargs)` — the same positional and keyword arguments the tool itself receives |
 | `.on_yield` | `ON_YIELD` | `(value, *extra_args, **extra_kwargs)` — first argument is each yielded value; only fires for async-generator tools |
-| `.after_invoke` | `AFTER_INVOKE` | `(result, *extra_args, **extra_kwargs)` — first argument is the coroutine result, or `values: list` of all yielded values for async-gen tools |
+| `.after_invoke` | `AFTER_INVOKE` | `(result, *extra_args, **extra_kwargs)` — first argument is the coroutine result, or `values: list` of all yielded values for async-gen tools (partial on early break) |
+| `.on_error` | `ON_ERROR` | `(exc=exc)` — the exception passed as keyword argument; fires instead of `AFTER_INVOKE` when the tool raises |
 
-`AFTER_INVOKE` does **not** fire if the tool raises an exception.
+`AFTER_INVOKE` does **not** fire if the tool raises an exception. `ON_ERROR` fires only when the tool raises.
 
 To share a hook across multiple tools, use stacked decorators:
 
@@ -337,6 +340,7 @@ class Hook:
     type: HookType | tuple[HookType, ...] | None
     fn: Callable[..., Awaitable[None]]
     lock: asyncio.Lock | None
+    tags: frozenset[str] | None                   # None = fires for all tools; set = OR filter
 ```
 
 ## Errors

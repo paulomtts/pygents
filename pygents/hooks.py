@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Awaitable, Callable, overload
 
-from pygents.utils import inject_context_deps, merge_kwargs, null_lock
+from pygents.registry import HookRegistry
 
 
 class TurnHook(str, Enum):
@@ -31,6 +31,7 @@ class ToolHook(str, Enum):
     BEFORE_INVOKE = "before_invoke"
     AFTER_INVOKE = "after_invoke"
     ON_YIELD = "on_yield"
+    ON_ERROR = "on_error"
 
 
 class ContextQueueHook(str, Enum):
@@ -73,6 +74,7 @@ class Hook:
     type: HookType | tuple[HookType, ...] | None
     fn: Callable[..., Awaitable[None]]
     lock: asyncio.Lock | None
+    tags: frozenset[str] | None
 
     def __init__(
         self,
@@ -80,15 +82,18 @@ class Hook:
         stored_type: HookType | tuple[HookType, ...],
         asyncio_lock: asyncio.Lock | None,
         fixed_kwargs: dict[str, Any],
+        tags: frozenset[str] | set[str] | None = None,
     ) -> None:
         self.fn = fn
         self.type = stored_type
         self.lock = asyncio_lock
         self.metadata = HookMetadata(fn.__name__, fn.__doc__)
         self._fixed_kwargs = fixed_kwargs
+        self.tags = frozenset(tags) if tags else None
         functools.update_wrapper(self, fn)
 
     async def __call__(self, *args: Any, **kwargs: Any) -> None:
+        from pygents.utils import inject_context_deps, merge_kwargs, null_lock
 
         merged = merge_kwargs(self._fixed_kwargs, kwargs, f"hook {self.fn.__name__!r}")
         merged = inject_context_deps(self.fn, merged)
@@ -105,6 +110,7 @@ def hook(
     type: HookType,
     *,
     lock: bool = False,
+    tags: set[str] | frozenset[str] | None = None,
     **fixed_kwargs: Any,
 ) -> Callable[[Callable[..., Awaitable[None]]], Hook]: ...
 
@@ -114,6 +120,7 @@ def hook(
     type: list[HookType],
     *,
     lock: bool = False,
+    tags: set[str] | frozenset[str] | None = None,
     **fixed_kwargs: Any,
 ) -> Callable[[Callable[..., Awaitable[None]]], Hook]: ...
 
@@ -122,6 +129,7 @@ def hook(
     type: HookType | list[HookType],
     *,
     lock: bool = False,
+    tags: set[str] | frozenset[str] | None = None,
     **fixed_kwargs: Any,
 ) -> Callable[[Callable[..., Awaitable[None]]], Hook]:
     """
@@ -131,8 +139,14 @@ def hook(
     hooks (list) must accept *args, **kwargs since different types receive
     different arguments.
 
-    Any keyword arguments passed to the decorator (other than lock) are merged
-    into every invocation; call-time kwargs override these.
+    Any keyword arguments passed to the decorator (other than lock and tags)
+    are merged into every invocation; call-time kwargs override these.
+
+    Parameters
+    ----------
+    tags : set[str] | frozenset[str] | None, optional
+        If provided, this global hook only fires for tools that share at least
+        one tag (OR semantics). If None, fires for all tools regardless of tags.
     """
     types = type if isinstance(type, list) else [type]
     if not types:
@@ -142,10 +156,9 @@ def hook(
     )
 
     def decorator(fn: Callable[..., Awaitable[None]]) -> Hook:
-        from pygents.registry import HookRegistry
 
         asyncio_lock = asyncio.Lock() if lock else None
-        wrapper = Hook(fn, stored_type, asyncio_lock, fixed_kwargs)
+        wrapper = Hook(fn, stored_type, asyncio_lock, fixed_kwargs, tags=tags)
         HookRegistry.register_global(wrapper)
         return wrapper
 
