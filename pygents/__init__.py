@@ -1,4 +1,5 @@
 from pygents.agent import Agent
+from pygents.context import ContextItem, ContextPool, ContextQueue
 from pygents.errors import (
     SafeExecutionError,
     TurnTimeoutError,
@@ -17,7 +18,6 @@ from pygents.hooks import (
     TurnHook,
     hook,
 )
-from pygents.context import ContextPool, ContextQueue
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import AsyncGenTool, Tool, ToolMetadata, tool
 from pygents.turn import StopReason, Turn
@@ -31,6 +31,7 @@ __all__ = [
     "ContextPoolHook",
     "ContextQueue",
     "ContextQueueHook",
+    "ContextItem",
     "hook",
     "Hook",
     "HookMetadata",
