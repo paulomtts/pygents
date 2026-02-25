@@ -81,16 +81,13 @@ from pygents import Turn
 turn = Turn("fetch", kwargs={"url": "https://example.com"}, timeout=30)
 turn = Turn(fetch, args=["https://example.com"])
 
-# With hooks
-turn = Turn("fetch", kwargs={"url": "..."}, hooks=[my_turn_hook])
-
 # Execute directly (the agent does this automatically)
 result = await turn.returning()          # coroutine tools
 async for value in turn.yielding():      # async generator tools
     ...
 ```
 
-Constructor: `Turn(tool, timeout=60, args=[], kwargs={}, hooks=[])`.
+Constructor: `Turn(tool, timeout=60, args=[], kwargs={}, tags=None)`. Attach hooks after construction via method decorators (`@turn.before_run`, `@turn.after_run`, `@turn.on_timeout`, `@turn.on_error`, `@turn.on_complete`) or `turn.hooks.append(h)`.
 
 After execution the framework sets: `output` (value or list of yielded values for generators), `metadata.start_time`, `metadata.end_time`, `metadata.stop_reason` (`StopReason.COMPLETED | TIMEOUT | ERROR | CANCELLED`).
 
@@ -110,9 +107,11 @@ from pygents import Agent, Turn
 
 agent = Agent("worker", "Doubles numbers", [double, add])
 
-# Optional: pre-configured context pool, hooks
+# Optional: pre-configured context pool
 agent = Agent("worker", "Doubles numbers", [double, add], context_pool=ContextPool(limit=50))
-agent = Agent("worker", "Doubles numbers", [double, add], hooks=[my_hook])
+# Attach hooks after construction via method decorators or agent.hooks.append(h)
+agent = Agent("worker", "Doubles numbers", [double, add])
+agent.hooks.append(my_hook)
 
 # Enqueue turns
 await agent.put(Turn("double", kwargs={"x": 5}))
@@ -132,7 +131,7 @@ Key behaviors:
 
 Inter-agent messaging:
 ```python
-await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))
+await alice.send("bob", Turn("work", kwargs={"x": 42}))
 ```
 Looks up target in `AgentRegistry`. Raises `UnregisteredAgentError` if not found.
 

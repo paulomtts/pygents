@@ -87,7 +87,7 @@ alice = Agent("alice", "Delegates", [delegate_tool])
 bob = Agent("bob", "Works", [work_tool])
 
 # alice sends a turn to bob's queue
-await alice.send_turn("bob", Turn("work_tool", kwargs={"x": 42}))
+await alice.send("bob", Turn("work_tool", kwargs={"x": 42}))
 ```
 
 ## Dynamic arguments
@@ -111,7 +111,7 @@ turn = Turn(
 | Feature | Description |
 |---------|-------------|
 | Streaming | Agents yield results as produced via `async for turn, value in agent.run()` |
-| Inter-agent messaging | `agent.send_turn(name, turn)` enqueues work on another agent |
+| Inter-agent messaging | `agent.send(name, turn)` enqueues work on another agent |
 | Dynamic arguments | Callable positional args and kwargs evaluated at invocation time |
 | Timeouts | Per-turn timeout (default 60s), raises `TurnTimeoutError` |
 | Per-tool locking | `@tool(lock=True)` serializes concurrent runs |

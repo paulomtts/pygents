@@ -22,7 +22,14 @@ agent = Agent("worker", "Doubles numbers", [work])
 | `context_pool` | `None` | Pre-configured `ContextPool` (or subclass) to use; creates a default `ContextPool()` if not provided (see [Context](context.md#contextpool)) |
 | `context_queue` | `None` | Pre-configured `ContextQueue` to use; creates a default `ContextQueue(limit=10)` if not provided (see [Context](context.md#contextqueue)) |
 | `tags` | `None` | A list or frozenset of strings. Labels this agent so global `@hook` declarations with a matching `tags=` filter will fire for it. See [Hooks — Tag filtering](hooks.md#tag-filtering). |
-| `hooks` | `None` | Initial list of `Hook` objects for this agent; equivalent to constructing then appending to `agent.hooks` |
+
+Attach hooks after construction via method decorators or `agent.hooks.append(h)`:
+
+```python
+@agent.after_turn
+async def on_complete(agent, turn):
+    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.metadata.stop_reason}")
+```
 
 Each tool must be the same instance as in `ToolRegistry` — the constructor validates this.
 
@@ -74,13 +81,13 @@ alice = Agent("alice", "Coordinator", [coordinate])
 bob = Agent("bob", "Worker", [work])
 
 # alice sends work to bob
-await alice.send_turn("bob", Turn("work", kwargs={"x": 42}))
+await alice.send("bob", Turn("work", kwargs={"x": 42}))
 ```
 
-`send_turn` looks up the target agent in `AgentRegistry` and calls `put()` on it.
+`send` looks up the target agent in `AgentRegistry` and calls `put()` on it.
 
 !!! warning "UnregisteredAgentError"
-    `send_turn` raises `UnregisteredAgentError` if the target agent name is not found in `AgentRegistry`.
+    `send` raises `UnregisteredAgentError` if the target agent name is not found in `AgentRegistry`.
 
 ---
 
@@ -190,17 +197,26 @@ Agent hooks fire at specific points during the run loop. Hooks are stored as a l
 | `ON_PAUSE` | When the run loop hits a paused gate | `(agent)` |
 | `ON_RESUME` | After the gate is released and before the next turn | `(agent)` |
 
-Use the `@hook(type)` decorator so the hook is registered and carries its type, then append it to `agent.hooks`:
+Attach hooks after construction via method decorators or `agent.hooks.append(h)`:
 
 ```python
-from pygents import Agent, AgentHook, hook
-
-@hook(AgentHook.AFTER_TURN)
-async def on_complete(agent, turn):
-    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.metadata.stop_reason}")
+from pygents import Agent
 
 agent = Agent("my_agent", "Description", [my_tool])
-agent.hooks.append(on_complete)
+
+@agent.after_turn
+async def on_complete(agent, turn):
+    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.metadata.stop_reason}")
+```
+
+For process-wide hooks that fire for every agent, use the global `@hook(AgentHook.*)` decorator:
+
+```python
+from pygents import hook, AgentHook
+
+@hook(AgentHook.AFTER_TURN)
+async def log_all(agent, turn):
+    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.metadata.stop_reason}")
 ```
 
 Hooks are registered in `HookRegistry` at decoration time. Use named functions so they serialize by name.
@@ -210,7 +226,7 @@ Hooks are registered in `HookRegistry` at decoration time. Use named functions s
 
 ## Registry
 
-Agents **auto-register** with `AgentRegistry` on construction. `send_turn` and `from_dict` use the registry to resolve agents by name.
+Agents **auto-register** with `AgentRegistry` on construction. `send` and `from_dict` use the registry to resolve agents by name.
 
 ```python
 from pygents import AgentRegistry
@@ -240,6 +256,6 @@ The serialized form includes the queued turns, the `current_turn` if a turn was 
 |-----------|------|
 | `ValueError` | Tool instance mismatch, duplicate agent name, tool not in agent's set, or duplicate hook name |
 | `SafeExecutionError` | Changing attributes or calling `run()` while already running or paused |
-| `UnregisteredAgentError` | `send_turn` target not found in `AgentRegistry` |
+| `UnregisteredAgentError` | `send` target not found in `AgentRegistry` |
 | `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |
 | `TurnTimeoutError` | A turn exceeds its timeout (propagated from the turn) |

@@ -24,15 +24,11 @@ The code blocks below are meant to be combined into one script.
     from py_ai_toolkit.core.domain.interfaces import LLMConfig
     from pydantic import BaseModel
 
-    from pygents import Agent, ContextPool, ContextQueue, ContextQueueHook, ToolHook, Turn, hook, tool
+    from pygents import Agent, ContextPool, ContextQueue, Turn, tool
     from pygents.context import ContextItem
 
     logger = logging.getLogger(__name__)
     toolkit = PyAIToolkit(main_model_config=LLMConfig())
-
-    @hook(ContextQueueHook.AFTER_APPEND)
-    async def log_memory(queue, appended_items, current) -> None:
-        logger.debug("ContextQueue: %d items", len(current))
 
     DOCUMENTS = {
         "q3-earnings": {
@@ -85,18 +81,18 @@ The code blocks below are meant to be combined into one script.
                 return item.content.removeprefix("User:").strip()
         return ""
 
-    @hook(ToolHook.BEFORE_INVOKE)
-    async def log_pool_state(**kwargs) -> None:
-        pool = kwargs.get("pool")
-        if pool:
-            logger.debug("think: pool has %d items\n%s", len(pool), pool.catalogue())
-
-    @tool(hooks=[log_pool_state])
+    @tool()
     async def think(pool: ContextPool, memory: ContextQueue) -> Turn:
         """Check if the pool has context; route to select_context or answer directly."""
         if not pool:
             return Turn(answer, kwargs={"relevant_ids": []})
         return Turn(select_context)
+
+    @think.before_invoke
+    async def log_pool_state(**kwargs) -> None:
+        pool = kwargs.get("pool")
+        if pool:
+            logger.debug("think: pool has %d items\n%s", len(pool), pool.catalogue())
 
     @tool()
     async def select_context(pool: ContextPool, memory: ContextQueue) -> Turn:
@@ -146,7 +142,11 @@ The code blocks below are meant to be combined into one script.
         yield ContextItem(content=f"Assistant: {full_text}")  # id=None → auto-appended to context_queue
 
     memory = ContextQueue(limit=30)
-    memory.hooks.append(log_memory)
+
+    @memory.after_append
+    async def log_memory(queue, appended_items, current) -> None:
+        logger.debug("ContextQueue: %d items", len(current))
+
     agent = Agent(
         "researcher",
         "Answers questions from a document pool",
@@ -187,14 +187,8 @@ import logging
 from py_ai_toolkit import PyAIToolkit
 from py_ai_toolkit.core.domain.interfaces import LLMConfig
 
-from pygents import ContextQueueHook, hook
-
 logger = logging.getLogger(__name__)
 toolkit = PyAIToolkit(main_model_config=LLMConfig())
-
-@hook(ContextQueueHook.AFTER_APPEND)
-async def log_memory(queue, appended_items, current) -> None:
-    logger.debug("ContextQueue: %d items", len(current))
 ```
 
 !!! info "LLM configuration"
@@ -283,20 +277,20 @@ async def fetch_document(doc_id: str) -> ContextItem:
 `think` receives the pool and memory via context injection — the agent provides its own instances automatically. It checks whether the pool has anything and routes accordingly. No LLM call, no writes.
 
 ```python
-from pygents import ContextPool, ContextQueue, ToolHook, Turn
+from pygents import ContextPool, ContextQueue, Turn
 
-@hook(ToolHook.BEFORE_INVOKE)
-async def log_pool_state(**kwargs) -> None:
-    pool = kwargs.get("pool")
-    if pool:
-        logger.debug("think: pool has %d items\n%s", len(pool), pool.catalogue())
-
-@tool(hooks=[log_pool_state])
+@tool()
 async def think(pool: ContextPool, memory: ContextQueue) -> Turn:
     """Check if the pool has context; route to select_context or answer directly."""
     if not pool:
         return Turn(answer, kwargs={"relevant_ids": []})
     return Turn(select_context)
+
+@think.before_invoke
+async def log_pool_state(**kwargs) -> None:
+    pool = kwargs.get("pool")
+    if pool:
+        logger.debug("think: pool has %d items\n%s", len(pool), pool.catalogue())
 ```
 
 The logging concern lives in the hook, not in the tool body — `think` only routes. When a tool returns a `Turn`, the agent enqueues it and runs it next — that is how the chain `think → select_context → answer` forms without any external orchestration.
@@ -379,7 +373,11 @@ import asyncio
 from pygents import Agent, ContextPool, ContextQueue, Turn
 
 memory = ContextQueue(limit=30)
-memory.hooks.append(log_memory)
+
+@memory.after_append
+async def log_memory(queue, appended_items, current) -> None:
+    logger.debug("ContextQueue: %d items", len(current))
+
 agent = Agent(
     "researcher",
     "Answers questions from a document pool",

@@ -95,6 +95,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `AFTER_REMOVE` | After item deleted | `(pool, item)` |
 | `BEFORE_CLEAR` | Before all items cleared | `(pool, snapshot)` — dict copy of items taken before clear |
 | `AFTER_CLEAR` | After all items cleared | `(pool)` |
+| `ON_EVICT` | Oldest item evicted to stay within limit | `(pool, item)` |
 
 ## Global vs instance-scoped hooks
 

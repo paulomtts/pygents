@@ -80,7 +80,7 @@ await cq.append(ContextItem(content="msg1"), ContextItem(content="msg2"))
 ### Clearing
 
 ```python
-cq.clear()  # remove all items
+await cq.clear()  # remove all items
 ```
 
 ### Reading items

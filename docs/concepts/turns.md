@@ -113,16 +113,21 @@ Turn hooks fire at specific points during execution. Hooks are stored as a list 
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
 | `ON_COMPLETE` | Always fires in finally block (clean, error, or timeout) | `(turn, stop_reason)` |
 
-Use the `@hook(type)` decorator so the hook is registered and carries its type. Pass hooks in the constructor:
+Attach hooks after construction via method decorators or `turn.hooks.append(h)`:
 
 ```python
 from pygents import Turn, hook, TurnHook
 
-@hook(TurnHook.BEFORE_RUN)
+turn = Turn("my_tool", kwargs={})
+
+@turn.before_run
 async def log_start(turn):
     print(f"Starting {turn.tool.metadata.name}")
 
-turn = Turn("my_tool", kwargs={}, hooks=[log_start])
+# Or, for global hooks that fire for every turn:
+@hook(TurnHook.BEFORE_RUN)
+async def log_all_turns(turn):
+    print(f"Starting {turn.tool.metadata.name}")
 ```
 
 Hooks are registered in `HookRegistry` at decoration time. Use named functions so they serialize by name.
