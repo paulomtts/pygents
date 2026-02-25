@@ -43,6 +43,10 @@ async def write_db(data: dict) -> None: ...
 @tool(api_key=lambda: get_config()["key"])
 async def call_api(endpoint: str, api_key: str) -> str: ...
 
+# With tags — used to filter global hooks
+@tool(tags=["io", "storage"])
+async def write_db(data: dict) -> None: ...
+
 # With hooks — attach after decoration via method decorators
 @tool()
 async def audited_tool(x: int) -> int: ...
@@ -52,6 +56,9 @@ async def log_input(x: int) -> None: ...
 
 @audited_tool.after_invoke
 async def log_output(result: int) -> None: ...
+
+@audited_tool.on_error
+async def handle_err(exc: Exception) -> None: ...
 ```
 
 Rules:
@@ -59,6 +66,7 @@ Rules:
 - Fixed kwargs that don't match the signature (and no `**kwargs`) raise `TypeError`
 - Duplicate names in `ToolRegistry` raise `ValueError`
 - `ToolRegistry.get(name)` returns a tool; `.all()` returns all tools
+- `tags` is a `list[str]` / `frozenset[str]` stored as `frozenset` on the instance; used to filter global `@hook` declarations — a global hook with `tags={"io"}` only fires for tools that share at least one tag (OR semantics; hooks with no `tags` fire for all tools)
 
 Metadata: `my_tool.metadata.name`, `.description` (docstring), `.start_time`, `.end_time`, `.dict()`.
 
@@ -221,19 +229,78 @@ async def validate(x: int) -> None:
         raise ValueError("x must be non-negative")
 ```
 
-The same pattern works for any object: `@turn.on_error`, `@agent.before_turn`, `@cq.after_append`, `@pool.after_add`, etc.
+Instance hooks are available on every object type:
+
+```python
+# Tool
+@my_tool.before_invoke
+async def validate(x: int) -> None: ...
+
+@my_tool.after_invoke
+async def log_result(result: int) -> None: ...
+
+@my_tool.on_error
+async def handle_tool_err(exc: Exception) -> None: ...
+
+# Async-gen tool only
+@stream_tool.on_yield
+async def per_value(value) -> None: ...
+
+# Turn
+turn = Turn("my_tool", kwargs={"x": 5})
+
+@turn.before_run
+async def before(turn) -> None: ...
+
+@turn.on_error
+async def on_turn_error(turn, exc) -> None: ...
+
+@turn.on_complete
+async def always(turn, stop_reason) -> None: ...
+
+# Agent
+agent = Agent("worker", "desc", [my_tool])
+
+@agent.before_turn
+async def before_each(agent) -> None: ...
+
+@agent.after_turn
+async def after_each(agent, turn) -> None: ...
+
+# ContextQueue
+cq = ContextQueue(limit=20)
+
+@cq.before_append
+async def before_append(queue, incoming, current) -> None: ...
+
+@cq.on_evict
+async def on_evict(queue, item) -> None: ...
+
+# ContextPool
+pool = ContextPool(limit=50)
+
+@pool.after_add
+async def after_add(pool, item) -> None: ...
+```
 
 **Global hooks** — `@hook(Type)` — fire for every instance of every matching object type. Use only for true cross-cutting concerns (process-wide logging, metrics):
 
 ```python
+from pygents import hook, TurnHook, ToolHook
+
 @hook(TurnHook.BEFORE_RUN)
 async def log_all_turns(turn):
     print(f"Starting {turn.tool.metadata.name}")
+
+# Tag-filtered: only fires for tools tagged "io"
+@hook(ToolHook.AFTER_INVOKE, tags={"io"})
+async def log_io(result) -> None:
+    print(f"I/O result: {result}")
 ```
 
 When both styles are active for the same event, instance hooks fire first, then global hooks. The same hook object is never called twice (deduplication).
 
-Options: `lock=True` serializes concurrent runs; `**fixed_kwargs` merge into every call; declare `param: ContextQueue | None` or `param: ContextPool | None` for context injection.
+Options: `lock=True` serializes concurrent runs (covers only the actual function call — lifecycle hooks run outside the lock); `**fixed_kwargs` merge into every call; `tags={...}` on global `@hook` filters by tool tags; declare `param: ContextQueue | None` or `param: ContextPool | None` for context injection.
 
 ### All hook types and their arguments
 
@@ -257,7 +324,8 @@ Options: `lock=True` serializes concurrent runs; `**fixed_kwargs` merge into eve
 - `BEFORE_INVOKE(*args, **kwargs)` — about to call
 - `ON_YIELD(value)` — each yielded value (generators)
 - `AFTER_INVOKE(result)` — coroutine tool: fires after the tool returns (not dispatched if tool raises), receives the return value
-- `AFTER_INVOKE([values])` — async gen tool: fires after the generator is exhausted (not dispatched if it raises), receives the full list of yielded values
+- `AFTER_INVOKE([values])` — async gen tool: fires after the generator is exhausted or the caller breaks early (not dispatched if it raises), receives the list of yielded values (partial on early break)
+- `ON_ERROR(exc=exc)` — fires when the tool raises; `AFTER_INVOKE` does not fire in this case
 
 **ContextQueueHook:**
 - `BEFORE_APPEND(queue, incoming, current)` — queue instance, items being appended, snapshot before append
