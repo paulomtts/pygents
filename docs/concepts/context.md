@@ -55,6 +55,14 @@ await cq.append(ContextItem(content="assistant: hi there"))
 
 `limit` is the maximum number of items (must be >= 1). `ContextQueue` only accepts `ContextItem` instances.
 
+Pass `tags=` to make global `@hook` declarations with a matching `tags` filter fire for this queue:
+
+```python
+cq = ContextQueue(limit=20, tags=["session", "monitored"])
+```
+
+Tags are stored as `frozenset[str]`, survive `to_dict()`/`from_dict()`, and are copied to children by `branch()`. See [Hooks — Tag filtering](hooks.md#tag-filtering).
+
 !!! warning "ValueError"
     `ContextQueue(limit=0)` or any `limit < 1` raises `ValueError`.
 
@@ -223,8 +231,9 @@ The `description` field is designed to support selective retrieval: your code ca
 ```python
 from pygents.context import ContextItem, ContextPool
 
-pool = ContextPool(limit=50)   # evicts oldest when full
-pool = ContextPool()           # unbounded (limit=None)
+pool = ContextPool(limit=50)                          # evicts oldest when full
+pool = ContextPool()                                  # unbounded (limit=None)
+pool = ContextPool(limit=50, tags=["documents"])      # with tag filtering
 
 await pool.add(ContextItem(id="a", description="First", content=1))
 await pool.add(ContextItem(id="b", description="Second", content=2))
@@ -235,6 +244,8 @@ await pool.clear()        # remove all
 ```
 
 `limit` caps the pool size. When the pool is full and a new item with a different `id` is added, the oldest item (by insertion order) is evicted. Pass `limit=None` (or omit it) for an unbounded pool. `add`, `remove`, and `clear` are async (they fire hooks). `get` is sync.
+
+`tags` is an optional `list[str]` or `frozenset[str]` that labels this pool for global hook filtering. Tags are stored as `frozenset[str]`, survive `to_dict()`/`from_dict()`, and are copied by `branch()`. See [Hooks — Tag filtering](hooks.md#tag-filtering).
 
 If an item with the same `id` already exists, it is replaced in-place — no eviction occurs, but `BEFORE_ADD` and `AFTER_ADD` hooks still fire for the replacement.
 

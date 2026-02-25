@@ -26,7 +26,7 @@ async def write_file(path: str, content: str) -> None:
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `lock` | `False` | If `True`, concurrent runs of this tool are serialized via `asyncio.Lock`. The lock covers only the actual function call (and, for async-gen tools, the iteration loop including `ON_YIELD`). Lifecycle hooks (`BEFORE_INVOKE`, `AFTER_INVOKE`, `ON_ERROR`) run outside the lock. |
-| `tags` | `None` | A list or frozenset of strings. Tags let global `@hook` declarations filter which tools they fire for — a global hook with `tags={"foo"}` only fires for tools tagged `"foo"`. See [Tag filtering](#tag-filtering). |
+| `tags` | `None` | A list or frozenset of strings. Tags let global `@hook` declarations filter which objects they fire for — a global hook with `tags={"foo"}` only fires for tools (and agents, turns, context queues, and context pools) tagged `"foo"`. See [Tag filtering](#tag-filtering) and [Hooks — Tag filtering](hooks.md#tag-filtering). |
 | `**kwargs` | — | Any other keyword arguments are merged into every invocation. Call-time kwargs override these (with a warning). |
 
 !!! info "Opt-in Locking"
@@ -179,6 +179,9 @@ async def log_all(result) -> None:
 ```
 
 Instance-scoped hooks (`@my_tool.after_invoke`) are unaffected by tag filtering — they always fire for their specific tool.
+
+!!! info "Tags work on all object types"
+    The same `tags=` mechanism is available on `Agent`, `Turn`, `ContextQueue`, and `ContextPool` constructors, not just `@tool`. A single hook with `tags={"io"}` can filter across tools, agents, turns, and context objects at once. See [Hooks — Tag filtering](hooks.md#tag-filtering) for the full picture.
 
 ## Registry
 

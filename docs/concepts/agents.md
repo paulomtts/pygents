@@ -21,6 +21,7 @@ agent = Agent("worker", "Doubles numbers", [work])
 | `tools` | required | Tools the agent may run |
 | `context_pool` | `None` | Pre-configured `ContextPool` (or subclass) to use; creates a default `ContextPool()` if not provided (see [Context](context.md#contextpool)) |
 | `context_queue` | `None` | Pre-configured `ContextQueue` to use; creates a default `ContextQueue(limit=10)` if not provided (see [Context](context.md#contextqueue)) |
+| `tags` | `None` | A list or frozenset of strings. Labels this agent so global `@hook` declarations with a matching `tags=` filter will fire for it. See [Hooks — Tag filtering](hooks.md#tag-filtering). |
 | `hooks` | `None` | Initial list of `Hook` objects for this agent; equivalent to constructing then appending to `agent.hooks` |
 
 Each tool must be the same instance as in `ToolRegistry` — the constructor validates this.
@@ -112,6 +113,8 @@ child2 = parent.branch(
 | `description` | parent's | Override with a string |
 | `tools` | parent's | Override with a list |
 | `hooks` | parent's | Pass `hooks=[]` for no hooks, or a new list to override |
+
+The child inherits the parent's `tags`. Tags are also preserved through `to_dict()`/`from_dict()`.
 
 The parent's queue is copied (non-destructively) to the child. The parent's `context_pool` and `context_queue` are both branched into the child — the child starts with a snapshot of the parent's context items and copies of the parent's hooks. Both agents are fully independent after branching — enqueueing or running turns on one does not affect the other.
 

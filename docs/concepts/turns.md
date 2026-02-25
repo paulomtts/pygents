@@ -42,6 +42,7 @@ The agent's `run()` picks the right method automatically.
 | Attribute | Set | Mutable while running? |
 |-----------|-----|------------------------|
 | `tool`, `args`, `kwargs`, `timeout` | init | No |
+| `tags` | init | No. A `frozenset[str]` of labels used to filter global `@hook` declarations. Empty by default. See [Hooks — Tag filtering](hooks.md#tag-filtering). |
 | `output` | by framework after run | Yes. The return value for coroutine tools, or a **list** of all yielded values for async generator tools. `None` on a fresh turn. |
 | `metadata` | by framework during run | Yes. A `TurnMetadata` dataclass with three fields: `start_time`, `end_time`, `stop_reason`. All default to `None` on a fresh turn. |
 

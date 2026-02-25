@@ -28,7 +28,7 @@ async def on_error(turn, exception):
 |-----------|---------|---------|
 | `type` | required | One or more of `TurnHook`, `AgentHook`, `ToolHook`, `ContextQueueHook`, `ContextPoolHook`. Stored on the hook for filtering. Pass a list (e.g. `@hook([TurnHook.BEFORE_RUN, AgentHook.AFTER_TURN])`) to register for several events. |
 | `lock` | `False` | If `True`, concurrent runs of this hook are serialized via `asyncio.Lock`. |
-| `tags` | `None` | A set or frozenset of strings. When provided, this global hook only fires for objects (tools, agents, turns, context queues, context pools) that share at least one tag (OR semantics). Has no effect on non-tagged objects. See [Tag filtering](tools.md#tag-filtering). |
+| `tags` | `None` | A set or frozenset of strings. When provided, this global hook only fires for objects (tools, agents, turns, context queues, context pools) that share at least one tag (OR semantics). Has no effect on non-tagged objects. See [Tag filtering](#tag-filtering). |
 | `**kwargs` | — | Fixed keyword arguments merged into every invocation. Call-time kwargs override these (with a warning). |
 
 !!! warning "TypeError"
@@ -113,6 +113,8 @@ async def log_all_turns(turn):
 ```
 
 `log_all_turns` fires before every turn, regardless of which tool it runs or which agent owns it. Use global hooks for cross-cutting concerns: logging, metrics, auditing.
+
+To narrow a global hook to a subset of objects, pass `tags=` to the decorator. See [Tag filtering](#tag-filtering).
 
 ### Instance-scoped hooks — method decorators
 
@@ -273,6 +275,87 @@ async def report(turn, output, env):
 ```
 
 Use this for environment labels, log handles, or other context that is constant for the hook's lifetime.
+
+## Tag filtering
+
+Tags let you scope a global `@hook` declaration to a semantically meaningful subset of objects — without writing conditional logic inside the hook body. Without tags, a global hook fires for every instance of the matching event. With tags, you mark objects with string labels and the hook fires only for objects that carry at least one of those labels.
+
+### Setting tags on objects
+
+All five object types support a `tags` parameter at construction:
+
+```python
+from pygents import tool, Agent, Turn, ContextQueue
+from pygents.context import ContextPool
+
+@tool(tags=["io", "storage"])
+async def write_db(record: dict) -> None: ...
+
+@tool(tags=["io"])
+async def read_file(path: str) -> str: ...
+
+@tool()
+async def compute(x: int) -> int: ...  # no tags
+
+agent = Agent("producer", "Runs I/O operations", [write_db], tags=["io"])
+turn  = Turn("write_db", kwargs={"record": {}},              tags=["audited"])
+cq    = ContextQueue(limit=20,                               tags=["session"])
+pool  = ContextPool(limit=50,                                tags=["documents"])
+```
+
+Tags are stored as `frozenset[str]` on each object and have no effect on behaviour other than hook filtering. They survive `to_dict`/`from_dict` serialization and are copied to child objects produced by `branch()`.
+
+### Filtering hooks with `tags=`
+
+Pass `tags=` to a global `@hook` declaration to restrict which objects trigger it:
+
+```python
+from pygents import hook, ToolHook, AgentHook, TurnHook
+
+@hook(ToolHook.AFTER_INVOKE, tags={"io"})
+async def log_io_tool(result) -> None:
+    print(f"I/O tool returned: {result}")
+
+@hook(AgentHook.BEFORE_PUT, tags={"io"})
+async def gate_io_agent(agent, turn) -> None:
+    print(f"Agent {agent.name!r} is enqueuing a turn")
+
+@hook(TurnHook.ON_ERROR, tags={"audited"})
+async def alert_on_audited_failure(turn, exception) -> None:
+    send_alert(turn.tool.metadata.name, exception)
+```
+
+- `log_io_tool` fires after `write_db` and `read_file` (both tagged `"io"`), but **not** after `compute` (no tags).
+- `gate_io_agent` fires before `producer` (tagged `"io"`) enqueues a turn, but not before an untagged agent.
+- `alert_on_audited_failure` fires only when a turn tagged `"audited"` raises an error.
+
+### Semantics
+
+**OR match** — a hook fires if the object has at least one tag in the hook's `tags` set. A tool tagged `["io", "storage"]` matches a hook with `tags={"io"}`.
+
+**No `tags` on the hook** — fires for every matching object, whether tagged or not:
+
+```python
+@hook(TurnHook.BEFORE_RUN)
+async def log_all_turns(turn):
+    print(f"Starting {turn.tool.metadata.name}")  # fires for every turn
+```
+
+**No tags on the object** — invisible to tag-filtered hooks, but still reached by hooks with no `tags` filter.
+
+Instance-scoped hooks (`@my_tool.before_invoke`, `@agent.before_turn`, etc.) are always unaffected by tag filtering — they fire for their specific object regardless.
+
+### When to use tags
+
+Use tags when you need a global hook that applies to a subset of objects without putting conditional checks inside the hook itself:
+
+| Use case | Tag convention | Hook type |
+|----------|---------------|-----------|
+| Audit all I/O operations | `tags=["io"]` on tools/agents that touch external systems | `ToolHook.AFTER_INVOKE`, `AgentHook.AFTER_TURN` |
+| SLA tracking | `tags=["sla:strict"]` on latency-sensitive turns | `TurnHook.ON_COMPLETE` |
+| Production-only alerting | `tags=["env:prod"]` on production agents | `AgentHook.*` |
+| Monitor specific memory stores | `tags=["monitored"]` on context queues/pools | `ContextQueueHook.*`, `ContextPoolHook.*` |
+| Feature flag metrics | `tags=["feature:experimental"]` on new code paths | any hook type |
 
 ## Context injection
 
