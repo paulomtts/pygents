@@ -1,17 +1,17 @@
 """
 Integration test: agent run with hooks at every level and shared memory.
 
-Exercises Agent (BEFORE_PUT, AFTER_PUT, BEFORE_TURN, ON_TURN_VALUE, ON_TURN_COMPLETE,
-AFTER_TURN), Turn (BEFORE_RUN, AFTER_RUN), Tool (BEFORE_INVOKE, AFTER_INVOKE), and
-ContextQueue (BEFORE_APPEND, AFTER_APPEND) in one flow. The agent holds a ContextQueue
-instance; agent hooks append to it so that context queue hooks also fire.
+Exercises Agent (BEFORE_PUT, AFTER_PUT, BEFORE_TURN, ON_TURN_VALUE,
+AFTER_TURN), Turn (BEFORE_RUN, AFTER_RUN, ON_COMPLETE), Tool (BEFORE_INVOKE),
+and ContextQueue (BEFORE_APPEND, AFTER_APPEND) in one flow. The agent holds a
+ContextQueue instance; agent hooks append to it so that context queue hooks also fire.
 """
 
 import asyncio
 
 from pygents.agent import Agent
-from pygents.hooks import AgentHook, ContextQueueHook, ToolHook, TurnHook, hook
 from pygents.context import ContextItem, ContextQueue
+from pygents.hooks import AgentHook, ContextQueueHook, ToolHook, TurnHook, hook
 from pygents.registry import AgentRegistry, HookRegistry
 from pygents.tool import tool
 from pygents.turn import Turn
@@ -23,24 +23,20 @@ def test_agent_run_with_hooks_and_memory():
     events = []
 
     @hook(ContextQueueHook.BEFORE_APPEND)
-    async def memory_before(incoming, current):
+    async def memory_before(queue, incoming, current):
         events.append("memory_before_append")
 
     @hook(ContextQueueHook.AFTER_APPEND)
-    async def memory_after(incoming, current):
+    async def memory_after(queue, incoming, current):
         events.append("memory_after_append")
 
-    memory = ContextQueue(10, hooks=[memory_before, memory_after])
+    memory = ContextQueue(10)
 
     @hook(ToolHook.BEFORE_INVOKE)
     async def tool_before(*args, **kwargs):
         events.append("tool_before_invoke")
 
-    @hook(ToolHook.AFTER_INVOKE)
-    async def tool_after(result):
-        events.append("tool_after_invoke")
-
-    @tool(hooks=[tool_before, tool_after])
+    @tool()
     async def integration_compute(a: int, b: int) -> int:
         return a + b
 
@@ -61,8 +57,8 @@ def test_agent_run_with_hooks_and_memory():
     async def agent_on_turn_value(agent, turn, value):
         events.append(("agent_on_turn_value", value))
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def agent_on_turn_complete(agent, turn, stop_reason):
+    @hook(TurnHook.ON_COMPLETE)
+    async def agent_on_turn_complete(turn, stop_reason):
         events.append("agent_on_turn_complete")
 
     @hook(AgentHook.AFTER_TURN)
@@ -75,26 +71,15 @@ def test_agent_run_with_hooks_and_memory():
         events.append("turn_before_run")
 
     @hook(TurnHook.AFTER_RUN)
-    async def turn_after_run(turn):
+    async def turn_after_run(turn, output):
         events.append("turn_after_run")
 
     agent = Agent(
         "integration_agent", "Agent with hooks and memory", [integration_compute]
     )
     agent.memory = memory
-    agent.hooks.extend(
-        [
-            agent_before_put,
-            agent_after_put,
-            agent_before_turn,
-            agent_on_turn_value,
-            agent_on_turn_complete,
-            agent_after_turn,
-        ]
-    )
 
     turn = Turn("integration_compute", kwargs={"a": 3, "b": 5})
-    turn.hooks.extend([turn_before_run, turn_after_run])
 
     async def run():
         await agent.put(turn)
@@ -108,7 +93,10 @@ def test_agent_run_with_hooks_and_memory():
     assert len(results) == 1
     assert results[0][1] == 8
 
-    assert memory.items == [ContextItem(content="before_turn"), ContextItem(content="after_turn")]
+    assert memory.items == [
+        ContextItem(content="before_turn"),
+        ContextItem(content="after_turn"),
+    ]
 
     expected_sequence = [
         "agent_before_put",
@@ -119,9 +107,8 @@ def test_agent_run_with_hooks_and_memory():
         "turn_before_run",
         "tool_before_invoke",
         "turn_after_run",
-        "tool_after_invoke",
-        ("agent_on_turn_value", 8),
         "agent_on_turn_complete",
+        ("agent_on_turn_value", 8),
         "agent_after_turn",
         "memory_before_append",
         "memory_after_append",
@@ -131,6 +118,7 @@ def test_agent_run_with_hooks_and_memory():
 
 def test_agent_context_pool_collects_pool_item_outputs():
     AgentRegistry.clear()
+    HookRegistry.clear()
     from pygents.context import ContextItem
 
     @tool()
@@ -154,6 +142,7 @@ def test_agent_context_pool_collects_pool_item_outputs():
 
 def test_agent_context_queue_collects_items_without_id():
     AgentRegistry.clear()
+    HookRegistry.clear()
     from pygents.context import ContextItem
 
     @tool()
@@ -176,6 +165,7 @@ def test_agent_context_queue_collects_items_without_id():
 
 def test_agent_context_pool_limit_evicts_oldest():
     AgentRegistry.clear()
+    HookRegistry.clear()
     from pygents.context import ContextItem, ContextPool
 
     @tool()
@@ -338,9 +328,8 @@ def test_agent_multi_type_hook_invoked_for_each_event():
         events.append(("multi_type", len(args)))
 
     agent = Agent("multi_hook_agent", "Test", [simple_tool])
-    agent.hooks.append(multi_type_log)
 
-    turn = Turn("simple_tool", kwargs={"x": 5}, hooks=[multi_type_log])
+    turn = Turn("simple_tool", kwargs={"x": 5})
     asyncio.run(agent.put(turn))
 
     async def run():
@@ -350,15 +339,16 @@ def test_agent_multi_type_hook_invoked_for_each_event():
     assert len(results) == 1
     assert results[0][1] == 6
     assert events == [
-        ("multi_type", 1),
-        ("multi_type", 1),
-        ("multi_type", 1),
-        ("multi_type", 2),
+        ("multi_type", 1),  # BEFORE_TURN(agent)
+        ("multi_type", 1),  # BEFORE_RUN(turn)
+        ("multi_type", 2),  # AFTER_RUN(turn, output)
+        ("multi_type", 2),  # AFTER_TURN(agent, turn)
     ]
 
 
 def test_send_turn_routes_to_target_agent_and_executes():
     AgentRegistry.clear()
+    HookRegistry.clear()
 
     @tool()
     async def multiply(a: int, b: int) -> int:
@@ -368,7 +358,7 @@ def test_send_turn_routes_to_target_agent_and_executes():
     receiver = Agent("receiver", "Receives turns", [multiply])
 
     async def main():
-        await sender.send_turn("receiver", Turn("multiply", kwargs={"a": 3, "b": 4}))
+        await sender.send("receiver", Turn("multiply", kwargs={"a": 3, "b": 4}))
         out = []
         async for _, v in receiver.run():
             out.append(v)
@@ -381,6 +371,7 @@ def test_send_turn_routes_to_target_agent_and_executes():
 
 def test_context_accumulates_across_multiple_turns_in_single_run():
     AgentRegistry.clear()
+    HookRegistry.clear()
 
     @tool()
     async def emit_queue_item() -> ContextItem:
@@ -390,7 +381,9 @@ def test_context_accumulates_across_multiple_turns_in_single_run():
     async def emit_pool_item() -> ContextItem:
         return ContextItem(content="pool_val", description="a result", id="result_key")
 
-    agent = Agent("ctx_agent", "Context accumulation", [emit_queue_item, emit_pool_item])
+    agent = Agent(
+        "ctx_agent", "Context accumulation", [emit_queue_item, emit_pool_item]
+    )
 
     async def run():
         await agent.put(Turn("emit_queue_item", kwargs={}))

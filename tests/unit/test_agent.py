@@ -11,8 +11,8 @@ __init__:
   I1  Tool not in ToolRegistry -> UnregisteredToolError (from get)
   I2  Tool in registry but different instance -> ValueError "not the instance given"
   I3  Ok: name, description, tools, _tool_names, _queue, hooks [], _is_running False, _current_turn None; AgentRegistry.register
-  I4  context_queue=None -> default ContextQueue(limit=10) created
-  I5  context_queue=<instance> -> used as-is
+  I4  context_pool=None -> default ContextPool(); context_queue=None -> default ContextQueue(limit=10)
+  I5  context_pool/context_queue=<instance> -> used as-is
 
 put(turn):
   P1  turn.tool is None -> ValueError "Turn has no tool"
@@ -28,8 +28,8 @@ run():
   R2  Loop: get turn from _current_turn or queue; BEFORE_TURN
   R3  Async gen tool -> yielding(), ON_TURN_VALUE per value, yield (turn, value) only if not ContextItem/Turn, _route_value(value) per value
   R4  Coroutine tool -> returning(), ON_TURN_VALUE, yield (turn, output) only if not ContextItem/Turn, _route_value(turn.output)
-  R5  TurnTimeoutError -> ON_TURN_TIMEOUT, re-raise
-  R6  Other exception -> ON_TURN_ERROR, re-raise
+  R5  TurnTimeoutError -> TurnHook.ON_TIMEOUT (via turn), re-raise
+  R6  Other exception -> TurnHook.ON_ERROR (via turn), re-raise
   R7  After: AFTER_TURN; clear _current_turn
   R8  finally: _is_running False, _current_turn None
   R9  Early break (coroutine tool) -> no ValueError; _is_running False
@@ -59,21 +59,22 @@ _queue_snapshot: non-destructive peek. to_dict/from_dict: queue, current_turn, h
 """
 
 import asyncio
+from typing import cast
 
 import pytest
 
+from pygents.agent import Agent
+from pygents.context import ContextQueue
 from pygents.errors import (
     SafeExecutionError,
     TurnTimeoutError,
     UnregisteredAgentError,
     UnregisteredToolError,
 )
-from pygents.hooks import AgentHook, ContextPoolHook, ToolHook, hook
+from pygents.hooks import AgentHook, ContextPoolHook, hook
 from pygents.registry import AgentRegistry, HookRegistry
-from pygents.tool import tool
+from pygents.tool import Tool, tool
 from pygents.turn import StopReason, Turn
-from pygents.agent import Agent
-from pygents.context import ContextQueue
 
 
 @tool()
@@ -107,18 +108,21 @@ async def raising_tool_agent() -> None:
 @tool()
 async def returns_context_item_no_id():
     from pygents.context import ContextItem
+
     return ContextItem(content=42)
 
 
 @tool()
 async def returns_context_item_with_id():
     from pygents.context import ContextItem
+
     return ContextItem(content=99, description="result", id="x")
 
 
 @tool()
 async def returns_context_item_id_no_description():
     from pygents.context import ContextItem
+
     return ContextItem(content="val", id="missing-desc")
 
 
@@ -127,29 +131,22 @@ async def returns_context_item_id_no_description():
 # ---------------------------------------------------------------------------
 
 
-def test_agent_accepts_hooks_in_constructor():
+def test_agent_accepts_hooks_via_method_decorator():
     AgentRegistry.clear()
     HookRegistry.clear()
-
-    @hook(AgentHook.BEFORE_TURN)
-    async def my_hook_ctor(agent):
-        pass
-
-    agent = Agent("a", "desc", [add_agent], hooks=[my_hook_ctor])
-    assert my_hook_ctor in agent.hooks
-
     events = []
 
-    @hook(AgentHook.BEFORE_TURN)
+    agent = Agent("a", "desc", [add_agent])
+
+    @agent.before_turn
     async def capturing_hook(agent):
         events.append("before_turn")
 
-    AgentRegistry.clear()
-    agent2 = Agent("b", "desc", [add_agent], hooks=[capturing_hook])
+    assert capturing_hook in agent.hooks
 
     async def run():
-        await agent2.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
-        async for _ in agent2.run():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        async for _ in agent.run():
             pass
 
     asyncio.run(run())
@@ -174,7 +171,7 @@ def test_agent_rejects_tool_not_in_registry():
         {"metadata": type("M", (), {"name": "unregistered_tool"})()},
     )()
     with pytest.raises(UnregisteredToolError, match="not found"):
-        Agent("a", "desc", [unregistered])
+        Agent("a", "desc", cast(list[Tool], [unregistered]))
 
 
 def test_agent_init_rejects_tool_wrong_instance():
@@ -186,7 +183,7 @@ def test_agent_init_rejects_tool_wrong_instance():
         {"metadata": type("M", (), {"name": "add_agent"})(), "fn": None},
     )()
     with pytest.raises(ValueError, match="not the instance given"):
-        Agent("b", "desc", [fake_same_name])
+        Agent("b", "desc", cast(list[Tool], [fake_same_name]))
 
 
 def test_agent_init_accepts_context_pool_instance():
@@ -198,13 +195,17 @@ def test_agent_init_accepts_context_pool_instance():
         pass
 
     from pygents.context import ContextPool
-    agent = Agent("a", "desc", [add_agent], context_pool=ContextPool(hooks=[pool_hook]))
+
+    pool = ContextPool()
+    pool.hooks.append(pool_hook)
+    agent = Agent("a", "desc", [add_agent], context_pool=pool)
     assert pool_hook in agent.context_pool.hooks
 
 
 def test_agent_init_default_pool_when_none_provided():
     AgentRegistry.clear()
     from pygents.context import ContextPool
+
     agent = Agent("a", "desc", [add_agent])
     assert isinstance(agent.context_pool, ContextPool)
     assert len(agent.context_pool) == 0
@@ -213,6 +214,7 @@ def test_agent_init_default_pool_when_none_provided():
 def test_agent_init_uses_provided_pool_instance():
     AgentRegistry.clear()
     from pygents.context import ContextPool
+
     pool = ContextPool(limit=5)
     agent = Agent("a", "desc", [add_agent], context_pool=pool)
     assert agent.context_pool is pool
@@ -227,16 +229,12 @@ def test_agent_branch_child_pool_inherits_hooks():
         pass
 
     from pygents.context import ContextPool
-    parent = Agent("parent", "desc", [add_agent], context_pool=ContextPool(hooks=[parent_pool_hook]))
+
+    parent_pool = ContextPool()
+    parent_pool.hooks.append(parent_pool_hook)
+    parent = Agent("parent", "desc", [add_agent], context_pool=parent_pool)
     child = parent.branch("child")
     assert parent_pool_hook in child.context_pool.hooks
-
-
-def test_agent_init_accepts_context_queue_instance():
-    AgentRegistry.clear()
-    queue = ContextQueue(limit=5)
-    agent = Agent("a", "desc", [add_agent], context_queue=queue)
-    assert agent.context_queue is queue
 
 
 def test_agent_init_default_queue_when_none_provided():
@@ -263,6 +261,7 @@ def test_agent_branch_child_queue_inherits_hooks():
 
 
 def test_agent_add_context_routes_to_queue_when_id_is_none():
+    """Unit-level test for _route_value; integration routing in test_agent_integration.py."""
     AgentRegistry.clear()
     agent = Agent("a", "desc", [returns_context_item_no_id])
 
@@ -278,6 +277,7 @@ def test_agent_add_context_routes_to_queue_when_id_is_none():
 
 
 def test_agent_add_context_routes_to_pool_when_id_provided():
+    """Unit-level test for _route_value; integration routing in test_agent_integration.py."""
     AgentRegistry.clear()
     agent = Agent("a", "desc", [returns_context_item_with_id])
 
@@ -322,7 +322,9 @@ def test_agent_add_context_queue_accumulates_across_multiple_turns():
 
 def test_agent_add_context_queue_evicts_when_limit_exceeded():
     AgentRegistry.clear()
-    agent = Agent("a", "desc", [returns_context_item_no_id], context_queue=ContextQueue(limit=2))
+    agent = Agent(
+        "a", "desc", [returns_context_item_no_id], context_queue=ContextQueue(limit=2)
+    )
 
     async def run():
         for _ in range(3):
@@ -343,6 +345,7 @@ def test_route_value_adds_to_queue_when_no_id():
     # RV1
     AgentRegistry.clear()
     from pygents.context import ContextItem
+
     agent = Agent("a", "desc", [add_agent])
 
     async def run():
@@ -358,10 +361,13 @@ def test_route_value_adds_to_pool_when_id_present():
     # RV2
     AgentRegistry.clear()
     from pygents.context import ContextItem
+
     agent = Agent("a", "desc", [add_agent])
 
     async def run():
-        await agent._route_value(ContextItem(content=42, description="desc", id="mykey"))
+        await agent._route_value(
+            ContextItem(content=42, description="desc", id="mykey")
+        )
 
     asyncio.run(run())
     assert len(agent.context_pool) == 1
@@ -418,7 +424,9 @@ def test_put_rejects_turn_with_unknown_tool():
     AgentRegistry.clear()
     agent = Agent("a", "desc", [add_agent])
     turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
-    fake_tool = type("FakeTool", (), {"metadata": type("M", (), {"name": "other_tool"})()})()
+    fake_tool = type(
+        "FakeTool", (), {"metadata": type("M", (), {"name": "other_tool"})()}
+    )()
     object.__setattr__(turn, "tool", fake_tool)
     with pytest.raises(ValueError, match="does not accept tool"):
         asyncio.run(agent.put(turn))
@@ -469,8 +477,19 @@ def test_agent_registered_after_init():
     assert AgentRegistry.get("registered_agent") is agent
 
 
-def test_put_before_put_and_after_put_hooks_called():
+def test_agent_repr_includes_name_and_tool_names():
     AgentRegistry.clear()
+    agent = Agent("repr_agent", "Desc", [add_agent])
+    r = repr(agent)
+    assert "Agent(" in r
+    assert "repr_agent" in r
+    assert "add_agent" in r
+
+
+def test_put_before_put_and_after_put_hooks_called():
+    """Global @hook attachment; method-decorator style covered in test_hooks.py."""
+    AgentRegistry.clear()
+    HookRegistry.clear()
     events = []
 
     @hook(AgentHook.BEFORE_PUT)
@@ -482,7 +501,6 @@ def test_put_before_put_and_after_put_hooks_called():
         events.append(("after_put", turn.tool.metadata.name))
 
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.extend([before_put, after_put])
     turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
     asyncio.run(agent.put(turn))
     assert events == [("before_put", "add_agent"), ("after_put", "add_agent")]
@@ -497,13 +515,12 @@ def test_put_before_put_hook_raises_turn_not_enqueued():
         raise ValueError("rejected")
 
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.append(rejecting_before_put)
     turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
 
     with pytest.raises(ValueError, match="rejected"):
         asyncio.run(agent.put(turn))
 
-    assert agent._queue.empty()   # turn was never enqueued
+    assert agent._queue.empty()  # turn was never enqueued
 
 
 def test_put_then_run_yields_turn_and_result():
@@ -647,7 +664,10 @@ def test_agent_setattr_raises_while_running():
         task = asyncio.create_task(run_agent())
         await asyncio.sleep(0.05)
         try:
-            with pytest.raises(SafeExecutionError, match="Cannot change property .* while the agent is running"):
+            with pytest.raises(
+                SafeExecutionError,
+                match="Cannot change property .* while the agent is running",
+            ):
                 agent.name = "other"
         finally:
             task.cancel()
@@ -661,6 +681,7 @@ def test_agent_setattr_raises_while_running():
 
 def test_run_before_turn_after_turn_and_on_turn_value_hooks_called():
     AgentRegistry.clear()
+    HookRegistry.clear()
     events = []
 
     @hook(AgentHook.BEFORE_TURN)
@@ -676,7 +697,6 @@ def test_run_before_turn_after_turn_and_on_turn_value_hooks_called():
         events.append(("after_turn", turn.tool.metadata.name))
 
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.extend([before_turn, on_turn_value, after_turn])
     asyncio.run(agent.put(Turn("add_agent", kwargs={"a": 2, "b": 3})))
 
     async def run_and_collect():
@@ -699,7 +719,6 @@ def test_run_on_turn_value_hook_raises_propagates_and_cleans_up():
         raise RuntimeError("value hook failed")
 
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.append(exploding_on_turn_value)
 
     async def run_it():
         await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
@@ -709,7 +728,7 @@ def test_run_on_turn_value_hook_raises_propagates_and_cleans_up():
     with pytest.raises(RuntimeError, match="value hook failed"):
         asyncio.run(run_it())
 
-    assert agent._is_running is False   # finally ran
+    assert agent._is_running is False  # finally ran
 
 
 def test_run_early_break_coroutine_does_not_raise():
@@ -722,7 +741,7 @@ def test_run_early_break_coroutine_does_not_raise():
         async for _, _ in agent.run():
             break
 
-    asyncio.run(run_with_break())   # must not raise ValueError
+    asyncio.run(run_with_break())  # must not raise ValueError
     assert agent._is_running is False
 
 
@@ -741,14 +760,15 @@ def test_run_early_break_streaming_does_not_raise():
 
 def test_run_on_turn_timeout_hook_called():
     AgentRegistry.clear()
+    HookRegistry.clear()
     events = []
 
-    @hook(AgentHook.ON_TURN_TIMEOUT)
-    async def on_turn_timeout(agent, turn):
+    agent = Agent("a", "desc", [slow_tool_agent])
+
+    @agent.on_timeout
+    async def on_turn_timeout(turn):
         events.append("on_turn_timeout")
 
-    agent = Agent("a", "desc", [slow_tool_agent])
-    agent.hooks.append(on_turn_timeout)
     asyncio.run(agent.put(Turn("slow_tool_agent", kwargs={"duration": 2.0}, timeout=1)))
 
     async def consume():
@@ -762,14 +782,15 @@ def test_run_on_turn_timeout_hook_called():
 
 def test_run_on_turn_error_hook_called():
     AgentRegistry.clear()
+    HookRegistry.clear()
     events = []
 
-    @hook(AgentHook.ON_TURN_ERROR)
-    async def on_turn_error(agent, turn, exc):
+    agent = Agent("a", "desc", [raising_tool_agent])
+
+    @agent.on_error
+    async def on_turn_error(turn, exc):
         events.append(("on_turn_error", type(exc).__name__))
 
-    agent = Agent("a", "desc", [raising_tool_agent])
-    agent.hooks.append(on_turn_error)
     asyncio.run(agent.put(Turn("raising_tool_agent", kwargs={})))
 
     async def consume():
@@ -860,7 +881,9 @@ def test_run_does_not_yield_turn_to_caller():
 def test_on_turn_value_hook_fires_for_context_item_even_when_filtered():
     # ON_TURN_VALUE hook must receive the ContextItem even though it is not yielded.
     AgentRegistry.clear()
+    HookRegistry.clear()
     from pygents.context import ContextItem
+
     hook_values = []
 
     @hook(AgentHook.ON_TURN_VALUE)
@@ -872,7 +895,6 @@ def test_on_turn_value_hook_fires_for_context_item_even_when_filtered():
         return ContextItem(content=99)
 
     agent = Agent("a", "desc", [returns_ci_for_hook])
-    agent.hooks.append(capture_value)
 
     async def collect():
         await agent.put(Turn("returns_ci_for_hook", kwargs={}))
@@ -889,21 +911,21 @@ def test_on_turn_value_hook_fires_for_context_item_even_when_filtered():
 
 
 def test_on_turn_value_fires_after_context_item_routed():
-    # ON_TURN_VALUE fires after _route_value, so context_queue already has the item.
     AgentRegistry.clear()
     HookRegistry.clear()
     from pygents.context import ContextItem
-    queue_len_at_hook = []
 
-    @hook(AgentHook.ON_TURN_VALUE)
-    async def capture_queue_len(agent, turn, value):
-        queue_len_at_hook.append(len(agent.context_queue))
+    queue_len_at_hook = []
 
     @tool()
     async def yields_ci_post_route():
         return ContextItem(content="x")
 
-    agent = Agent("a", "desc", [yields_ci_post_route], hooks=[capture_queue_len])
+    agent = Agent("a", "desc", [yields_ci_post_route])
+
+    @agent.on_turn_value
+    async def capture_queue_len(agent, turn, value):
+        queue_len_at_hook.append(len(agent.context_queue))
 
     async def run():
         await agent.put(Turn("yields_ci_post_route", kwargs={}))
@@ -925,8 +947,8 @@ def test_send_turn_enqueues_on_target_agent():
     agent_b = Agent("bob", "Second", [add_agent])
 
     async def main():
-        await agent_a.send_turn("bob", Turn("add_agent", kwargs={"a": 10, "b": 20}))
-        await agent_a.send_turn("bob", Turn("add_agent", kwargs={"a": 5, "b": 5}))
+        await agent_a.send("bob", Turn("add_agent", kwargs={"a": 10, "b": 20}))
+        await agent_a.send("bob", Turn("add_agent", kwargs={"a": 5, "b": 5}))
         out = []
         async for t, v in agent_b.run():
             out.append((t, v))
@@ -943,7 +965,7 @@ def test_send_turn_to_unregistered_agent_raises():
     agent = Agent("solo", "Only", [add_agent])
 
     async def main():
-        await agent.send_turn("nonexistent", Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        await agent.send("nonexistent", Turn("add_agent", kwargs={"a": 1, "b": 2}))
 
     with pytest.raises(UnregisteredAgentError, match="not found"):
         asyncio.run(main())
@@ -1062,6 +1084,8 @@ def test_agent_from_dict_with_current_turn_processes_it_first():
         return None, None
 
     result_turn, result_value = asyncio.run(run_once())
+    if not result_turn:
+        pytest.fail("No result turn")
     assert result_value == 10
     assert result_turn.tool.metadata.name == "add_agent"
     assert restored._queue.empty()
@@ -1261,7 +1285,7 @@ def test_run_waits_at_gate_when_pre_paused():
             return out
 
         task = asyncio.create_task(collect())
-        await asyncio.sleep(0.05)        # gate should be hit by now
+        await asyncio.sleep(0.05)  # gate should be hit by now
         assert agent.is_paused is True
         agent.resume()
         return await task
@@ -1284,7 +1308,7 @@ def test_run_pauses_between_turns():
         async def collect():
             async for _, v in agent.run():
                 results.append(v)
-                agent.pause()            # pause after first yield
+                agent.pause()  # pause after first yield
 
         task = asyncio.create_task(collect())
         await asyncio.sleep(0.1)
@@ -1308,7 +1332,6 @@ def test_on_pause_hook_fires_on_pause_entry():
         events.append("on_pause")
 
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.append(on_pause)
     agent.pause()
 
     async def main():
@@ -1337,7 +1360,6 @@ def test_on_resume_hook_fires_on_resume():
         events.append("on_resume")
 
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.append(on_resume)
     agent.pause()
 
     async def main():
@@ -1374,7 +1396,6 @@ def test_on_pause_fires_before_before_turn():
         events.append("before_turn")
 
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.extend([on_pause, on_resume, before_turn])
     agent.pause()
 
     async def main():
@@ -1406,8 +1427,8 @@ def test_pause_does_not_interrupt_running_turn():
                 completed.append(v)
 
         task = asyncio.create_task(collect())
-        await asyncio.sleep(0.05)        # tool is running
-        agent.pause()                    # must not abort the turn
+        await asyncio.sleep(0.05)  # tool is running
+        agent.pause()  # must not abort the turn
         await task
         assert completed == ["done"]
 
@@ -1483,7 +1504,9 @@ def test_setattr_raises_while_paused():
     AgentRegistry.clear()
     agent = Agent("a", "desc", [add_agent])
     agent.pause()
-    with pytest.raises(SafeExecutionError, match="Cannot change property .* while the agent is paused"):
+    with pytest.raises(
+        SafeExecutionError, match="Cannot change property .* while the agent is paused"
+    ):
         agent.name = "other"
 
 
@@ -1493,7 +1516,7 @@ def test_setattr_allowed_after_resume():
     agent = Agent("a", "desc", [add_agent])
     agent.pause()
     agent.resume()
-    agent.name = "new_name"   # must not raise
+    agent.name = "new_name"  # must not raise
     assert agent.name == "new_name"
 
 
@@ -1601,127 +1624,20 @@ def test_context_var_reset_after_each_turn():
 
 
 # ---------------------------------------------------------------------------
-# AFTER_INVOKE fires after routing (agent-level)
+# ON_COMPLETE hook (now TurnHook, propagated via agent.turn_hooks)
 # ---------------------------------------------------------------------------
 
 
-def test_after_invoke_fires_after_routing_for_coroutine_tool():
-    AgentRegistry.clear()
-    from pygents.context import ContextItem
-    queue_len_at_hook = []
-
-    async def after_invoke(result):
-        queue_len_at_hook.append(len(agent.context_queue))
-
-    after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[after_invoke])
-    async def ci_coroutine_tool():
-        return ContextItem(content="x")
-
-    agent = Agent("a", "desc", [ci_coroutine_tool])
-
-    async def run():
-        await agent.put(Turn("ci_coroutine_tool", kwargs={}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert queue_len_at_hook == [1]
-
-
-def test_after_invoke_fires_after_routing_for_async_gen_tool():
-    AgentRegistry.clear()
-    from pygents.context import ContextItem
-    queue_len_at_hook = []
-
-    async def after_invoke(values):
-        queue_len_at_hook.append(len(agent.context_queue))
-
-    after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[after_invoke])
-    async def ci_gen_tool():
-        yield ContextItem(content="a")
-        yield ContextItem(content="b")
-
-    agent = Agent("a", "desc", [ci_gen_tool])
-
-    async def run():
-        await agent.put(Turn("ci_gen_tool", kwargs={}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert queue_len_at_hook == [2]
-
-
-def test_after_invoke_receives_correct_value_for_coroutine_tool():
-    AgentRegistry.clear()
-    captured = []
-
-    async def after_invoke(result):
-        captured.append(result)
-
-    after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[after_invoke])
-    async def int_tool() -> int:
-        return 42
-
-    agent = Agent("a", "desc", [int_tool])
-
-    async def run():
-        await agent.put(Turn("int_tool", kwargs={}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert captured == [42]
-
-
-def test_after_invoke_receives_list_for_async_gen_tool():
-    AgentRegistry.clear()
-    captured = []
-
-    async def after_invoke(values):
-        captured.append(values)
-
-    after_invoke.type = ToolHook.AFTER_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[after_invoke])
-    async def gen_123():
-        yield 1
-        yield 2
-        yield 3
-
-    agent = Agent("a", "desc", [gen_123])
-
-    async def run():
-        await agent.put(Turn("gen_123", kwargs={}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert captured == [[1, 2, 3]]
-
-
-# ---------------------------------------------------------------------------
-# ON_TURN_COMPLETE hook
-# ---------------------------------------------------------------------------
-
-
-def test_on_turn_complete_fires_on_clean_turn():
+def test_on_complete_fires_on_clean_turn():
     AgentRegistry.clear()
     HookRegistry.clear()
     fired = []
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def on_complete(agent, turn, stop_reason):
-        fired.append(("complete", stop_reason))
-
     agent = Agent("a", "desc", [add_agent])
-    agent.hooks.append(on_complete)
+
+    @agent.on_complete
+    async def on_complete(turn, stop_reason):
+        fired.append(("complete", stop_reason))
 
     async def run():
         await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
@@ -1732,17 +1648,16 @@ def test_on_turn_complete_fires_on_clean_turn():
     assert fired == [("complete", StopReason.COMPLETED)]
 
 
-def test_on_turn_complete_fires_on_error():
+def test_on_complete_fires_on_error():
     AgentRegistry.clear()
     HookRegistry.clear()
     fired = []
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def on_complete_err(agent, turn, stop_reason):
-        fired.append(("complete", stop_reason))
-
     agent = Agent("a", "desc", [raising_tool_agent])
-    agent.hooks.append(on_complete_err)
+
+    @agent.on_complete
+    async def on_complete_err(turn, stop_reason):
+        fired.append(("complete", stop_reason))
 
     async def run():
         await agent.put(Turn("raising_tool_agent", kwargs={}))
@@ -1754,17 +1669,16 @@ def test_on_turn_complete_fires_on_error():
     assert fired == [("complete", StopReason.ERROR)]
 
 
-def test_on_turn_complete_fires_on_timeout():
+def test_on_complete_fires_on_timeout():
     AgentRegistry.clear()
     HookRegistry.clear()
     fired = []
 
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def on_complete_timeout(agent, turn, stop_reason):
-        fired.append(("complete", stop_reason))
-
     agent = Agent("a", "desc", [slow_tool_agent])
-    agent.hooks.append(on_complete_timeout)
+
+    @agent.on_complete
+    async def on_complete_timeout(turn, stop_reason):
+        fired.append(("complete", stop_reason))
 
     async def run():
         await agent.put(Turn("slow_tool_agent", kwargs={"duration": 2.0}, timeout=1))
@@ -1774,26 +1688,3 @@ def test_on_turn_complete_fires_on_timeout():
     with pytest.raises(TurnTimeoutError):
         asyncio.run(run())
     assert fired == [("complete", StopReason.TIMEOUT)]
-
-
-def test_on_turn_complete_receives_stop_reason():
-    AgentRegistry.clear()
-    HookRegistry.clear()
-    captured = []
-
-    @hook(AgentHook.ON_TURN_COMPLETE)
-    async def capture_reason(agent, turn, stop_reason):
-        captured.append(stop_reason)
-
-    agent = Agent("a", "desc", [add_agent])
-    agent.hooks.append(capture_reason)
-
-    async def run():
-        await agent.put(Turn("add_agent", kwargs={"a": 5, "b": 5}))
-        async for _ in agent.run():
-            pass
-
-    asyncio.run(run())
-    assert len(captured) == 1
-    assert captured[0] == StopReason.COMPLETED
-    assert isinstance(captured[0], StopReason)

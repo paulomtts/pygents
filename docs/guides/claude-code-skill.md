@@ -43,9 +43,15 @@ async def write_db(data: dict) -> None: ...
 @tool(api_key=lambda: get_config()["key"])
 async def call_api(endpoint: str, api_key: str) -> str: ...
 
-# With hooks — fire on every invocation
-@tool(hooks=[my_before_hook, my_after_hook])
+# With hooks — attach after decoration via method decorators
+@tool()
 async def audited_tool(x: int) -> int: ...
+
+@audited_tool.before_invoke
+async def log_input(x: int) -> None: ...
+
+@audited_tool.after_invoke
+async def log_output(result: int) -> None: ...
 ```
 
 Rules:
@@ -198,65 +204,50 @@ child = pool.branch(limit=10)   # override limit
 
 ## Hooks
 
-Async callbacks at five levels: Turn, Agent, Tool, ContextQueue, ContextPool. Decorated with `@hook(type)`.
+Async callbacks at five levels: Turn, Agent, Tool, ContextQueue, ContextPool.
+
+Two attachment styles: **instance-scoped** (method decorators — fires only for that object, preferred) and **global** (`@hook(Type)` — fires for every matching object).
+
+**Prefer instance-scoped hooks** — they fire only for that specific object, keeping scope explicit:
 
 ```python
-from pygents import hook, TurnHook, AgentHook, ToolHook, ContextQueueHook, ContextPoolHook
+@tool()
+async def compute(x: int) -> int:
+    return x * 2
 
+@compute.before_invoke
+async def validate(x: int) -> None:
+    if x < 0:
+        raise ValueError("x must be non-negative")
+```
+
+The same pattern works for any object: `@turn.on_error`, `@agent.before_turn`, `@cq.after_append`, `@pool.after_add`, etc.
+
+**Global hooks** — `@hook(Type)` — fire for every instance of every matching object type. Use only for true cross-cutting concerns (process-wide logging, metrics):
+
+```python
 @hook(TurnHook.BEFORE_RUN)
-async def log_start(turn):
+async def log_all_turns(turn):
     print(f"Starting {turn.tool.metadata.name}")
-
-@hook(AgentHook.ON_TURN_ERROR)
-async def on_error(agent, turn, exception):
-    print(f"Error in {agent.name}: {exception}")
-
-@hook(ToolHook.AFTER_INVOKE)
-async def log_result(value):
-    print(f"Result: {value}")
-
-@hook(ContextQueueHook.AFTER_APPEND)
-async def log_cq(incoming, current):
-    print(f"ContextQueue now has {len(current)} items")
-
-@hook(ContextPoolHook.AFTER_ADD)
-async def log_pool(pool, item):
-    print(f"Pool gained {item.id!r}: {item.description}")
 ```
 
-Attach hooks:
-- Turns: `Turn(..., hooks=[h])` or `turn.hooks.append(h)`
-- Agents: `agent.hooks.append(h)`
-- Tools: `@tool(hooks=[h])`
-- ContextQueue: `ContextQueue(limit=N, hooks=[h])` or `cq.branch(hooks=[h])`
-- ContextPool: `ContextPool(hooks=[h])` or via `Agent(..., context_pool=ContextPool(hooks=[h]))`
+When both styles are active for the same event, instance hooks fire first, then global hooks. The same hook object is never called twice (deduplication).
 
-Hook decorator options: `@hook(type, lock=True, **fixed_kwargs)`.
-- `lock=True` serializes concurrent runs via `asyncio.Lock`
-- Fixed kwargs merge into every call (call-time overrides)
-- Context injection: declare `param: ContextQueue` or `param: ContextPool` in any hook function — the agent's live instances are injected automatically during turn execution (same as tools). Optional `ContextQueue | None` is safe to use for hooks that may fire outside a turn.
-
-Multi-type hooks — one hook for several events (must accept `*args, **kwargs`):
-```python
-@hook([AgentHook.BEFORE_TURN, AgentHook.AFTER_TURN])
-async def log_events(*args, **kwargs): ...
-```
+Options: `lock=True` serializes concurrent runs; `**fixed_kwargs` merge into every call; declare `param: ContextQueue | None` or `param: ContextPool | None` for context injection.
 
 ### All hook types and their arguments
 
 **TurnHook:**
 - `BEFORE_RUN(turn)` — before tool runs
-- `AFTER_RUN(turn)` — after clean completion, before agent routing
+- `AFTER_RUN(turn, output)` — after clean completion; `output` is the return value (or list of yielded values for generators)
 - `ON_TIMEOUT(turn)` — turn timed out
 - `ON_ERROR(turn, exception)` — non-timeout error
+- `ON_COMPLETE(turn, stop_reason)` — always fires in finally block (clean, error, or timeout)
 
 **AgentHook:**
 - `BEFORE_TURN(agent)` — before consuming next turn
-- `AFTER_TURN(agent, turn)` — after turn processed (clean completion only)
-- `ON_TURN_COMPLETE(agent, turn, stop_reason)` — always fires after a turn (clean, error, or timeout); fires in the finally block before AFTER_TURN
+- `AFTER_TURN(agent, turn)` — after turn processed
 - `ON_TURN_VALUE(agent, turn, value)` — after routing (context already updated), before yielding result
-- `ON_TURN_ERROR(agent, turn, exception)` — turn error
-- `ON_TURN_TIMEOUT(agent, turn)` — turn timeout
 - `BEFORE_PUT(agent, turn)` — before enqueue
 - `AFTER_PUT(agent, turn)` — after enqueue
 - `ON_PAUSE(agent)` — run loop hit a paused gate
@@ -265,22 +256,22 @@ async def log_events(*args, **kwargs): ...
 **ToolHook:**
 - `BEFORE_INVOKE(*args, **kwargs)` — about to call
 - `ON_YIELD(value)` — each yielded value (generators)
-- `AFTER_INVOKE(result)` — coroutine tool: fires after routing, receives the return value
-- `AFTER_INVOKE([values])` — async gen tool: fires after all values are routed, receives the full list of yielded values
+- `AFTER_INVOKE(result)` — coroutine tool: fires after the tool returns (not dispatched if tool raises), receives the return value
+- `AFTER_INVOKE([values])` — async gen tool: fires after the generator is exhausted (not dispatched if it raises), receives the full list of yielded values
 
 **ContextQueueHook:**
-- `BEFORE_APPEND(incoming, current)` — items about to be added; current queue snapshot
-- `AFTER_APPEND(incoming, current)` — items that were added; queue snapshot after append
-- `BEFORE_CLEAR(items)` — current items before clear
-- `AFTER_CLEAR(items)` — always empty list, fires after clear
-- `ON_EVICT(item)` — oldest item about to be evicted (fires once per eviction)
+- `BEFORE_APPEND(queue, incoming, current)` — queue instance, items being appended, snapshot before append
+- `AFTER_APPEND(queue, appended_items, current)` — queue instance, items that were appended, snapshot after append
+- `BEFORE_CLEAR(queue, items)` — queue instance, snapshot before clear
+- `AFTER_CLEAR(queue)` — queue instance (now empty)
+- `ON_EVICT(queue, item)` — queue instance, evicted ContextItem (fires once per eviction)
 
 **ContextPoolHook:**
 - `BEFORE_ADD(pool, item)` — before item inserted
 - `AFTER_ADD(pool, item)` — after item inserted
 - `BEFORE_REMOVE(pool, item)` — before item deleted
 - `AFTER_REMOVE(pool, item)` — after item deleted
-- `BEFORE_CLEAR(pool)` — before all items cleared
+- `BEFORE_CLEAR(pool, snapshot)` — pool instance and dict copy of items taken before clear
 - `AFTER_CLEAR(pool)` — after all items cleared
 - `ON_EVICT(pool, item)` — oldest item about to be evicted when pool is at limit
 

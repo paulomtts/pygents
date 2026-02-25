@@ -3,6 +3,7 @@ import logging
 from typing import Any, Callable, Iterable, TypeVar, get_args, get_type_hints
 
 from pygents.errors import SafeExecutionError
+from pygents.registry import HookRegistry
 
 R = TypeVar("R")
 _function_type = type(lambda: None)
@@ -16,7 +17,7 @@ class _NullLock:
         pass
 
 
-_null_lock = _NullLock()
+null_lock = _NullLock()
 
 
 log = logging.getLogger("pygents")
@@ -24,6 +25,7 @@ log = logging.getLogger("pygents")
 
 def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
     if inspect.isasyncgenfunction(func):
+
         async def asyncgen_wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
             if getattr(self, "_is_running", False):
                 raise SafeExecutionError(
@@ -42,26 +44,6 @@ def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
         )
 
     return wrapper
-
-
-def validate_fixed_kwargs(
-    fn: Callable[..., Any],
-    fixed_kwargs: dict[str, Any],
-    kind: str = "Tool",
-) -> None:
-    """Raise TypeError if fixed_kwargs contains keys not in fn's signature and fn has no **kwargs."""
-    params = inspect.signature(fn).parameters
-    has_var_kwargs = any(
-        p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-    )
-    if not has_var_kwargs:
-        valid_keys = set(params.keys())
-        invalid = set(fixed_kwargs.keys()) - valid_keys
-        if invalid:
-            raise TypeError(
-                f"{kind} {fn.__name__!r} fixed kwargs {sorted(invalid)} are not in "
-                "function signature and function does not accept **kwargs."
-            )
 
 
 def eval_args(args: Iterable[Any]) -> list[Any]:
@@ -88,9 +70,10 @@ def merge_kwargs(
     return {**evaluated, **call_kwargs}
 
 
-def _injectable_type(hint: Any) -> type | None:
+def injectable_type(hint: Any) -> type | None:
     """Return ContextQueue or ContextPool if hint is or wraps one; else None."""
     from pygents.context import ContextPool, ContextQueue
+
     for candidate in (ContextQueue, ContextPool):
         if hint is candidate:
             return candidate
@@ -101,10 +84,17 @@ def _injectable_type(hint: Any) -> type | None:
     return None
 
 
-def _inject_context_deps(fn: Callable[..., Any], merged: dict[str, Any]) -> dict[str, Any]:
+def inject_context_deps(
+    fn: Callable[..., Any], merged: dict[str, Any]
+) -> dict[str, Any]:
     """Inject ContextQueue/ContextPool for typed params not already in merged."""
-    from pygents.context import ContextPool, ContextQueue
-    from pygents.context import _current_context_pool, _current_context_queue
+    from pygents.context import (
+        ContextPool,
+        ContextQueue,
+        _current_context_pool,
+        _current_context_queue,
+    )
+
     try:
         hints = get_type_hints(fn)
     except Exception:
@@ -113,7 +103,7 @@ def _inject_context_deps(fn: Callable[..., Any], merged: dict[str, Any]) -> dict
     for name, hint in hints.items():
         if name == "return" or name in merged:
             continue
-        t = _injectable_type(hint)
+        t = injectable_type(hint)
         if t is ContextQueue:
             val = _current_context_queue.get()
             if val is not None:
@@ -125,10 +115,47 @@ def _inject_context_deps(fn: Callable[..., Any], merged: dict[str, Any]) -> dict
     return {**injected, **merged}  # merged (explicit) always wins
 
 
+def build_method_decorator(
+    hook_type: Any,
+    store: list,
+    fn: Any,
+    lock: bool,
+    fixed_kwargs: dict,
+    *,
+    as_tuple: bool = False,
+) -> Any:
+    """Build a parameterized method decorator, appending the wrapped hook to *store*.
+
+    Parameters
+    ----------
+    hook_type:
+        The hook type to wrap *fn* as.
+    store:
+        The list to append the wrapped hook to (e.g. ``self.hooks``).
+    fn:
+        The function to wrap, or ``None`` when the decorator is called with
+        arguments (``@obj.hook_name(lock=True)``).
+    lock:
+        If ``True``, concurrent calls are serialized with an ``asyncio.Lock``.
+    fixed_kwargs:
+        Fixed keyword arguments merged into every invocation.
+    as_tuple:
+        If ``True``, append ``(hook_type, wrapped)`` instead of ``wrapped``
+        alone. Used by Tool whose hook store holds ``(type, hook)`` tuples.
+    """
+
+    def decorator(f: Any) -> Any:
+        wrapped = HookRegistry.wrap(f, hook_type, lock=lock, **fixed_kwargs)
+        store.append((hook_type, wrapped) if as_tuple else wrapped)
+        return wrapped
+
+    if fn is not None:
+        return decorator(fn)
+    return decorator
+
+
 def rebuild_hooks_from_serialization(hooks_data: dict[str, list[str]]) -> list[Any]:
     """Rebuild hook list from serialized data by looking up names in HookRegistry."""
-    from pygents.registry import HookRegistry
-
     seen: set[str] = set()
     result: list[Any] = []
     for _type_str, hook_names in hooks_data.items():

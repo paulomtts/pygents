@@ -22,8 +22,7 @@ Lock:
   L2  lock=True -> wrapper.lock is asyncio.Lock()
 
 Hooks:
-  H1  hooks=None -> wrapper.hooks = []
-  H2  hooks=[...] -> wrapper.hooks = list(hooks)
+  H1  wrapper.hooks starts empty; method decorators append to it
 
 Invocation (coroutine): start_time, BEFORE_INVOKE, await fn, end_time in finally.
 Invocation (async gen): start_time, BEFORE_INVOKE, async for + ON_YIELD, end_time in finally.
@@ -38,11 +37,15 @@ from typing import Any
 
 import pytest
 
-from pygents.context import ContextPool, ContextQueue
-from pygents.context import _current_context_pool, _current_context_queue
+from pygents.context import (
+    ContextPool,
+    ContextQueue,
+    _current_context_pool,
+    _current_context_queue,
+)
 from pygents.hooks import ToolHook
 from pygents.registry import ToolRegistry
-from pygents.tool import ToolMetadata, _inject_context_deps, tool
+from pygents.tool import ToolMetadata, inject_context_deps, tool
 
 
 def test_decorated_function_preserves_behavior():
@@ -99,7 +102,7 @@ def test_decorator_without_parentheses():
 def test_tool_sync_function_raises_type_error():
     with pytest.raises(TypeError, match="Tool must be async"):
 
-        @tool()
+        @tool()  # type: ignore[arg-type]
         def sync_tool() -> int:
             return 1
 
@@ -131,16 +134,6 @@ def test_decorated_tool_has_hooks_list_empty_when_none():
     assert no_hooks.hooks == []
 
 
-def test_decorated_tool_hooks_list_stored_when_provided():
-    hook = object()
-
-    @tool(hooks=[hook])
-    async def with_hooks() -> None:
-        pass
-
-    assert with_hooks.hooks == [hook]
-
-
 def test_tool_metadata_fields():
     metadata = ToolMetadata(
         name="foo",
@@ -157,7 +150,7 @@ def test_tool_fixed_kwargs_merged_into_invocation():
     async def fixed_kwargs_tool(value: int, permission: str) -> tuple[int, str]:
         return (value, permission)
 
-    result = asyncio.run(fixed_kwargs_tool(10))
+    result = asyncio.run(fixed_kwargs_tool(10))  # type: ignore[call-arg]  # permission autoinjected
     assert result == (10, "admin")
 
 
@@ -178,7 +171,7 @@ def test_tool_fixed_kwargs_multiple_keys():
     async def multi_fixed(a: int, b: int, c: int) -> int:
         return a + b + c
 
-    result = asyncio.run(multi_fixed(c=3))
+    result = asyncio.run(multi_fixed(c=3))  # type: ignore[call-arg]  # c autoinjected
     assert result == 6
 
 
@@ -190,27 +183,19 @@ def test_tool_fixed_kwargs_lambda_evaluated_at_invoke_time():
         return n
 
     counter[0] = 5
-    assert asyncio.run(lambda_fixed_tool()) == 5
+    assert asyncio.run(lambda_fixed_tool()) == 5  # type: ignore[call-arg]  # n autoinjected
     counter[0] = 11
-    assert asyncio.run(lambda_fixed_tool()) == 11
+    assert asyncio.run(lambda_fixed_tool()) == 11  # type: ignore[call-arg]  # n autoinjected
 
 
-def test_tool_fixed_kwargs_async_gen_tool():
+def test_tool_fixed_kwargs_async_gen_tool(collect_async):
     @tool(prefix="fixed-")
     async def yielding_fixed_tool(prefix: str, x: int):
         yield f"{prefix}{x}"
         yield f"{prefix}{x + 1}"
 
-    results = _collect_async(yielding_fixed_tool(x=1))
+    results = collect_async(yielding_fixed_tool(x=1))  # type: ignore[call-arg]  # prefix autoinjected
     assert results == ["fixed-1", "fixed-2"]
-
-
-def test_tool_fixed_kwarg_not_in_signature_raises():
-    with pytest.raises(TypeError, match="fixed kwargs .* are not in function signature"):
-
-        @tool(unknown_param=1)
-        async def no_such_param(x: int) -> int:
-            return x
 
 
 def test_tool_fixed_kwargs_allowed_when_function_has_kwargs():
@@ -276,46 +261,62 @@ def test_tool_lock_serializes_concurrent_calls():
     assert order == [("start", 1), ("end", 1), ("start", 2), ("end", 2)]
 
 
-def _collect_async(agen):
-    async def run():
-        out = []
-        async for x in agen:
-            out.append(x)
-        return out
-
-    return asyncio.run(run())
-
-
 def test_before_invoke_hook_fires_on_coroutine_tool():
     events = []
 
-    async def before(x):
-        events.append(("before", x))
-
-    before.type = ToolHook.BEFORE_INVOKE  # type: ignore[attr-defined]
-
-    @tool(hooks=[before])
+    @tool()
     async def add_one(x: int) -> int:
         return x + 1
+
+    @add_one.before_invoke
+    async def before(x):
+        events.append(("before", x))
 
     asyncio.run(add_one(7))
     assert events == [("before", 7)]
 
 
-def test_on_yield_hook_fires_on_async_gen_tool():
+def test_stacked_decorator_shared_hook_fires_for_both_tools():
+    """Sharing a hook via stacked decorators must fire for both tools."""
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    events = []
+
+    @tool()
+    async def tool_a(x: int) -> int:
+        return x
+
+    @tool()
+    async def tool_b(x: int) -> int:
+        return x
+
+    @tool_a.after_invoke
+    @tool_b.before_invoke
+    async def shared_hook(x):
+        events.append(x)
+
+    async def run():
+        await tool_b._run_hooks(ToolHook.BEFORE_INVOKE, 1)
+        await tool_a._run_hooks(ToolHook.AFTER_INVOKE, 2)
+
+    asyncio.run(run())
+    assert events == [1, 2]
+
+
+def test_on_yield_hook_fires_on_async_gen_tool(collect_async):
     yields_seen = []
 
-    async def on_yield(value):
-        yields_seen.append(value)
-
-    on_yield.type = ToolHook.ON_YIELD        # type: ignore[attr-defined]
-
-    @tool(hooks=[on_yield])
+    @tool()
     async def gen_two():
         yield 10
         yield 20
 
-    _collect_async(gen_two())
+    @gen_two.on_yield
+    async def on_yield(value):
+        yields_seen.append(value)
+
+    collect_async(gen_two())
     assert yields_seen == [10, 20]
 
 
@@ -337,7 +338,7 @@ def test_tool_injects_context_queue_when_var_is_set():
     async def run():
         token = _current_context_queue.set(cq)
         try:
-            return await needs_queue(x=3)
+            return await needs_queue(x=3)  # type: ignore[call-arg]  # memory autoinjected
         finally:
             _current_context_queue.reset(token)
 
@@ -360,7 +361,7 @@ def test_tool_injects_context_pool_when_var_is_set():
     async def run():
         token = _current_context_pool.set(cp)
         try:
-            return await needs_pool(x=7)
+            return await needs_pool(x=7)  # type: ignore[call-arg]  # pool autoinjected
         finally:
             _current_context_pool.reset(token)
 
@@ -456,19 +457,11 @@ def test_async_gen_tool_injects_context_queue():
 
     cq = ContextQueue(limit=5)
 
-    async def run():
-        token = _current_context_queue.set(cq)
-        try:
-            return _collect_async(gen_needs_queue())
-        finally:
-            _current_context_queue.reset(token)
-
-    # Must set ContextVar before collection starts
     async def run_inner():
         token = _current_context_queue.set(cq)
         try:
             out = []
-            async for v in gen_needs_queue():
+            async for v in gen_needs_queue():  # type: ignore[call-arg]  # memory autoinjected
                 out.append(v)
             return out
         finally:
@@ -494,7 +487,7 @@ def test_async_gen_tool_injects_context_pool():
         token = _current_context_pool.set(cp)
         try:
             out = []
-            async for v in gen_needs_pool():
+            async for v in gen_needs_pool():  # type: ignore[call-arg]  # pool autoinjected
                 out.append(v)
             return out
         finally:
@@ -513,5 +506,329 @@ def test_inject_context_deps_handles_unresolvable_hints():
         pass
 
     merged = {"x": 1}
-    result = _inject_context_deps(bad_hints_fn, merged)
+    result = inject_context_deps(bad_hints_fn, merged)
     assert result == {"x": 1}
+
+
+# ---------------------------------------------------------------------------
+# AFTER_INVOKE dispatch (verification tests)
+# ---------------------------------------------------------------------------
+
+
+def test_tool_after_invoke_receives_result():
+    """after_invoke fires with the tool's return value."""
+    received = []
+
+    @tool()
+    async def verify_after_invoke(x: int) -> int:
+        return x * 3
+
+    @verify_after_invoke.after_invoke
+    async def capture(result: int) -> None:
+        received.append(result)
+
+    asyncio.run(verify_after_invoke(x=4))
+    assert received == [12]
+
+
+def test_asyncgen_after_invoke_receives_aggregated_list(collect_async):
+    """after_invoke on AsyncGenTool fires with a list of all yielded values."""
+    received = []
+
+    @tool()
+    async def verify_gen_after_invoke():
+        yield "a"
+        yield "b"
+        yield "c"
+
+    @verify_gen_after_invoke.after_invoke
+    async def capture_gen(values: list) -> None:
+        received.append(values)
+
+    collect_async(verify_gen_after_invoke())
+    assert received == [["a", "b", "c"]]
+
+
+def test_after_invoke_does_not_fire_when_tool_raises():
+    """AFTER_INVOKE must NOT dispatch if the coroutine tool raises."""
+    fired = []
+
+    @tool()
+    async def raising_ai_tool() -> None:
+        raise RuntimeError("boom")
+
+    @raising_ai_tool.after_invoke
+    async def should_not_run(result) -> None:
+        fired.append(result)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        asyncio.run(raising_ai_tool())
+    assert fired == []
+
+
+def test_after_invoke_does_not_fire_when_async_gen_raises(collect_async):
+    """AFTER_INVOKE must NOT dispatch if the async gen tool raises mid-iteration."""
+    fired = []
+
+    @tool()
+    async def raising_gen_tool():
+        yield 1
+        raise RuntimeError("gen boom")
+
+    @raising_gen_tool.after_invoke
+    async def should_not_run_gen(values: list) -> None:
+        fired.append(values)
+
+    with pytest.raises(RuntimeError, match="gen boom"):
+        collect_async(raising_gen_tool())
+    assert fired == []
+
+
+# ---------------------------------------------------------------------------
+# ON_ERROR tests
+# ---------------------------------------------------------------------------
+
+
+def test_on_error_fires_when_tool_raises():
+    """ON_ERROR hook receives the exception when a coroutine tool raises."""
+    received = []
+
+    @tool()
+    async def erroring_tool() -> None:
+        raise ValueError("boom")
+
+    @erroring_tool.on_error
+    async def capture_err(exc) -> None:
+        received.append(exc)
+
+    with pytest.raises(ValueError, match="boom"):
+        asyncio.run(erroring_tool())
+    assert len(received) == 1
+    assert isinstance(received[0], ValueError)
+
+
+def test_on_error_does_not_fire_when_tool_succeeds():
+    """ON_ERROR must NOT fire when the tool returns normally."""
+    fired = []
+
+    @tool()
+    async def happy_tool() -> int:
+        return 42
+
+    @happy_tool.on_error
+    async def on_error_not_called_on_success(exc) -> None:
+        fired.append(exc)
+
+    asyncio.run(happy_tool())
+    assert fired == []
+
+
+def test_after_invoke_does_not_fire_when_tool_raises_with_on_error():
+    """AFTER_INVOKE must NOT fire when the tool raises, even with ON_ERROR registered."""
+    after_fired = []
+    error_fired = []
+
+    @tool()
+    async def raising_both_hooks() -> None:
+        raise RuntimeError("expected")
+
+    @raising_both_hooks.after_invoke
+    async def after_hook(result) -> None:
+        after_fired.append(result)
+
+    @raising_both_hooks.on_error
+    async def error_hook(exc) -> None:
+        error_fired.append(exc)
+
+    with pytest.raises(RuntimeError, match="expected"):
+        asyncio.run(raising_both_hooks())
+    assert after_fired == []
+    assert len(error_fired) == 1
+
+
+def test_on_error_fires_when_async_gen_raises_mid_iteration(collect_async):
+    """ON_ERROR fires when async gen raises mid-iteration; AFTER_INVOKE does not."""
+    error_received = []
+    after_fired = []
+
+    @tool()
+    async def partial_gen():
+        yield 1
+        raise RuntimeError("mid-gen error")
+
+    @partial_gen.on_error
+    async def capture_gen_err(exc) -> None:
+        error_received.append(exc)
+
+    @partial_gen.after_invoke
+    async def after_gen(values: list) -> None:
+        after_fired.append(values)
+
+    with pytest.raises(RuntimeError, match="mid-gen error"):
+        collect_async(partial_gen())
+    assert len(error_received) == 1
+    assert isinstance(error_received[0], RuntimeError)
+    assert after_fired == []
+
+
+# ---------------------------------------------------------------------------
+# AFTER_INVOKE fires on early break (AsyncGenTool)
+# ---------------------------------------------------------------------------
+
+
+def test_after_invoke_fires_with_partial_list_on_early_break():
+    """AFTER_INVOKE fires with partial collected values when caller breaks early."""
+    received = []
+
+    @tool()
+    async def three_values():
+        yield 10
+        yield 20
+        yield 30
+
+    @three_values.after_invoke
+    async def capture_partial_break(values: list) -> None:
+        received.append(list(values))
+
+    async def run_break():
+        async for v in three_values():
+            if v == 10:
+                break  # stop after first value
+
+    asyncio.run(run_break())
+    assert received == [[10]]
+
+
+# ---------------------------------------------------------------------------
+# Lock behaviour: lock covers only fn, AFTER_INVOKE is outside lock
+# ---------------------------------------------------------------------------
+
+
+def test_lock_covers_fn_not_after_invoke():
+    """With lock=True, the lock is released before AFTER_INVOKE runs, so a second
+    concurrent call can acquire the lock while the first call's AFTER_INVOKE is
+    still executing."""
+    order = []
+
+    @tool(lock=True)
+    async def locked_tool(x: int) -> int:
+        order.append(("fn_start", x))
+        await asyncio.sleep(0.02)
+        order.append(("fn_end", x))
+        return x
+
+    @locked_tool.after_invoke
+    async def slow_after(result: int) -> None:
+        order.append(("after_start", result))
+        await asyncio.sleep(0.05)
+        order.append(("after_end", result))
+
+    async def run():
+        await asyncio.gather(locked_tool(1), locked_tool(2))
+
+    asyncio.run(run())
+    # fn calls must be serialized (no overlap between call 1 and call 2's fn)
+    fn1_end = order.index(("fn_end", 1))
+    fn2_start = order.index(("fn_start", 2))
+    assert fn1_end < fn2_start
+    # after_invoke of call 1 must start AFTER fn_end of call 1
+    after1_start = order.index(("after_start", 1))
+    assert fn1_end < after1_start
+    # fn_start of call 2 must come BEFORE after_end of call 1 (lock released before after)
+    after1_end = order.index(("after_end", 1))
+    assert fn2_start < after1_end
+
+
+# ---------------------------------------------------------------------------
+# Tag system tests
+# ---------------------------------------------------------------------------
+
+
+def test_tool_tags_set_from_decorator():
+    """@tool(tags=[...]) stores the frozenset on the instance."""
+
+    @tool(tags=["foo", "bar"])
+    async def tagged_tool() -> None:
+        pass
+
+    assert tagged_tool.tags == frozenset({"foo", "bar"})
+
+
+def test_tool_no_tags_gives_empty_frozenset():
+    """@tool without tags gives an empty frozenset."""
+
+    @tool()
+    async def untagged_tool() -> None:
+        pass
+
+    assert untagged_tool.tags == frozenset()
+
+
+def test_global_hook_with_tags_fires_only_for_matching_tools():
+    """A global hook with tags only fires for tools that share at least one tag."""
+    from pygents.hooks import hook
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    fired_for = []
+
+    @tool(tags=["foo"])
+    async def foo_tool() -> int:
+        return 1
+
+    @tool(tags=["bar"])
+    async def bar_tool() -> int:
+        return 2
+
+    @hook(ToolHook.AFTER_INVOKE, tags={"foo"})
+    async def foo_only_hook(result: int) -> None:
+        fired_for.append(result)
+
+    asyncio.run(foo_tool())
+    asyncio.run(bar_tool())
+    assert fired_for == [1]  # fired only for foo_tool
+
+
+def test_global_hook_without_tags_fires_for_all_tools():
+    """A global hook without tags fires for all tools regardless of their tags."""
+    from pygents.hooks import hook
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    fired_for = []
+
+    @tool(tags=["alpha"])
+    async def alpha_tool() -> int:
+        return 10
+
+    @tool()
+    async def no_tag_tool() -> int:
+        return 20
+
+    @hook(ToolHook.AFTER_INVOKE)
+    async def fires_for_all(result: int) -> None:
+        fired_for.append(result)
+
+    asyncio.run(alpha_tool())
+    asyncio.run(no_tag_tool())
+    assert fired_for == [10, 20]
+
+
+def test_global_hook_with_tags_does_not_fire_for_untagged_tool():
+    """A tagged global hook does not fire for a tool with no tags."""
+    from pygents.hooks import hook
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+    fired = []
+
+    @tool()
+    async def untagged_for_tag_test() -> int:
+        return 99
+
+    @hook(ToolHook.AFTER_INVOKE, tags={"special"})
+    async def special_hook(result: int) -> None:
+        fired.append(result)
+
+    asyncio.run(untagged_for_tag_test())
+    assert fired == []

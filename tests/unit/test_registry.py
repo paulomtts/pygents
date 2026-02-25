@@ -18,14 +18,14 @@ AgentRegistry:
   AR5  get(name): in _registry -> return agent
 
 HookRegistry:
-  HR1  clear() -> _registry = {}
-  HR2  register(hook, name=None, hook_type=None): hook_name = name or __name__ or "hook"
-  HR3  register: different hook already under hook_name -> ValueError "already registered"
-  HR4  register: same hook instance again -> no error (overwrite)
-  HR5  register(..., hook_type=X) -> hook.hook_type = X
+  HR1  clear() -> _registry = {}; _global_hooks = []
+  HR2  register(item): key = getattr(item, _key_attr) i.e. __name__; used by wrap() and @hook()
+  HR3  register: different hook already under key -> ValueError "already registered"
+  HR4  register: same hook instance again -> no error (allow_reregister)
+  HR5  register_global(hook): register(hook) then append to _global_hooks
   HR6  get(name): not in _registry -> UnregisteredHookError
   HR7  get(name): in _registry -> return hook
-  HR8  get_by_type(hook_type, hooks) -> first h in hooks with hook_type match, else None
+  HR8  get_by_type(hook_type, hooks) -> list of all hooks in hooks matching hook_type, in order
 """
 
 import pytest
@@ -127,16 +127,6 @@ def test_hook_registry_register_and_get():
     assert retrieved is my_hook
 
 
-def test_hook_registry_register_with_custom_name():
-    HookRegistry.clear()
-
-    async def some_hook():
-        pass
-
-    HookRegistry.register(some_hook, name="custom_name")
-    retrieved = HookRegistry.get("custom_name")
-    assert retrieved is some_hook
-
 
 def test_hook_registry_get_missing_raises_unregistered_hook_error():
     HookRegistry.clear()
@@ -153,9 +143,11 @@ def test_hook_registry_register_duplicate_raises_value_error():
     async def other_hook():
         pass
 
+    other_hook.__name__ = "duplicate_hook"
+
     HookRegistry.register(duplicate_hook)
     with pytest.raises(ValueError, match=r"'duplicate_hook' already registered"):
-        HookRegistry.register(other_hook, name="duplicate_hook")
+        HookRegistry.register(other_hook)
 
 
 def test_hook_registry_reregister_same_hook_does_not_raise():
@@ -169,15 +161,15 @@ def test_hook_registry_reregister_same_hook_does_not_raise():
     assert HookRegistry.get("same_hook") is same_hook
 
 
-def test_hook_registry_register_with_hook_type_stores_and_findable():
-    from pygents.hooks import TurnHook
+def test_hook_decorator_sets_type_and_get_by_type_finds_it():
+    from pygents.hooks import TurnHook, hook
 
     HookRegistry.clear()
 
+    @hook(TurnHook.BEFORE_RUN)
     async def before_run(turn):
         pass
 
-    HookRegistry.register(before_run, hook_type=TurnHook.BEFORE_RUN)
     assert getattr(before_run, "type", None) == TurnHook.BEFORE_RUN
     found = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [before_run])
     assert found == [before_run]
@@ -271,3 +263,49 @@ def test_get_by_type_returns_empty_for_typeless_hook():
     # No .type attribute set — getattr returns None → matches() returns False
     result = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [typeless_hook])
     assert result == []
+
+
+# ---------------------------------------------------------------------------
+# HookRegistry.wrap
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_plain_fn_creates_and_registers_hook():
+    from pygents.hooks import TurnHook
+
+    HookRegistry.clear()
+
+    async def my_plain_hook(turn):
+        pass
+
+    wrapped = HookRegistry.wrap(my_plain_hook, TurnHook.BEFORE_RUN)
+    assert wrapped is not my_plain_hook
+    assert wrapped.fn is my_plain_hook
+    assert wrapped.type == TurnHook.BEFORE_RUN
+    assert HookRegistry.get("my_plain_hook") is wrapped
+
+
+def test_wrap_already_wrapped_hook_returns_same_object():
+    from pygents.hooks import TurnHook, hook
+
+    HookRegistry.clear()
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def existing_hook(turn):
+        pass
+
+    result = HookRegistry.wrap(existing_hook, TurnHook.BEFORE_RUN)
+    assert result is existing_hook
+
+
+def test_wrap_previously_registered_fn_reuses_wrapper():
+    from pygents.hooks import TurnHook
+
+    HookRegistry.clear()
+
+    async def reusable_hook(turn):
+        pass
+
+    first = HookRegistry.wrap(reusable_hook, TurnHook.BEFORE_RUN)
+    second = HookRegistry.wrap(reusable_hook, TurnHook.BEFORE_RUN)
+    assert first is second

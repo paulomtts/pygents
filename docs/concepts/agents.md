@@ -182,8 +182,6 @@ Agent hooks fire at specific points during the run loop. Hooks are stored as a l
 | `BEFORE_TURN` | Before consuming next turn from queue | `(agent)` |
 | `AFTER_TURN` | After turn fully processed | `(agent, turn)` |
 | `ON_TURN_VALUE` | After routing (value already stored in `context_queue`/`context_pool`), before yielding to the caller | `(agent, turn, value)` |
-| `ON_TURN_ERROR` | Turn raised an exception | `(agent, turn, exception)` |
-| `ON_TURN_TIMEOUT` | Turn timed out | `(agent, turn)` |
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
 | `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
 | `ON_PAUSE` | When the run loop hits a paused gate | `(agent)` |
@@ -196,7 +194,7 @@ from pygents import Agent, AgentHook, hook
 
 @hook(AgentHook.AFTER_TURN)
 async def on_complete(agent, turn):
-    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.stop_reason}")
+    print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.metadata.stop_reason}")
 
 agent = Agent("my_agent", "Description", [my_tool])
 agent.hooks.append(on_complete)

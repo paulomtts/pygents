@@ -25,8 +25,8 @@ async def write_file(path: str, content: str) -> None:
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `lock` | `False` | If `True`, concurrent runs of this tool are serialized via `asyncio.Lock` |
-| `hooks` | `None` | Optional list of hooks (e.g. `@hook(ToolHook.BEFORE_INVOKE)`). Applied on every invocation. |
+| `lock` | `False` | If `True`, concurrent runs of this tool are serialized via `asyncio.Lock`. The lock covers only the actual function call (and, for async-gen tools, the iteration loop including `ON_YIELD`). Lifecycle hooks (`BEFORE_INVOKE`, `AFTER_INVOKE`, `ON_ERROR`) run outside the lock. |
+| `tags` | `None` | A list or frozenset of strings. Tags let global `@hook` declarations filter which tools they fire for — a global hook with `tags={"foo"}` only fires for tools tagged `"foo"`. See [Tag filtering](#tag-filtering). |
 | `**kwargs` | — | Any other keyword arguments are merged into every invocation. Call-time kwargs override these (with a warning). |
 
 !!! info "Opt-in Locking"
@@ -107,31 +107,78 @@ The sections below cover advanced configuration. If you're getting started, cont
 
 ## Hooks
 
-Tool hooks fire during invocation. Pass a list of hooks; each must have `type` (e.g. from `@hook(ToolHook.BEFORE_INVOKE)`):
+Tool hooks fire during invocation. Attach them via method decorators after the tool is defined:
 
 | Hook | When | Args |
 |------|------|------|
-| `BEFORE_INVOKE` | About to call the tool | `(*args, **kwargs)` |
-| `ON_YIELD` | Before each yielded value (async generator tools only) | `(value)` |
-| `AFTER_INVOKE` | After tool returns or finishes yielding | `(value)` — the return value (coroutine) or list of all yielded values (async gen) |
+| `BEFORE_INVOKE` | About to call the tool | `(**kwargs)` — same kwargs as the tool's own signature |
+| `ON_YIELD` | Each yielded value (async generator tools only) | `(value)` |
+| `AFTER_INVOKE` | After tool returns or finishes yielding | `(result)` — the return value (coroutine) or list of all yielded values (async gen); fires with partial list on early break; not dispatched if the tool raises |
+| `ON_ERROR` | Tool raised an exception | `(exc=exc)` — the exception; not dispatched on success; `AFTER_INVOKE` does not fire when `ON_ERROR` fires |
 
 ```python
-from pygents import tool, hook, ToolHook
+from pygents import tool
 
-@hook(ToolHook.BEFORE_INVOKE)
-async def audit(*args, **kwargs):
-    print(f"Called with {kwargs}")
-
-@hook(ToolHook.AFTER_INVOKE)
-async def log_result(value):
-    print(f"Result: {value}")
-
-@tool(hooks=[audit, log_result])
+@tool()
 async def my_tool(x: int) -> int:
     return x * 2
+
+@my_tool.before_invoke
+async def audit(x: int) -> None:
+    print(f"Called with x={x}")
+
+@my_tool.after_invoke
+async def log_result(result: int) -> None:
+    print(f"Result: {result}")
+
+@my_tool.on_error
+async def handle_error(exc: Exception) -> None:
+    print(f"Tool failed: {exc}")
 ```
 
-Tool hooks are registered in `HookRegistry` and apply to **all** invocations of that tool. Hooks are also accessible at runtime via `tool_instance.hooks`. Exceptions in hooks propagate.
+Use `@my_tool.on_yield` for async generator tools. Hooks attached this way fire only for that specific tool instance. For process-wide hooks that fire for every tool, use `@hook(ToolHook.*)` (see [Hooks](hooks.md)). Exceptions in hooks propagate.
+
+## Tag filtering
+
+Tags let you scope global `@hook` declarations to a subset of tools without writing conditional logic inside the hook body.
+
+Assign tags at decoration time:
+
+```python
+@tool(tags=["storage", "io"])
+async def write_db(record: dict) -> None:
+    ...
+
+@tool(tags=["io"])
+async def read_file(path: str) -> str:
+    ...
+
+@tool()
+async def compute(x: int) -> int:
+    ...
+```
+
+Then filter global hooks with `tags=`:
+
+```python
+from pygents import hook, ToolHook
+
+@hook(ToolHook.AFTER_INVOKE, tags={"io"})
+async def log_io_ops(result) -> None:
+    print(f"I/O op returned: {result}")
+```
+
+`log_io_ops` fires after `write_db` and `read_file` (both tagged `"io"`), but **not** after `compute` (no tags). The match is **OR semantics**: the hook fires if the tool has at least one tag in the hook's `tags` set.
+
+A global hook with **no** `tags` argument fires for all tools, regardless of whether they have tags:
+
+```python
+@hook(ToolHook.AFTER_INVOKE)
+async def log_all(result) -> None:
+    print(f"Any tool returned: {result}")
+```
+
+Instance-scoped hooks (`@my_tool.after_invoke`) are unaffected by tag filtering — they always fire for their specific tool.
 
 ## Registry
 
@@ -174,6 +221,7 @@ class Tool(Protocol):
     fn: Callable[..., Coroutine | AsyncIterator]
     hooks: list[Hook]
     lock: asyncio.Lock | None
+    tags: frozenset[str]
     def __call__(self, *args, **kwargs) -> Any: ...
 ```
 

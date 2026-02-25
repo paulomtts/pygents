@@ -3,9 +3,9 @@ Tests for ContextQueue, driven by the following decision table.
 
 Decision table for ContextQueue
 ------------------------------------
-__init__(limit, hooks=None):
+__init__(limit):
   I1  limit < 1 -> ValueError "limit must be >= 1"
-  I2  limit >= 1 -> _items = deque(maxlen=limit); hooks = list(hooks) or []
+  I2  limit >= 1 -> _items = deque(maxlen=limit); hooks = []
 
 limit/items properties: maxlen; list(_items).
 
@@ -58,7 +58,7 @@ def test_init_sets_limit():
 
 
 def test_init_with_empty_hooks():
-    mem = ContextQueue(5, hooks=[])
+    mem = ContextQueue(5)
     assert mem.hooks == []
     assert mem.limit == 5
 
@@ -76,7 +76,7 @@ def test_append_rejects_non_context_item():
     async def _():
         mem = ContextQueue(3)
         with pytest.raises(TypeError, match="ContextItem"):
-            await mem.append("raw string")
+            await mem.append("raw string")  # type: ignore[arg-type]
 
     asyncio.run(_())
 
@@ -85,7 +85,7 @@ def test_append_rejects_non_context_item_mixed():
     async def _():
         mem = ContextQueue(3)
         with pytest.raises(TypeError, match="ContextItem"):
-            await mem.append(_ci("a"), "not an item")
+            await mem.append(_ci("a"), "not an item")  # type: ignore[arg-type]
 
     asyncio.run(_())
 
@@ -96,7 +96,7 @@ def test_append_state_unchanged_on_partial_type_error():
         await mem.append(_ci("a"))
         assert len(mem) == 1
         with pytest.raises(TypeError):
-            await mem.append(_ci("b"), "not-a-context-item")
+            await mem.append(_ci("b"), "not-a-context-item")  # type: ignore[arg-type]
         assert len(mem) == 1
 
     asyncio.run(_())
@@ -147,13 +147,14 @@ def test_before_append_is_called_on_every_append():
     HookRegistry.clear()
     calls = []
 
-    async def spy(incoming, current):
+    async def spy(queue, incoming, current):
         calls.append((list(incoming), list(current)))
 
     spy.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(5, hooks=[spy])
+        mem = ContextQueue(5)
+        mem.hooks.append(spy)  # type: ignore[arg-type]
         await mem.append(_ci("a"))
         await mem.append(_ci("b"))
         assert calls == [([_ci("a")], []), ([_ci("b")], [_ci("a")])]
@@ -163,13 +164,14 @@ def test_before_append_is_called_on_every_append():
 
 
 def test_before_append_mutation_of_snapshot_does_not_affect_queue():
-    async def mutating(incoming, current):
+    async def mutating(queue, incoming, current):
         current.clear()
 
     mutating.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(5, hooks=[mutating])
+        mem = ContextQueue(5)
+        mem.hooks.append(mutating)  # type: ignore[arg-type]
         await mem.append(_ci("a"), _ci("b"))
         assert mem.items == [_ci("a"), _ci("b")]
 
@@ -179,13 +181,14 @@ def test_before_append_mutation_of_snapshot_does_not_affect_queue():
 def test_after_append_hook_called():
     seen = []
 
-    async def after_spy(incoming, current):
+    async def after_spy(queue, incoming, current):
         seen.append((list(incoming), list(current)))
 
     after_spy.type = ContextQueueHook.AFTER_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(5, hooks=[after_spy])
+        mem = ContextQueue(5)
+        mem.hooks.append(after_spy)  # type: ignore[arg-type]
         await mem.append(_ci("a"))
         assert seen == [([_ci("a")], [_ci("a")])]
         await mem.append(_ci("b"), _ci("c"))
@@ -216,11 +219,11 @@ def test_before_clear_hook_fires_with_current_items():
     fired = []
 
     @hook(ContextQueueHook.BEFORE_CLEAR)
-    async def before_clear(items):
+    async def before_clear(queue, items):
         fired.append(list(items))
 
     async def _():
-        mem = ContextQueue(5, hooks=[before_clear])
+        mem = ContextQueue(5)
         await mem.append(_ci("a"), _ci("b"))
         await mem.clear()
         assert fired == [[_ci("a"), _ci("b")]]
@@ -229,16 +232,16 @@ def test_before_clear_hook_fires_with_current_items():
     asyncio.run(_())
 
 
-def test_after_clear_hook_fires_with_empty_list():
+def test_after_clear_hook_fires_with_empty_queue():
     HookRegistry.clear()
     fired = []
 
     @hook(ContextQueueHook.AFTER_CLEAR)
-    async def after_clear(items):
-        fired.append(list(items))
+    async def after_clear(queue):
+        fired.append(list(queue.items))
 
     async def _():
-        mem = ContextQueue(5, hooks=[after_clear])
+        mem = ContextQueue(5)
         await mem.append(_ci("a"))
         await mem.clear()
         assert fired == [[]]
@@ -251,11 +254,11 @@ def test_on_evict_hook_fires_when_appending_to_full_queue():
     evicted = []
 
     @hook(ContextQueueHook.ON_EVICT)
-    async def on_evict(item):
+    async def on_evict(queue, item):
         evicted.append(item)
 
     async def _():
-        mem = ContextQueue(2, hooks=[on_evict])
+        mem = ContextQueue(2)
         await mem.append(_ci("a"), _ci("b"))
         assert evicted == []
         await mem.append(_ci("c"))
@@ -272,11 +275,11 @@ def test_on_evict_not_fired_when_queue_not_full():
     evicted = []
 
     @hook(ContextQueueHook.ON_EVICT)
-    async def on_evict_nf(item):
+    async def on_evict_nf(queue, item):
         evicted.append(item)
 
     async def _():
-        mem = ContextQueue(5, hooks=[on_evict_nf])
+        mem = ContextQueue(5)
         await mem.append(_ci("a"), _ci("b"), _ci("c"))
         assert evicted == []
 
@@ -361,13 +364,14 @@ def test_branch_inherits_hooks():
     HookRegistry.clear()
     calls = []
 
-    async def spy(incoming, current):
+    async def spy(queue, incoming, current):
         calls.append((list(incoming), list(current)))
 
     spy.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(5, hooks=[spy])
+        mem = ContextQueue(5)
+        mem.hooks.append(spy)  # type: ignore[arg-type]
         await mem.append(_ci("a"))
         child = mem.branch()
         await child.append(_ci("b"))
@@ -378,13 +382,14 @@ def test_branch_inherits_hooks():
 
 
 def test_branch_overrides_hooks():
-    async def keep_last(incoming, current):
+    async def keep_last(queue, incoming, current):
         pass
 
     keep_last.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(5, hooks=[keep_last])
+        mem = ContextQueue(5)
+        mem.hooks.append(keep_last)  # type: ignore[arg-type]
         child = mem.branch(hooks=[])
         await child.append(_ci("a"))
         await child.append(_ci("b"))
@@ -394,13 +399,14 @@ def test_branch_overrides_hooks():
 
 
 def test_branch_hooks_none_gives_empty_hooks():
-    async def my_hook(incoming, current):
+    async def my_hook(queue, incoming, current):
         pass
 
     my_hook.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(5, hooks=[my_hook])
+        mem = ContextQueue(5)
+        mem.hooks.append(my_hook)  # type: ignore[arg-type]
         child = mem.branch(hooks=None)
         assert child.hooks == []
 
@@ -408,19 +414,20 @@ def test_branch_hooks_none_gives_empty_hooks():
 
 
 def test_branch_with_explicit_hooks_uses_them():
-    async def parent_compact(incoming, current):
+    async def parent_compact(queue, incoming, current):
         pass
 
-    async def child_compact(incoming, current):
+    async def child_compact(queue, incoming, current):
         pass
 
     parent_compact.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
     child_compact.type = ContextQueueHook.BEFORE_APPEND  # type: ignore[attr-defined]
 
     async def _():
-        mem = ContextQueue(5, hooks=[parent_compact])
+        mem = ContextQueue(5)
+        mem.hooks.append(parent_compact)  # type: ignore[arg-type]
         await mem.append(_ci("a"), _ci("b"), _ci("c"))
-        child = mem.branch(hooks=[child_compact])
+        child = mem.branch(hooks=[child_compact])  # type: ignore[arg-type]
         await child.append(_ci("d"))
         assert child.items == [_ci("a"), _ci("b"), _ci("c"), _ci("d")]
         await mem.append(_ci("x"))
@@ -529,11 +536,12 @@ def test_roundtrip_with_before_append_hook():
     HookRegistry.clear()
 
     @hook(ContextQueueHook.BEFORE_APPEND)
-    async def keep_last_two(incoming, current):
+    async def keep_last_two(queue, incoming, current):
         pass
 
     async def _():
-        mem = ContextQueue(5, hooks=[keep_last_two])
+        mem = ContextQueue(5)
+        mem.hooks.append(keep_last_two)
         await mem.append(_ci("a"), _ci("b"), _ci("c"), _ci("d"), _ci("e"))
         await mem.append(_ci("f"))
         assert mem.items == [_ci("b"), _ci("c"), _ci("d"), _ci("e"), _ci("f")]
@@ -552,10 +560,11 @@ def test_from_dict_restored_hooks_fire():
     fired = []
 
     @hook(ContextQueueHook.BEFORE_APPEND)
-    async def cq_restored_hook(incoming, current):
+    async def cq_restored_hook(queue, incoming, current):
         fired.append((list(incoming), list(current)))
 
-    mem = ContextQueue(5, hooks=[cq_restored_hook])
+    mem = ContextQueue(5)
+    mem.hooks.append(cq_restored_hook)
     data = mem.to_dict()
     assert "before_append" in data["hooks"]
 
@@ -615,3 +624,26 @@ def test_history_empty_queue():
     q = ContextQueue(5)
     assert q.history() == ""
     assert q.history(last=3) == ""
+
+
+# ---------------------------------------------------------------------------
+# ContextQueueHook queue-reference verification
+# ---------------------------------------------------------------------------
+
+
+def test_before_append_hook_receives_queue_as_first_arg():
+    """BEFORE_APPEND hook receives the queue as first arg, enabling inspection."""
+    HookRegistry.clear()
+    received_queues = []
+
+    @hook(ContextQueueHook.BEFORE_APPEND)
+    async def capture_queue(queue, incoming, current):
+        received_queues.append(queue)
+
+    async def _():
+        q = ContextQueue(5)
+        await q.append(_ci("a"))
+        assert received_queues == [q]
+        assert received_queues[0].limit == 5
+
+    asyncio.run(_())

@@ -1,12 +1,14 @@
 class SafeExecutionError(Exception):
     """
-    Raised when a method is called or a property is set while the turn is running.
+    Raised when a method is called or a property is set while the turn is running,
+    or when mutating Agent properties while the agent is running or paused.
     """
 
 
 class WrongRunMethodError(Exception):
     """
-    Raised when run() is used for a yielding tool (use run_yielding()), or run_yielding() is used for a single-value tool (use run()).
+    Raised when returning() is used for a yielding tool (use yielding()), or
+    yielding() is used for a single-value tool (use returning()).
     """
 
 

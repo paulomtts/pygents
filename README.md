@@ -46,6 +46,12 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
 - **Hooks** — `@hook(hook_type, lock=..., **fixed_kwargs)` decorator; hooks stored as a list and selected by type; turn, agent, tool, and memory hooks; same fixed_kwargs and lock options as tools
 - **Serialization** — `to_dict()` / `from_dict()` for turns and agents
 
+## Design Decisions
+
+**Agent/Turn hook boundary** — `TurnHook` covers events fired by the Turn itself (`BEFORE_RUN`, `AFTER_RUN`, `ON_TIMEOUT`, `ON_ERROR`, `ON_COMPLETE`). `AgentHook` covers agent-loop events (`BEFORE_TURN`, `AFTER_TURN`, `ON_TURN_VALUE`, `BEFORE_PUT`, `AFTER_PUT`, `ON_PAUSE`, `ON_RESUME`). `ON_TURN_VALUE` stays on Agent because it fires after routing (agent logic). Turn-lifecycle hooks can be registered on an agent via `agent.turn_hooks` (or the `@agent.on_error` / `@agent.on_timeout` / `@agent.on_complete` decorators) and are automatically propagated to every turn the agent runs.
+
+**Hook attachment style** — Hooks are attached via method decorators on the instance (`@agent.before_turn`, `@turn.on_complete`, `@my_tool.before_invoke`) rather than constructor parameters. This keeps the API surface explicit and enables IDE autocompletion of hook signatures.
+
 ## Docs
 
 Full documentation: `uv run mkdocs serve`. MkDocs is an optional dependency—install with `pip install -e ".[docs]"` (or use `uv run` as above) so the library itself does not depend on it.

@@ -8,11 +8,6 @@ safe_execution(func):
   SE2  _is_running is True -> SafeExecutionError with func.__name__ and "running"
   SE3  self has no _is_running -> getattr returns False -> same as SE1
 
-validate_fixed_kwargs(fn, fixed_kwargs, kind):
-  V1   fn has **kwargs (VAR_KEYWORD) -> no raise
-  V2   fn has no **kwargs and fixed key not in params -> TypeError
-  V3   All fixed keys in params -> no raise
-
 eval_args(args): each item callable (_function_type) -> call and use return value; else pass through.
 eval_kwargs(kwargs): same per value, keys unchanged.
 
@@ -21,7 +16,7 @@ merge_kwargs(fixed_kwargs, call_kwargs, label):
   MK2  key in call_kwargs also in evaluated -> log.warning
   MK3  return {**evaluated, **call_kwargs} (call overrides)
 
-hooks_by_type_for_serialization(hooks):
+serialize_hooks_by_type(hooks):
   HT1  hook has no hook_type or None -> skipped
   HT2  hook_type has .value (enum) -> key = hook_type.value
   HT3  hook_type no .value -> key = str(hook_type)
@@ -39,9 +34,9 @@ from pygents.utils import (
     eval_args,
     eval_kwargs,
     merge_kwargs,
+    rebuild_hooks_from_serialization,
     safe_execution,
     serialize_hooks_by_type,
-    validate_fixed_kwargs,
 )
 
 
@@ -162,41 +157,6 @@ def test_eval_args_calls_at_eval_time():
     assert eval_args([make]) == [2]
 
 
-# --- validate_fixed_kwargs -----------------------------------------------------------
-
-
-def test_validate_fixed_kwargs_all_keys_in_signature_passes():
-    def fn(a: int, b: str) -> None:
-        pass
-
-    validate_fixed_kwargs(fn, {"a": 1, "b": "x"})
-
-
-def test_validate_fixed_kwargs_key_not_in_signature_raises():
-    def fn(x: int) -> None:
-        pass
-
-    with pytest.raises(
-        TypeError, match="fixed kwargs .* are not in function signature"
-    ):
-        validate_fixed_kwargs(fn, {"x": 1, "unknown": 2})
-
-
-def test_validate_fixed_kwargs_allowed_when_function_has_kwargs():
-    def fn(x: int, **kwargs) -> None:
-        pass
-
-    validate_fixed_kwargs(fn, {"x": 1, "extra": 2})
-
-
-def test_validate_fixed_kwargs_kind_in_error_message():
-    def fn(x: int) -> None:
-        pass
-
-    with pytest.raises(TypeError, match="Hook .* fixed kwargs"):
-        validate_fixed_kwargs(fn, {"bad": 1}, kind="Hook")
-
-
 # --- merge_kwargs --------------------------------------------------------------------
 
 
@@ -212,28 +172,64 @@ def test_merge_kwargs_override_logs_warning(caplog):
     assert "my_label" in caplog.text
 
 
-# --- hooks_by_type_for_serialization --------------------------------------------------
+# --- serialize_hooks_by_type ----------------------------------------------------------
 
 
-def test_hooks_by_type_for_serialization_empty():
+def test_serialize_hooks_by_type_empty():
     assert serialize_hooks_by_type([]) == {}
 
 
-def test_hooks_by_type_for_serialization_uses_enum_value_and_name():
+def test_serialize_hooks_by_type_uses_enum_value_and_name():
     hook1 = type("H", (), {"type": TurnHook.BEFORE_RUN, "__name__": "my_hook"})()
     result = serialize_hooks_by_type([hook1])
     assert result == {"before_run": ["my_hook"]}
 
 
-def test_hooks_by_type_for_serialization_skips_hook_without_type():
+def test_serialize_hooks_by_type_skips_hook_without_type():
     hook_no_type = type("H", (), {"__name__": "anonymous"})()
     assert serialize_hooks_by_type([hook_no_type]) == {}
 
 
-def test_hooks_by_type_for_serialization_name_fallback():
+def test_serialize_hooks_by_type_name_fallback():
     class E:
         value = "ev"
 
     hook_no_name = type("H", (), {"type": E()})()
     result = serialize_hooks_by_type([hook_no_name])
     assert result == {"ev": ["hook"]}
+
+
+# --- rebuild_hooks_from_serialization --------------------------------------------------
+
+
+def test_rebuild_hooks_from_serialization_returns_registered_hooks():
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+
+    async def my_rebuild_hook(turn):
+        pass
+
+    wrapped = HookRegistry.wrap(my_rebuild_hook, TurnHook.BEFORE_RUN)
+    hooks_data = {"before_run": ["my_rebuild_hook"]}
+    result = rebuild_hooks_from_serialization(hooks_data)
+    assert len(result) == 1
+    assert result[0] is wrapped
+
+
+def test_rebuild_hooks_from_serialization_deduplicates_by_name():
+    from pygents.registry import HookRegistry
+
+    HookRegistry.clear()
+
+    async def dedup_hook(turn):
+        pass
+
+    wrapped = HookRegistry.wrap(dedup_hook, TurnHook.BEFORE_RUN)
+    hooks_data = {
+        "before_run": ["dedup_hook"],
+        "after_run": ["dedup_hook"],
+    }
+    result = rebuild_hooks_from_serialization(hooks_data)
+    assert len(result) == 1
+    assert result[0] is wrapped
