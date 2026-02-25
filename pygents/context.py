@@ -40,7 +40,7 @@ class ContextItem[T]:
         )
 
 
-class ContextQueue:
+class ContextQueue[T]:
     """
     A bounded, branchable memory window.
 
@@ -63,7 +63,7 @@ class ContextQueue:
     ) -> None:
         if limit < 1:
             raise ValueError("limit must be >= 1")
-        self._items: deque[ContextItem[Any]] = deque(maxlen=limit)
+        self._items: deque[ContextItem[T]] = deque(maxlen=limit)
         self.tags: frozenset[str] = frozenset(tags or [])
         self.hooks: list[Hook] = []
 
@@ -74,11 +74,11 @@ class ContextQueue:
         return self._items.maxlen  # type: ignore[return-value]
 
     @property
-    def items(self) -> list[ContextItem[Any]]:
+    def items(self) -> list[ContextItem[T]]:
         return list(self._items)
 
     @items.setter
-    def items(self, items: list[ContextItem[Any]]) -> None:
+    def items(self, items: list[ContextItem[T]]) -> None:
         self._items.clear()
         self._items.extend(items)
 
@@ -185,7 +185,7 @@ class ContextQueue:
             _source_tags=self.tags
         )
 
-    async def append(self, *items: ContextItem[Any]) -> None:
+    async def append(self, *items: ContextItem[T]) -> None:
         """Add one or more ContextItems. Oldest items are evicted when full.
 
         Raises TypeError if any item is not a ContextItem. BEFORE_APPEND
@@ -234,7 +234,7 @@ class ContextQueue:
         self,
         limit: int | None = None,
         hooks: list[Hook] | None = ...,  # type: ignore[assignment]
-    ) -> ContextQueue:
+    ) -> "ContextQueue[T]":
         """
         Create a child context queue that starts with a snapshot of this
         context queue's current state.
@@ -257,7 +257,7 @@ class ContextQueue:
     def __len__(self) -> int:
         return len(self._items)
 
-    def __iter__(self) -> Iterator[ContextItem[Any]]:
+    def __iter__(self) -> Iterator[ContextItem[T]]:
         return iter(self._items)
 
     def __bool__(self) -> bool:
@@ -277,7 +277,7 @@ class ContextQueue:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> ContextQueue:
+    def from_dict(cls, data: dict[str, Any]) -> "ContextQueue[Any]":
         cq = cls(limit=data["limit"], tags=data.get("tags", []))
         for raw in data.get("items", []):
             cq._items.append(ContextItem.from_dict(raw))
@@ -285,7 +285,7 @@ class ContextQueue:
         return cq
 
 
-class ContextPool:
+class ContextPool[T]:
     """
     A collection of context items, optionally bounded by size.
 
@@ -304,7 +304,7 @@ class ContextPool:
     def __init__(self, limit: int | None = None, tags: list[str] | frozenset[str] | None = None) -> None:
         if limit is not None and limit < 1:
             raise ValueError("limit must be >= 1")
-        self._items: dict[str, ContextItem[Any]] = {}
+        self._items: dict[str, ContextItem[T]] = {}
         self._limit = limit
         self.tags: frozenset[str] = frozenset(tags or [])
         self.hooks: list[Hook] = []
@@ -316,7 +316,7 @@ class ContextPool:
         return self._limit
 
     @property
-    def items(self) -> list[ContextItem[Any]]:
+    def items(self) -> list[ContextItem[T]]:
         return list(self._items.values())
 
     def catalogue(self) -> str:
@@ -467,7 +467,7 @@ class ContextPool:
 
     # -- mutation -------------------------------------------------------------
 
-    async def add(self, item: ContextItem[Any]) -> None:
+    async def add(self, item: ContextItem[T]) -> None:
         if item.id is None or item.description is None:
             raise ValueError(
                 "ContextPool requires a ContextItem with both 'id' and 'description' set"
@@ -484,7 +484,7 @@ class ContextPool:
         self._items[item.id] = item
         await self._run_hooks(ContextPoolHook.AFTER_ADD, item)
 
-    def get(self, id: str) -> ContextItem[Any]:
+    def get(self, id: str) -> ContextItem[T]:
         return self._items[id]
 
     async def remove(self, id: str) -> None:
@@ -500,7 +500,7 @@ class ContextPool:
 
     # -- branching ------------------------------------------------------------
 
-    def branch(self, limit: int | None = ...) -> "ContextPool":  # type: ignore[assignment]
+    def branch(self, limit: int | None = ...) -> "ContextPool[T]":  # type: ignore[assignment]
         """
         Create a child context pool that starts with a snapshot of this
         context pool's current state.
@@ -531,7 +531,7 @@ class ContextPool:
     def __len__(self) -> int:
         return len(self._items)
 
-    def __iter__(self) -> Iterator[ContextItem[Any]]:
+    def __iter__(self) -> Iterator[ContextItem[T]]:
         return iter(self._items.values())
 
     def __bool__(self) -> bool:
@@ -551,7 +551,7 @@ class ContextPool:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ContextPool":
+    def from_dict(cls, data: dict[str, Any]) -> "ContextPool[Any]":
         pool = cls(limit=data.get("limit"), tags=data.get("tags", []))
         for item_data in data.get("items", []):
             item = ContextItem.from_dict(item_data)

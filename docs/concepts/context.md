@@ -55,6 +55,19 @@ await cq.append(ContextItem(content="assistant: hi there"))
 
 `limit` is the maximum number of items (must be >= 1). `ContextQueue` only accepts `ContextItem` instances.
 
+`ContextQueue` is generic. Annotate the type parameter to let type checkers enforce that items match the expected content type:
+
+```python
+cq: ContextQueue[str] = ContextQueue(limit=10)
+await cq.append(ContextItem(content="hello"))   # ok — ContextItem[str]
+await cq.append(ContextItem(content=42))        # type error
+
+# Unparameterised works exactly as before (content type is Any)
+cq = ContextQueue(limit=10)
+```
+
+`from_dict()` always returns `ContextQueue[Any]` because the element type is not persisted.
+
 Pass `tags=` to make global `@hook` declarations with a matching `tags` filter fire for this queue:
 
 ```python
@@ -242,6 +255,25 @@ item = pool.get("a")      # lookup by id
 await pool.remove("a")    # remove by id
 await pool.clear()        # remove all
 ```
+
+`ContextPool` is generic. Annotate the type parameter to constrain the `content` type of every stored item:
+
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Report:
+    text: str
+
+pool: ContextPool[Report] = ContextPool(limit=50)
+await pool.add(ContextItem(id="r1", description="Q3 report", content=Report(text="...")))  # ok
+await pool.add(ContextItem(id="r2", description="Q4 report", content="plain string"))       # type error
+
+# Unparameterised works exactly as before (content type is Any)
+pool = ContextPool()
+```
+
+`from_dict()` always returns `ContextPool[Any]` because the element type is not persisted.
 
 `limit` caps the pool size. When the pool is full and a new item with a different `id` is added, the oldest item (by insertion order) is evicted. Pass `limit=None` (or omit it) for an unbounded pool. `add`, `remove`, and `clear` are async (they fire hooks). `get` is sync.
 
