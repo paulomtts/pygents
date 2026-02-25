@@ -630,3 +630,64 @@ def test_before_clear_snapshot_is_non_empty_dict_taken_before_clear():
     assert len(snapshots) == 1
     assert set(snapshots[0].keys()) == {"x", "y"}
     assert len(pool) == 0  # pool itself was cleared
+
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+
+
+def test_context_pool_tags_default_empty_frozenset():
+    pool = ContextPool()
+    assert pool.tags == frozenset()
+
+
+def test_context_pool_tags_stored_as_frozenset():
+    pool = ContextPool(tags=["r", "s"])
+    assert pool.tags == frozenset({"r", "s"})
+
+
+def test_context_pool_global_hook_with_tag_fires_only_for_matching_pool():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextPoolHook.BEFORE_ADD, tags={"audited"})
+    async def tagged_cp_hook(pool, item):
+        fired.append("fired")
+
+    tagged = ContextPool(tags=["audited"])
+    untagged = ContextPool()
+    asyncio.run(tagged.add(_item("a")))
+    asyncio.run(untagged.add(_item("b")))
+    assert fired == ["fired"]
+
+
+def test_context_pool_global_hook_without_tag_fires_for_all_pools():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextPoolHook.BEFORE_ADD)
+    async def untagged_cp_hook(pool, item):
+        fired.append("fired")
+
+    tagged = ContextPool(tags=["x"])
+    untagged = ContextPool()
+    asyncio.run(tagged.add(_item("a")))
+    asyncio.run(untagged.add(_item("b")))
+    assert len(fired) == 2
+
+
+def test_context_pool_tags_survive_serialization_roundtrip():
+    pool = ContextPool(tags=["store", "cache"])
+    asyncio.run(pool.add(_item("a")))
+    data = pool.to_dict()
+    assert set(data["tags"]) == {"store", "cache"}
+    restored = ContextPool.from_dict(data)
+    assert restored.tags == frozenset({"store", "cache"})
+
+
+def test_context_pool_branch_copies_tags():
+    pool = ContextPool(tags=["env:staging"])
+    asyncio.run(pool.add(_item("x")))
+    child = pool.branch()
+    assert child.tags == frozenset({"env:staging"})

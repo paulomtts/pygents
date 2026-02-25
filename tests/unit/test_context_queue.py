@@ -495,6 +495,7 @@ def test_to_dict():
                 {"id": None, "description": None, "content": "b"},
             ],
             "hooks": {},
+            "tags": [],
         }
 
     asyncio.run(_())
@@ -645,5 +646,77 @@ def test_before_append_hook_receives_queue_as_first_arg():
         await q.append(_ci("a"))
         assert received_queues == [q]
         assert received_queues[0].limit == 5
+
+    asyncio.run(_())
+
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+
+
+def test_context_queue_tags_default_empty_frozenset():
+    q = ContextQueue(5)
+    assert q.tags == frozenset()
+
+
+def test_context_queue_tags_stored_as_frozenset():
+    q = ContextQueue(5, tags=["p", "q"])
+    assert q.tags == frozenset({"p", "q"})
+
+
+def test_context_queue_global_hook_with_tag_fires_only_for_matching_queue():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextQueueHook.BEFORE_APPEND, tags={"monitored"})
+    async def tagged_cq_hook(queue, incoming, current):
+        fired.append("fired")
+
+    async def _():
+        tagged = ContextQueue(5, tags=["monitored"])
+        untagged = ContextQueue(5)
+        await tagged.append(_ci("a"))
+        await untagged.append(_ci("b"))
+        assert fired == ["fired"]
+
+    asyncio.run(_())
+
+
+def test_context_queue_global_hook_without_tag_fires_for_all_queues():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(ContextQueueHook.BEFORE_APPEND)
+    async def untagged_cq_hook(queue, incoming, current):
+        fired.append("fired")
+
+    async def _():
+        tagged = ContextQueue(5, tags=["x"])
+        untagged = ContextQueue(5)
+        await tagged.append(_ci("a"))
+        await untagged.append(_ci("b"))
+        assert len(fired) == 2
+
+    asyncio.run(_())
+
+
+def test_context_queue_tags_survive_serialization_roundtrip():
+    async def _():
+        q = ContextQueue(5, tags=["mem", "fast"])
+        await q.append(_ci("a"))
+        data = q.to_dict()
+        assert set(data["tags"]) == {"mem", "fast"}
+        restored = ContextQueue.from_dict(data)
+        assert restored.tags == frozenset({"mem", "fast"})
+
+    asyncio.run(_())
+
+
+def test_context_queue_branch_copies_tags():
+    async def _():
+        q = ContextQueue(5, tags=["env:test"])
+        child = q.branch()
+        assert child.tags == frozenset({"env:test"})
 
     asyncio.run(_())

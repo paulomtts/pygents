@@ -638,3 +638,56 @@ def test_after_run_does_not_fire_on_timeout():
     with pytest.raises(TurnTimeoutError):
         asyncio.run(turn.returning())
     assert fired == []
+
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+
+
+def test_turn_tags_default_empty_frozenset():
+    turn = Turn("turn_run_sync", kwargs={"x": 1})
+    assert turn.tags == frozenset()
+
+
+def test_turn_tags_stored_as_frozenset():
+    turn = Turn("turn_run_sync", kwargs={"x": 1}, tags=["a", "b"])
+    assert turn.tags == frozenset({"a", "b"})
+
+
+def test_turn_global_hook_with_tag_fires_only_for_matching_turn():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(TurnHook.BEFORE_RUN, tags={"special"})
+    async def tagged_turn_hook(turn):
+        fired.append("fired")
+
+    tagged = Turn("turn_run_sync", kwargs={"x": 1}, tags=["special"])
+    untagged = Turn("turn_run_sync", kwargs={"x": 1})
+    asyncio.run(tagged.returning())
+    asyncio.run(untagged.returning())
+    assert fired == ["fired"]
+
+
+def test_turn_global_hook_without_tag_fires_for_all_turns():
+    HookRegistry.clear()
+    fired = []
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def untagged_turn_hook(turn):
+        fired.append("fired")
+
+    tagged = Turn("turn_run_sync", kwargs={"x": 1}, tags=["x"])
+    untagged = Turn("turn_run_sync", kwargs={"x": 1})
+    asyncio.run(tagged.returning())
+    asyncio.run(untagged.returning())
+    assert len(fired) == 2
+
+
+def test_turn_tags_survive_serialization_roundtrip():
+    turn = Turn("turn_run_sync", kwargs={"x": 1}, tags=["fast", "critical"])
+    data = turn.to_dict()
+    assert set(data["tags"]) == {"fast", "critical"}
+    restored = Turn.from_dict(data)
+    assert restored.tags == frozenset({"fast", "critical"})

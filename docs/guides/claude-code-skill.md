@@ -66,7 +66,7 @@ Rules:
 - Fixed kwargs that don't match the signature (and no `**kwargs`) raise `TypeError`
 - Duplicate names in `ToolRegistry` raise `ValueError`
 - `ToolRegistry.get(name)` returns a tool; `.all()` returns all tools
-- `tags` is a `list[str]` / `frozenset[str]` stored as `frozenset` on the instance; used to filter global `@hook` declarations — a global hook with `tags={"io"}` only fires for tools that share at least one tag (OR semantics; hooks with no `tags` fire for all tools)
+- `tags` is a `list[str]` / `frozenset[str]` stored as `frozenset` on the instance; used to filter global `@hook` declarations — a global hook with `tags={"io"}` only fires for objects that share at least one tag (OR semantics; hooks with no `tags` fire for all objects). `tags=` works on `@tool()`, `Agent(...)`, `Turn(...)`, `ContextQueue(limit=...)`, and `ContextPool(...)` constructors.
 
 Metadata: `my_tool.metadata.name`, `.description` (docstring), `.start_time`, `.end_time`, `.dict()`.
 
@@ -300,7 +300,7 @@ async def log_io(result) -> None:
 
 When both styles are active for the same event, instance hooks fire first, then global hooks. The same hook object is never called twice (deduplication).
 
-Options: `lock=True` serializes concurrent runs (covers only the actual function call — lifecycle hooks run outside the lock); `**fixed_kwargs` merge into every call; `tags={...}` on global `@hook` filters by tool tags; declare `param: ContextQueue | None` or `param: ContextPool | None` for context injection.
+Options: `lock=True` serializes concurrent runs (covers only the actual function call — lifecycle hooks run outside the lock); `**fixed_kwargs` merge into every call; `tags={...}` on global `@hook` filters by object tags (tools, agents, turns, context queues, context pools all support `tags=`); declare `param: ContextQueue | None` or `param: ContextPool | None` for context injection.
 
 ### All hook types and their arguments
 

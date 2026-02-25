@@ -113,6 +113,7 @@ class Turn[T]:
         timeout: int = 60,
         args: Iterable[Any] | None = None,
         kwargs: dict[str, Any] | None = None,
+        tags: list[str] | frozenset[str] | None = None,
     ):
         if isinstance(tool, str):
             resolved = ToolRegistry.get(tool)
@@ -124,6 +125,7 @@ class Turn[T]:
         self.timeout = timeout
         self.output = None
         self.metadata = TurnMetadata()
+        self.tags: frozenset[str] = frozenset(tags or [])
 
         self.hooks: list[Hook] = []
         self._is_running = False
@@ -136,7 +138,8 @@ class Turn[T]:
 
     async def _run_hooks(self, hook_type: TurnHook, *args: Any) -> None:
         await HookRegistry.fire(
-            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), self, *args
+            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), self, *args,
+            _source_tags=self.tags
         )
 
     def before_run(
@@ -361,6 +364,7 @@ class Turn[T]:
             "metadata": self.metadata.to_dict(),
             "output": self.output,
             "hooks": serialize_hooks_by_type(self.hooks),
+            "tags": list(self.tags),
         }
 
     @classmethod
@@ -370,6 +374,7 @@ class Turn[T]:
             args=data.get("args", []),
             kwargs=data.get("kwargs", {}),
             timeout=data.get("timeout", 60),
+            tags=data.get("tags", []),
         )
         turn.metadata = TurnMetadata.from_dict(data.get("metadata", {}))
         if "output" in data:

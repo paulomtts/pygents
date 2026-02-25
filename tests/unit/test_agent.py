@@ -1688,3 +1688,78 @@ def test_on_complete_fires_on_timeout():
     with pytest.raises(TurnTimeoutError):
         asyncio.run(run())
     assert fired == [("complete", StopReason.TIMEOUT)]
+
+
+# ---------------------------------------------------------------------------
+# Tags
+# ---------------------------------------------------------------------------
+
+
+def test_agent_tags_default_empty_frozenset():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent])
+    assert agent.tags == frozenset()
+
+
+def test_agent_tags_stored_as_frozenset():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent], tags=["x", "y"])
+    assert agent.tags == frozenset({"x", "y"})
+
+
+def test_agent_global_hook_with_tag_fires_only_for_matching_agent():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    fired = []
+
+    @hook(AgentHook.BEFORE_PUT, tags={"important"})
+    async def tagged_hook(agent, turn):
+        fired.append(agent.name)
+
+    tagged = Agent("tagged", "desc", [add_agent], tags=["important"])
+    untagged = Agent("untagged", "desc", [add_agent])
+
+    async def run():
+        await tagged.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        await untagged.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+
+    asyncio.run(run())
+    assert fired == ["tagged"]
+
+
+def test_agent_global_hook_without_tag_fires_for_all_agents():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    fired = []
+
+    @hook(AgentHook.BEFORE_PUT)
+    async def untagged_hook(agent, turn):
+        fired.append(agent.name)
+
+    tagged = Agent("tagged2", "desc", [add_agent], tags=["x"])
+    untagged = Agent("untagged2", "desc", [add_agent])
+
+    async def run():
+        await tagged.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        await untagged.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+
+    asyncio.run(run())
+    assert "tagged2" in fired
+    assert "untagged2" in fired
+
+
+def test_agent_tags_survive_serialization_roundtrip():
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [add_agent], tags=["alpha", "beta"])
+    data = agent.to_dict()
+    assert set(data["tags"]) == {"alpha", "beta"}
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+    assert restored.tags == frozenset({"alpha", "beta"})
+
+
+def test_agent_branch_copies_tags():
+    AgentRegistry.clear()
+    parent = Agent("parent", "desc", [add_agent], tags=["env:prod"])
+    child = parent.branch("child_tagged")
+    assert child.tags == frozenset({"env:prod"})

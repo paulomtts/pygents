@@ -28,7 +28,7 @@ async def on_error(turn, exception):
 |-----------|---------|---------|
 | `type` | required | One or more of `TurnHook`, `AgentHook`, `ToolHook`, `ContextQueueHook`, `ContextPoolHook`. Stored on the hook for filtering. Pass a list (e.g. `@hook([TurnHook.BEFORE_RUN, AgentHook.AFTER_TURN])`) to register for several events. |
 | `lock` | `False` | If `True`, concurrent runs of this hook are serialized via `asyncio.Lock`. |
-| `tags` | `None` | A set or frozenset of strings. When provided, this global hook only fires for tools that share at least one tag (OR semantics). Has no effect on non-tool hook types. See [Tag filtering](tools.md#tag-filtering). |
+| `tags` | `None` | A set or frozenset of strings. When provided, this global hook only fires for objects (tools, agents, turns, context queues, context pools) that share at least one tag (OR semantics). Has no effect on non-tagged objects. See [Tag filtering](tools.md#tag-filtering). |
 | `**kwargs` | — | Fixed keyword arguments merged into every invocation. Call-time kwargs override these (with a warning). |
 
 !!! warning "TypeError"
@@ -340,7 +340,7 @@ class Hook:
     type: HookType | tuple[HookType, ...] | None
     fn: Callable[..., Awaitable[None]]
     lock: asyncio.Lock | None
-    tags: frozenset[str] | None                   # None = fires for all tools; set = OR filter
+    tags: frozenset[str] | None                   # None = fires for all objects; set = OR filter
 ```
 
 ## Errors

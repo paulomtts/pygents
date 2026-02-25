@@ -77,6 +77,7 @@ class Agent:
         tools: Sequence[Tool | AsyncGenTool],
         context_pool: ContextPool | None = None,
         context_queue: ContextQueue | None = None,
+        tags: list[str] | frozenset[str] | None = None,
     ):
         tools_list = list(tools)
         for t in tools_list:
@@ -88,6 +89,7 @@ class Agent:
         self.name = name
         self.description = description
         self.tools = tools_list
+        self.tags: frozenset[str] = frozenset(tags or [])
         self.hooks: list[Hook] = []
         self.turn_hooks: list[Hook] = []
 
@@ -136,7 +138,8 @@ class Agent:
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
         await HookRegistry.fire(
-            name, HookRegistry.get_by_type(name, self.hooks), *args, **kwargs
+            name, HookRegistry.get_by_type(name, self.hooks), *args,
+            _source_tags=self.tags, **kwargs
         )
 
     async def _route_value(self, value: Any) -> None:
@@ -417,7 +420,7 @@ class Agent:
         child_hooks = (
             self.hooks if hooks is ... else (hooks if hooks is not None else [])
         )
-        child = Agent(name, child_description, child_tools)
+        child = Agent(name, child_description, child_tools, tags=self.tags)
         child.hooks = list(child_hooks)
         child.turn_hooks = list(self.turn_hooks)
         child.context_pool = self.context_pool.branch()
@@ -501,12 +504,13 @@ class Agent:
             "context_pool": self.context_pool.to_dict(),
             "is_paused": self.is_paused,
             "context_queue": self.context_queue.to_dict(),
+            "tags": list(self.tags),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Agent:
         tools = [ToolRegistry.get(name) for name in data["tool_names"]]
-        agent = cls(data["name"], data["description"], tools)
+        agent = cls(data["name"], data["description"], tools, tags=data.get("tags", []))
         for turn_data in data.get("queue", []):
             agent._queue.put_nowait(Turn.from_dict(turn_data))
         if data.get("current_turn") is not None:

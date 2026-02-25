@@ -145,8 +145,9 @@ def hook(
     Parameters
     ----------
     tags : set[str] | frozenset[str] | None, optional
-        If provided, this global hook only fires for tools that share at least
-        one tag (OR semantics). If None, fires for all tools regardless of tags.
+        If provided, this global hook only fires for objects (tools, agents,
+        turns, context queues, context pools) that share at least one tag
+        (OR semantics). If None, fires for all objects regardless of tags.
     """
     types = type if isinstance(type, list) else [type]
     if not types:

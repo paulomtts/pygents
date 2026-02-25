@@ -59,10 +59,12 @@ class ContextQueue:
     def __init__(
         self,
         limit: int,
+        tags: list[str] | frozenset[str] | None = None,
     ) -> None:
         if limit < 1:
             raise ValueError("limit must be >= 1")
         self._items: deque[ContextItem[Any]] = deque(maxlen=limit)
+        self.tags: frozenset[str] = frozenset(tags or [])
         self.hooks: list[Hook] = []
 
     # -- properties ----------------------------------------------------------
@@ -179,7 +181,8 @@ class ContextQueue:
 
     async def _run_hooks(self, hook_type: Any, *args: Any) -> None:
         await HookRegistry.fire(
-            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), *args
+            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), *args,
+            _source_tags=self.tags
         )
 
     async def append(self, *items: ContextItem[Any]) -> None:
@@ -243,7 +246,7 @@ class ContextQueue:
         child_hooks = (
             self.hooks if hooks is ... else (hooks if hooks is not None else [])
         )
-        child = ContextQueue(child_limit)
+        child = ContextQueue(child_limit, tags=self.tags)
         child.hooks = list(child_hooks)
         for item in self._items:
             child._items.append(item)
@@ -270,11 +273,12 @@ class ContextQueue:
             "limit": self.limit,
             "items": [item.to_dict() for item in self._items],
             "hooks": serialize_hooks_by_type(self.hooks),
+            "tags": list(self.tags),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ContextQueue:
-        cq = cls(limit=data["limit"])
+        cq = cls(limit=data["limit"], tags=data.get("tags", []))
         for raw in data.get("items", []):
             cq._items.append(ContextItem.from_dict(raw))
         cq.hooks = rebuild_hooks_from_serialization(data.get("hooks", {}))
@@ -297,11 +301,12 @@ class ContextPool:
         ``None`` means unbounded.
     """
 
-    def __init__(self, limit: int | None = None) -> None:
+    def __init__(self, limit: int | None = None, tags: list[str] | frozenset[str] | None = None) -> None:
         if limit is not None and limit < 1:
             raise ValueError("limit must be >= 1")
         self._items: dict[str, ContextItem[Any]] = {}
         self._limit = limit
+        self.tags: frozenset[str] = frozenset(tags or [])
         self.hooks: list[Hook] = []
 
     # -- properties -----------------------------------------------------------
@@ -456,7 +461,8 @@ class ContextPool:
 
     async def _run_hooks(self, hook_type: Any, *args: Any) -> None:
         await HookRegistry.fire(
-            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), self, *args
+            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), self, *args,
+            _source_tags=self.tags
         )
 
     # -- mutation -------------------------------------------------------------
@@ -504,7 +510,7 @@ class ContextPool:
         copied to the child; no hooks fire during the snapshot copy.
         """
         child_limit = self._limit if limit is ... else limit
-        child = type(self)(limit=child_limit)
+        child = type(self)(limit=child_limit, tags=self.tags)
         child.hooks = list(self.hooks)
         for item in self.items:
             if item.id is None:
@@ -541,11 +547,12 @@ class ContextPool:
             "limit": self._limit,
             "items": [item.to_dict() for item in self._items.values()],
             "hooks": serialize_hooks_by_type(self.hooks),
+            "tags": list(self.tags),
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ContextPool":
-        pool = cls(limit=data.get("limit"))
+        pool = cls(limit=data.get("limit"), tags=data.get("tags", []))
         for item_data in data.get("items", []):
             item = ContextItem.from_dict(item_data)
             if item.id is None:
