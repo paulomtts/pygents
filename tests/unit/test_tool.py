@@ -28,12 +28,17 @@ Invocation (coroutine): start_time, BEFORE_INVOKE, await fn, end_time in finally
 Invocation (async gen): start_time, BEFORE_INVOKE, async for + ON_YIELD, end_time in finally.
   R1  ToolRegistry.register(wrapper) after build
   M1  ToolMetadata.dict(): start_time/end_time -> None or isoformat
+
+Subtools / doc_tree:
+  S1  @parent.subtool() registers child in ToolRegistry and parent.add_subtool(child)
+  S2  doc_tree() returns {"name", "description", "subtools": [...]} recursively, no timing
+  S3  subtool(lock=True) etc. pass through to child
 """
 
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Coroutine, cast
 
 import pytest
 
@@ -43,6 +48,7 @@ from pygents.context import (
     _current_context_pool,
     _current_context_queue,
 )
+from pygents.errors import UnregisteredToolError
 from pygents.hooks import ToolHook
 from pygents.registry import ToolRegistry
 from pygents.tool import ToolMetadata, inject_context_deps, tool
@@ -832,3 +838,199 @@ def test_global_hook_with_tags_does_not_fire_for_untagged_tool():
 
     asyncio.run(untagged_for_tag_test())
     assert fired == []
+
+
+def test_subtool_registered_and_attached_to_parent():
+    @tool()
+    async def parent_subtool_reg() -> None:
+        """Parent for subtool registration test."""
+        pass
+
+    @parent_subtool_reg.subtool()
+    async def child_subtool_reg() -> str:
+        """Child subtool."""
+        return "ok"
+
+    registered = ToolRegistry.get("parent_subtool_reg.child_subtool_reg")
+    assert registered is child_subtool_reg
+    with pytest.raises(UnregisteredToolError):
+        ToolRegistry.get("child_subtool_reg")
+    assert len(parent_subtool_reg._subtools) == 1
+    assert parent_subtool_reg._subtools[0] is child_subtool_reg
+    assert asyncio.run(cast(Coroutine[Any, Any, str], child_subtool_reg())) == "ok"
+
+
+def test_subtool_multiple_preserve_order():
+    @tool()
+    async def parent_subtool_order() -> None:
+        pass
+
+    @parent_subtool_order.subtool()
+    async def first_subtool_order() -> str:
+        return "first"
+
+    @parent_subtool_order.subtool()
+    async def second_subtool_order() -> str:
+        return "second"
+
+    assert [t.metadata.name for t in parent_subtool_order._subtools] == [
+        "first_subtool_order",
+        "second_subtool_order",
+    ]
+    assert ToolRegistry.get("parent_subtool_order.first_subtool_order") is first_subtool_order
+    assert ToolRegistry.get("parent_subtool_order.second_subtool_order") is second_subtool_order
+
+
+def test_doc_tree_no_subtools():
+    @tool()
+    async def leaf_doc_tree() -> None:
+        """A leaf tool."""
+        pass
+
+    tree = leaf_doc_tree.doc_tree()
+    assert tree == {
+        "name": "leaf_doc_tree",
+        "description": "A leaf tool.",
+        "subtools": [],
+    }
+    assert "start_time" not in tree
+    assert "end_time" not in tree
+
+
+def test_doc_tree_with_subtools_recursive():
+    @tool()
+    async def root_doc_tree() -> None:
+        """Root tool."""
+        pass
+
+    @root_doc_tree.subtool()
+    async def child_a_doc_tree() -> None:
+        """Child A."""
+        pass
+
+    @root_doc_tree.subtool()
+    async def child_b_doc_tree() -> None:
+        """Child B."""
+        pass
+
+    tree = root_doc_tree.doc_tree()
+    assert tree["name"] == "root_doc_tree"
+    assert tree["description"] == "Root tool."
+    assert len(tree["subtools"]) == 2
+    assert tree["subtools"][0] == {
+        "name": "child_a_doc_tree",
+        "description": "Child A.",
+        "subtools": [],
+    }
+    assert tree["subtools"][1] == {
+        "name": "child_b_doc_tree",
+        "description": "Child B.",
+        "subtools": [],
+    }
+
+
+def test_subtool_with_lock():
+    @tool()
+    async def parent_subtool_lock() -> None:
+        pass
+
+    @parent_subtool_lock.subtool(lock=True)
+    async def locked_subtool_lock() -> int:
+        return 42
+
+    assert locked_subtool_lock.lock is not None
+    assert asyncio.run(cast(Coroutine[Any, Any, int], locked_subtool_lock())) == 42
+
+
+def test_subtool_invocation_smoke():
+    @tool()
+    async def parent_invoke_smoke() -> None:
+        pass
+
+    @parent_invoke_smoke.subtool()
+    async def add_invoke_smoke(a: int, b: int) -> int:
+        return a + b
+
+    result = asyncio.run(cast(Coroutine[Any, Any, int], add_invoke_smoke(2, 3)))
+    assert result == 5
+
+
+def test_subtool_sync_function_raises_type_error():
+    @tool()
+    async def parent_sync_reject() -> None:
+        pass
+
+    with pytest.raises(TypeError, match="Tool must be async"):
+
+        @parent_sync_reject.subtool()
+        def sync_child_sync_reject() -> str:
+            return "no"
+
+
+def test_subtool_nested_registry_key_is_full_path():
+    @tool()
+    async def root_nested() -> None:
+        pass
+
+    @root_nested.subtool()
+    async def child_nested() -> None:
+        pass
+
+    @child_nested.subtool()
+    async def grandchild_nested() -> str:
+        return "ok"
+
+    assert grandchild_nested.__name__ == "root_nested.child_nested.grandchild_nested"
+    assert ToolRegistry.get("root_nested.child_nested.grandchild_nested") is grandchild_nested
+    assert asyncio.run(cast(Coroutine[Any, Any, str], grandchild_nested())) == "ok"
+
+
+def test_subtool_same_short_name_under_different_parents():
+    @tool()
+    async def parent_a_scope() -> None:
+        pass
+
+    @tool()
+    async def parent_b_scope() -> None:
+        pass
+
+    @parent_a_scope.subtool()
+    async def foo_scope() -> str:
+        return "a"
+
+    @parent_b_scope.subtool()
+    async def foo_scope_b() -> str:
+        return "b"
+
+    a_tool = ToolRegistry.get("parent_a_scope.foo_scope")
+    b_tool = ToolRegistry.get("parent_b_scope.foo_scope_b")
+    assert asyncio.run(cast(Coroutine[Any, Any, str], a_tool())) == "a"
+    assert asyncio.run(cast(Coroutine[Any, Any, str], b_tool())) == "b"
+
+
+def test_tool_registry_definitions_returns_doc_trees_for_root_tools_only():
+    @tool()
+    async def root_def_a() -> None:
+        """Root A."""
+        pass
+
+    @root_def_a.subtool()
+    async def sub_def_a() -> None:
+        """Sub A."""
+        pass
+
+    @tool()
+    async def root_def_b() -> None:
+        """Root B."""
+        pass
+
+    defs = ToolRegistry.definitions()
+    names = [d["name"] for d in defs]
+    assert "root_def_a" in names
+    assert "root_def_b" in names
+    assert "sub_def_a" not in names
+    root_a = next(d for d in defs if d["name"] == "root_def_a")
+    assert root_a["description"] == "Root A."
+    assert len(root_a["subtools"]) == 1
+    assert root_a["subtools"][0]["name"] == "sub_def_a"
+    assert root_a["subtools"][0]["description"] == "Sub A."

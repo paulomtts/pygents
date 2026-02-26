@@ -24,6 +24,13 @@ from pygents.utils import (
 )
 
 
+def _tool_registry_keys(tool: Tool[Any, Any] | AsyncGenTool[Any, Any]) -> set[str]:
+    keys = {tool.__name__}
+    for st in getattr(tool, "_subtools", []):
+        keys.update(_tool_registry_keys(st))
+    return keys
+
+
 class Agent:
     """
     Orchestrator that runs an event loop processing Turns from a queue.
@@ -81,10 +88,10 @@ class Agent:
     ):
         tools_list = list(tools)
         for t in tools_list:
-            registered = ToolRegistry.get(t.metadata.name)
+            registered = ToolRegistry.get(t.__name__)
             if registered is not t:
                 raise ValueError(
-                    f"Tool {t.metadata.name!r} is registered but not the instance given to this agent."
+                    f"Tool {t.__name__!r} is registered but not the instance given to this agent."
                 )
         self.name = name
         self.description = description
@@ -93,7 +100,9 @@ class Agent:
         self.hooks: list[Hook] = []
         self.turn_hooks: list[Hook] = []
 
-        self._tool_names = {t.metadata.name for t in tools_list}
+        self._tool_names = set()
+        for t in tools_list:
+            self._tool_names.update(_tool_registry_keys(t))
         self._queue: asyncio.Queue[Turn] = asyncio.Queue()
         self.context_pool = context_pool if context_pool is not None else ContextPool()
         self._pause_event: asyncio.Event = asyncio.Event()
@@ -357,9 +366,9 @@ class Agent:
         """
         if turn.tool is None:
             raise ValueError("Turn has no tool")
-        if turn.tool.metadata.name not in self._tool_names:
+        if turn.tool.__name__ not in self._tool_names:
             raise ValueError(
-                f"Agent {self.name!r} does not accept tool {turn.tool.metadata.name!r}"
+                f"Agent {self.name!r} does not accept tool {turn.tool.__name__!r}"
             )
         await self._run_hooks(AgentHook.BEFORE_PUT, self, turn)
         self._queue.put_nowait(turn)
@@ -494,7 +503,7 @@ class Agent:
         return {
             "name": self.name,
             "description": self.description,
-            "tool_names": [t.metadata.name for t in self.tools],
+            "tool_names": [t.__name__ for t in self.tools],
             "queue": [t.to_dict() for t in self._queue_snapshot()],
             "current_turn": self._current_turn.to_dict()
             if self._current_turn

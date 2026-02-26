@@ -168,7 +168,10 @@ def test_agent_rejects_tool_not_in_registry():
     unregistered = type(
         "FakeTool",
         (),
-        {"metadata": type("M", (), {"name": "unregistered_tool"})()},
+        {
+            "metadata": type("M", (), {"name": "unregistered_tool"})(),
+            "__name__": "unregistered_tool",
+        },
     )()
     with pytest.raises(UnregisteredToolError, match="not found"):
         Agent("a", "desc", cast(list[Tool], [unregistered]))
@@ -180,7 +183,11 @@ def test_agent_init_rejects_tool_wrong_instance():
     fake_same_name = type(
         "FakeTool",
         (),
-        {"metadata": type("M", (), {"name": "add_agent"})(), "fn": None},
+        {
+            "metadata": type("M", (), {"name": "add_agent"})(),
+            "fn": None,
+            "__name__": "add_agent",
+        },
     )()
     with pytest.raises(ValueError, match="not the instance given"):
         Agent("b", "desc", cast(list[Tool], [fake_same_name]))
@@ -425,7 +432,9 @@ def test_put_rejects_turn_with_unknown_tool():
     agent = Agent("a", "desc", [add_agent])
     turn = Turn("add_agent", kwargs={"a": 1, "b": 2})
     fake_tool = type(
-        "FakeTool", (), {"metadata": type("M", (), {"name": "other_tool"})()}
+        "FakeTool",
+        (),
+        {"metadata": type("M", (), {"name": "other_tool"})(), "__name__": "other_tool"},
     )()
     object.__setattr__(turn, "tool", fake_tool)
     with pytest.raises(ValueError, match="does not accept tool"):

@@ -57,6 +57,12 @@ class ToolRegistry(BaseRegistry):
         """Return all registered Tools."""
         return list(cls._registry.values())
 
+    @classmethod
+    def definitions(cls) -> list[dict[str, Any]]:
+        """Return doc_tree() for every root-level tool (tools not registered as subtools)."""
+        root_tools = [t for t in cls.all() if "." not in t.__name__]
+        return [t.doc_tree() for t in sorted(root_tools, key=lambda t: t.__name__)]
+
 
 class AgentRegistry(BaseRegistry):
     """Registry for Agents. Not meant to be instantiated or used directly."""

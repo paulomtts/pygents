@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import functools
 import inspect
@@ -30,6 +32,10 @@ P = ParamSpec("P")           # tool param spec
 R = TypeVar("R")             # tool return type
 Y = TypeVar("Y")             # async-gen yield type
 
+P2 = ParamSpec("P2")         # subtool param spec (for overloads)
+R2 = TypeVar("R2")           # subtool return type
+Y2 = TypeVar("Y2")           # subtool async-gen yield type
+
 HookP = ParamSpec("HookP")         # extra params for Tool.after_invoke hooks
 GenHookP = ParamSpec("GenHookP")   # extra params for AsyncGenTool.after_invoke hooks
 YieldHookP = ParamSpec("YieldHookP")  # extra params for AsyncGenTool.on_yield hooks
@@ -61,6 +67,7 @@ class _BaseTool(Generic[P]):
     metadata: ToolMetadata
     lock: asyncio.Lock | None
     hooks: list[tuple[ToolHook, Any]]
+    __name__: str
 
     def __init__(
         self,
@@ -74,11 +81,22 @@ class _BaseTool(Generic[P]):
         self.metadata = ToolMetadata(fn.__name__, fn.__doc__)
         self.lock = asyncio.Lock() if lock else None
         self.hooks = []
+        self._subtools: list[_BaseTool[Any]] = []
         self._fixed_kwargs = fixed_kwargs or {}
         self.tags: frozenset[str] = frozenset(tags or [])
         functools.update_wrapper(
             cast(Callable[P, Any], self), fn
         )  # ? REASON: make the instance inherit the function's name, docstring, etc.
+
+    def add_subtool(self, child: _BaseTool[Any]) -> None:
+        self._subtools.append(child)
+
+    def doc_tree(self) -> dict[str, Any]:
+        return {
+            "name": self.metadata.name,
+            "description": self.metadata.description,
+            "subtools": [st.doc_tree() for st in self._subtools],
+        }
 
     async def _run_hooks(self, hook_type: ToolHook, *args: Any, **kwargs: Any) -> None:
         await HookRegistry.fire(
@@ -177,6 +195,81 @@ class _BaseTool(Generic[P]):
         return build_method_decorator(
             ToolHook.ON_ERROR, self.hooks, fn, lock, fixed_kwargs, as_tuple=True
         )
+
+    @overload
+    def subtool(
+        self,
+        fn: Callable[P2, Awaitable[R2]],
+        *,
+        lock: bool = False,
+        tags: list[str] | frozenset[str] | None = None,
+        **fixed_kwargs: Any,
+    ) -> Tool[P2, R2]: ...
+
+    @overload
+    def subtool(
+        self,
+        fn: Callable[P2, AsyncIterator[Y2]],
+        *,
+        lock: bool = False,
+        tags: list[str] | frozenset[str] | None = None,
+        **fixed_kwargs: Any,
+    ) -> AsyncGenTool[P2, Y2]: ...
+
+    @overload
+    def subtool(
+        self,
+        fn: None = None,
+        *,
+        lock: bool = False,
+        tags: list[str] | frozenset[str] | None = None,
+        **fixed_kwargs: Any,
+    ) -> Callable[
+        [Callable[..., Any]], Tool[Any, Any] | AsyncGenTool[Any, Any]
+    ]: ...
+
+    def subtool(
+        self,
+        fn: Callable[..., Any] | None = None,
+        *,
+        lock: bool = False,
+        tags: list[str] | frozenset[str] | None = None,
+        **fixed_kwargs: Any,
+    ) -> (
+        Tool[Any, Any]
+        | AsyncGenTool[Any, Any]
+        | Callable[
+            [Callable[..., Any]], Tool[Any, Any] | AsyncGenTool[Any, Any]
+        ]
+    ):
+        """Register an async function as a subtool of this tool.
+
+        The subtool is registered in ToolRegistry and appears under this tool
+        in doc_tree(). Same options as the top-level tool() decorator.
+
+        Parameters
+        ----------
+        fn : async coroutine or async generator function
+            The function to wrap as a subtool.
+        lock : bool, optional
+            If True, concurrent invocations of the subtool are serialized.
+        tags : list[str] | frozenset[str] | None, optional
+            Tags for the subtool.
+        **fixed_kwargs
+            Fixed keyword arguments merged into every invocation.
+        """
+        decorator = _ToolDecorator(lock, tags, fixed_kwargs, register=False)
+
+        def wrap(f: Callable[..., Any]) -> Tool[Any, Any] | AsyncGenTool[Any, Any]:
+            instance = decorator(f)
+            instance.__name__ = f"{self.__name__}.{instance.metadata.name}"
+            ToolRegistry.register(instance)
+            self.add_subtool(instance)
+            return instance
+
+        if fn is not None:
+            return wrap(fn)
+        return wrap
 
 
 class Tool(Generic[P, R], _BaseTool[P]):
@@ -386,10 +479,12 @@ class _ToolDecorator:
         lock: bool,
         tags: list[str] | frozenset[str] | None,
         fixed_kwargs: dict[str, Any],
+        register: bool = True,
     ) -> None:
         self._lock = lock
         self._tags = frozenset(tags or [])
         self._fixed_kwargs = fixed_kwargs
+        self._register = register
 
     @overload
     def __call__(self, fn: Callable[P, Awaitable[R]]) -> Tool[P, R]: ...
@@ -410,7 +505,8 @@ class _ToolDecorator:
         instance = ToolClass(
             fn, lock=self._lock, fixed_kwargs=self._fixed_kwargs, tags=self._tags
         )
-        ToolRegistry.register(instance)
+        if self._register:
+            ToolRegistry.register(instance)
         return instance
 
 
@@ -446,7 +542,8 @@ def tool(
     are merged into every invocation; call-time kwargs override these.
 
     Use the method decorators @my_tool.before_invoke / .on_yield / .after_invoke
-    to attach lifecycle hooks after decoration.
+    to attach lifecycle hooks after decoration. Use @my_tool.subtool() to register
+    subtools; use doc_tree() for hierarchical name and description.
 
     Parameters
     ----------

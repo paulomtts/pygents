@@ -357,7 +357,7 @@ class Turn[T]:
     # -- serialization --------------------------------------------------------
     def to_dict(self) -> dict[str, Any]:
         return {
-            "tool_name": self.tool.metadata.name,
+            "tool_name": self.tool.__name__,
             "args": eval_args(self.args),
             "kwargs": eval_kwargs(self.kwargs),
             "timeout": self.timeout,

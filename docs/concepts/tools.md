@@ -183,15 +183,55 @@ Instance-scoped hooks (`@my_tool.after_invoke`) are unaffected by tag filtering 
 !!! info "Tags work on all object types"
     The same `tags=` mechanism is available on `Agent`, `Turn`, `ContextQueue`, and `ContextPool` constructors, not just `@tool`. A single hook with `tags={"io"}` can filter across tools, agents, turns, and context objects at once. See [Hooks — Tag filtering](hooks.md#tag-filtering) for the full picture.
 
+## Subtools and doc_tree
+
+You can attach **subtools** to a tool via the method decorator `@my_tool.subtool()`. Subtools are full tools: they are registered in `ToolRegistry` under a **scoped** key so names do not collide across parents. The registry key is `"parent_name.child_name"` (and for nested subtools, `"parent.child.grandchild"`). That way `manage_users.create_user` and `manage_posts.create_user` can coexist. Use this scoped name when creating turns or looking up in the registry. `doc_tree()` and `metadata.name` keep the short name (e.g. `"create_user"`) for display.
+
+`subtool()` accepts the same options as the top-level `@tool` decorator: `lock`, `tags`, and `**fixed_kwargs`.
+
+```python
+from pygents import tool
+
+@tool()
+async def manage_users() -> None:
+    """Top-level user management tool."""
+    ...
+
+@manage_users.subtool()
+async def create_user(username: str) -> None:
+    """Create a new user."""
+    ...
+
+@manage_users.subtool(lock=True)
+async def delete_user(username: str) -> None:
+    """Delete an existing user."""
+    ...
+
+# Invoke by scoped name:
+Turn("manage_users.create_user", kwargs={"username": "alice"})
+ToolRegistry.get("manage_users.delete_user")
+```
+
+Use **`doc_tree()`** on any tool to get a recursive structure of name, description, and subtools (suitable for docs or LLM tool lists). It does not include runtime timing; use `metadata.dict()` for that.
+
+```python
+manage_users.doc_tree()
+# {"name": "manage_users", "description": "Top-level user management tool.", "subtools": [
+#   {"name": "create_user", "description": "Create a new user.", "subtools": []},
+#   {"name": "delete_user", "description": "Delete an existing user.", "subtools": []},
+# ]}
+```
+
 ## Registry
 
-Tools register globally when decorated. The function name becomes the tool's identifier. Turns resolve tools from the registry at construction time, so a tool must be decorated before any turn references it.
+Tools register globally when decorated. The registry key is the tool's `__name__`: for top-level tools that is the function name; for subtools it is the scoped key (e.g. `parent.child`). Turns resolve tools from the registry at construction time, so a tool must be decorated before any turn references it.
 
 ```python
 from pygents import ToolRegistry
 
 my_tool = ToolRegistry.get("fetch")  # lookup by name
 all_tools = ToolRegistry.all()       # list of all registered tools
+definitions = ToolRegistry.definitions()  # doc_tree() for each root-level tool (no subtools at top level)
 ```
 
 !!! warning "ValueError"
@@ -212,7 +252,7 @@ fetch.metadata.end_time     # datetime — set in finally, None before first run
 fetch.metadata.dict()       # {"name": ..., "description": ..., "start_time": ..., "end_time": ...}
 ```
 
-Timing fields are set each time the tool runs (on the same metadata instance). `dict()` serializes datetimes to ISO strings.
+Timing fields are set each time the tool runs (on the same metadata instance). `dict()` serializes datetimes to ISO strings. For a stable tree of name and description (including subtools), use `tool.doc_tree()` — see [Subtools and doc_tree](#subtools-and-doc_tree).
 
 ## Protocol
 
