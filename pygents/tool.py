@@ -23,21 +23,22 @@ from pygents.hooks import Hook, ToolHook
 from pygents.registry import HookRegistry, ToolRegistry
 from pygents.utils import (
     build_method_decorator,
+    filter_args_to_signature,
     inject_context_deps,
     merge_kwargs,
     null_lock,
 )
 
-P = ParamSpec("P")           # tool param spec
-R = TypeVar("R")             # tool return type
-Y = TypeVar("Y")             # async-gen yield type
+P = ParamSpec("P")  # tool param spec
+R = TypeVar("R")  # tool return type
+Y = TypeVar("Y")  # async-gen yield type
 
-P2 = ParamSpec("P2")         # subtool param spec (for overloads)
-R2 = TypeVar("R2")           # subtool return type
-Y2 = TypeVar("Y2")           # subtool async-gen yield type
+P2 = ParamSpec("P2")  # subtool param spec (for overloads)
+R2 = TypeVar("R2")  # subtool return type
+Y2 = TypeVar("Y2")  # subtool async-gen yield type
 
-HookP = ParamSpec("HookP")         # extra params for Tool.after_invoke hooks
-GenHookP = ParamSpec("GenHookP")   # extra params for AsyncGenTool.after_invoke hooks
+HookP = ParamSpec("HookP")  # extra params for Tool.after_invoke hooks
+GenHookP = ParamSpec("GenHookP")  # extra params for AsyncGenTool.after_invoke hooks
 YieldHookP = ParamSpec("YieldHookP")  # extra params for AsyncGenTool.on_yield hooks
 ErrorHookP = ParamSpec("ErrorHookP")  # extra params for on_error hooks
 
@@ -224,9 +225,7 @@ class _BaseTool(Generic[P]):
         lock: bool = False,
         tags: list[str] | frozenset[str] | None = None,
         **fixed_kwargs: Any,
-    ) -> Callable[
-        [Callable[..., Any]], Tool[Any, Any] | AsyncGenTool[Any, Any]
-    ]: ...
+    ) -> Callable[[Callable[..., Any]], Tool[Any, Any] | AsyncGenTool[Any, Any]]: ...
 
     def subtool(
         self,
@@ -238,9 +237,7 @@ class _BaseTool(Generic[P]):
     ) -> (
         Tool[Any, Any]
         | AsyncGenTool[Any, Any]
-        | Callable[
-            [Callable[..., Any]], Tool[Any, Any] | AsyncGenTool[Any, Any]
-        ]
+        | Callable[[Callable[..., Any]], Tool[Any, Any] | AsyncGenTool[Any, Any]]
     ):
         """Register an async function as a subtool of this tool.
 
@@ -330,7 +327,9 @@ class Tool(Generic[P, R], _BaseTool[P]):
         *,
         lock: bool = False,
         **fixed_kwargs: Any,
-    ) -> Callable[[Callable[Concatenate[Exception, ErrorHookP], Awaitable[None]]], Hook]: ...
+    ) -> Callable[
+        [Callable[Concatenate[Exception, ErrorHookP], Awaitable[None]]], Hook
+    ]: ...
 
     def on_error(
         self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
@@ -339,10 +338,13 @@ class Tool(Generic[P, R], _BaseTool[P]):
 
     async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
         async with self._invoke_context(args, kwargs) as merged:
+            bound_args, bound_kwargs = filter_args_to_signature(
+                self.fn, args, merged
+            )
             lock_ctx = self.lock if self.lock is not None else null_lock
             try:
                 async with lock_ctx:
-                    result = await self.fn(*args, **merged)
+                    result = await self.fn(*bound_args, **bound_kwargs)
             except Exception as exc:
                 await self._run_hooks(ToolHook.ON_ERROR, exc=exc)
                 raise
@@ -371,7 +373,9 @@ class AsyncGenTool(Generic[P, Y], _BaseTool[P]):
         *,
         lock: bool = False,
         **fixed_kwargs: Any,
-    ) -> Callable[[Callable[Concatenate[list[Y], GenHookP], Awaitable[None]]], Hook]: ...
+    ) -> Callable[
+        [Callable[Concatenate[list[Y], GenHookP], Awaitable[None]]], Hook
+    ]: ...
 
     def after_invoke(
         self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
@@ -445,7 +449,9 @@ class AsyncGenTool(Generic[P, Y], _BaseTool[P]):
         *,
         lock: bool = False,
         **fixed_kwargs: Any,
-    ) -> Callable[[Callable[Concatenate[Exception, ErrorHookP], Awaitable[None]]], Hook]: ...
+    ) -> Callable[
+        [Callable[Concatenate[Exception, ErrorHookP], Awaitable[None]]], Hook
+    ]: ...
 
     def on_error(
         self, fn: Any = None, *, lock: bool = False, **fixed_kwargs: Any
@@ -455,12 +461,15 @@ class AsyncGenTool(Generic[P, Y], _BaseTool[P]):
     async def __call__(self, *args: P.args, **kwargs: P.kwargs) -> AsyncIterator[Y]:
         aggregated: list[Y] = []
         async with self._invoke_context(args, kwargs) as merged:
+            bound_args, bound_kwargs = filter_args_to_signature(
+                self.fn, args, merged
+            )
             lock_ctx = self.lock if self.lock is not None else null_lock
             _errored = False
             try:
                 try:
                     async with lock_ctx:
-                        async for value in self.fn(*args, **merged):
+                        async for value in self.fn(*bound_args, **bound_kwargs):
                             await self._run_hooks(ToolHook.ON_YIELD, value)
                             aggregated.append(value)
                             yield value

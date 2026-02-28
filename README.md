@@ -55,6 +55,8 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
 
 **Subtools** — Subtools are normal registered tools (in `ToolRegistry`) that are also attached to a parent for hierarchical documentation. Use `@my_tool.subtool()` to register a subtool; use `doc_tree()` on any tool to get a recursive structure of name, description, and subtools (no runtime timing). Registry keys are scoped to the parent (e.g. `manage_users.create_user`) so different parents can have subtools with the same short name; use that scoped name in turns and lookups. Agents given a root tool accept turns for that tool and all its subtools.
 
+**Tool call arguments** — Invoking a tool with extra positional or keyword arguments does not raise; only the parameters accepted by the tool function are forwarded. Missing required parameters still raise `TypeError` when the underlying function is called. This allows callers (e.g. agents or external systems) to pass a superset of arguments without errors.
+
 ## Docs
 
 Full documentation: `uv run mkdocs serve`. MkDocs is an optional dependency—install with `pip install -e ".[docs]"` (or use `uv run` as above) so the library itself does not depend on it.

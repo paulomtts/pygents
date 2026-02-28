@@ -17,6 +17,10 @@ Fixed kwargs:
   K2  **kwargs in signature -> fixed keys allowed
   K3  Call-time overrides fixed -> merge_kwargs logs WARNING
 
+Call-time arguments:
+  C1  Extra positional or keyword args -> ignored; only params in fn signature are forwarded
+  C2  Missing required param -> TypeError when fn is called
+
 Lock:
   L1  lock=False -> wrapper.lock is None
   L2  lock=True -> wrapper.lock is asyncio.Lock()
@@ -211,6 +215,24 @@ def test_tool_fixed_kwargs_allowed_when_function_has_kwargs():
 
     result = asyncio.run(accepts_kwargs(1))
     assert result == {"x": 1, "extra": "fixed"}
+
+
+def test_tool_extra_kwargs_ignored():
+    @tool()
+    async def only_a(a: int) -> int:
+        return a
+
+    assert asyncio.run(only_a(1, extra=99, unused="x")) == 1  # type: ignore[call-arg]
+    assert asyncio.run(only_a(a=2, extra=99)) == 2  # type: ignore[call-arg]
+
+
+def test_tool_missing_param_still_raises():
+    @tool()
+    async def needs_a_and_b(a: int, b: int) -> int:
+        return a + b
+
+    with pytest.raises(TypeError, match="needs_a_and_b.*required"):
+        asyncio.run(needs_a_and_b(1))  # type: ignore[call-arg]
 
 
 def test_tool_metadata_start_time_and_end_time_set_on_run():

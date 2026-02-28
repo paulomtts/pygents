@@ -115,6 +115,37 @@ def inject_context_deps(
     return {**injected, **merged}  # merged (explicit) always wins
 
 
+def filter_args_to_signature(
+    fn: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Return (args, kwargs) restricted to parameters accepted by fn. Drops extra; missing still raise when fn is called."""
+    try:
+        sig = inspect.signature(fn)
+    except (ValueError, TypeError):
+        return args, kwargs
+    params = list(sig.parameters.values())
+    has_var_positional = any(
+        p.kind == inspect.Parameter.VAR_POSITIONAL for p in params
+    )
+    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
+    n_positional = 0
+    for p in params:
+        if p.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            break
+        n_positional += 1
+    filtered_args = args if has_var_positional else args[:n_positional]
+    filtered_kwargs = (
+        dict(kwargs)
+        if has_var_keyword
+        else {k: v for k, v in kwargs.items() if k in sig.parameters}
+    )
+    return filtered_args, filtered_kwargs
+
+
 def build_method_decorator(
     hook_type: Any,
     store: list,

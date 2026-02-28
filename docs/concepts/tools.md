@@ -32,6 +32,9 @@ async def write_file(path: str, content: str) -> None:
 !!! info "Opt-in Locking"
     Locking is opt-in because most tools are stateless and can run in parallel without contention. Use `lock=True` for tools that write to shared state (files, databases, external APIs with rate limits).
 
+!!! info "Extra arguments are ignored"
+    Invoking a tool with extra positional or keyword arguments does not raise. Only the parameters accepted by the tool function are forwarded. Missing required parameters still raise `TypeError` when the tool runs. This allows callers (e.g. agents or external systems) to pass a superset of arguments without errors.
+
 If any decorator kwarg is a callable (e.g. a lambda), it is **evaluated at runtime** when the tool is invoked; the function receives the result. Use this for dynamic config, fresh tokens, or values that must be read at invocation time.
 
 ```python
