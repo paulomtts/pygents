@@ -1210,7 +1210,7 @@ def test_cq_after_append_decorator_fires():
     cq = ContextQueue(5)
 
     @cq.after_append
-    async def capture_after(queue, incoming, current):
+    async def capture_after(incoming, current):
         fired.append(("after", len(current)))
 
     asyncio.run(cq.append(ContextItem(content="a")))

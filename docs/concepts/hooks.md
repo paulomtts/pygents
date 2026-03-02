@@ -80,7 +80,7 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | Hook | When | Args |
 |------|------|------|
 | `BEFORE_APPEND` | Before new items are inserted | `(queue, incoming, current)` — queue instance, items being appended, snapshot of items before append |
-| `AFTER_APPEND` | After new items have been added | `(queue, appended_items, current)` — queue instance, items that were appended, snapshot of items after append |
+| `AFTER_APPEND` | After new items have been added | `(appended_items, current)` — items that were appended, snapshot of items after append |
 | `BEFORE_CLEAR` | Before items are cleared | `(queue, items)` — queue instance, snapshot of items before clear |
 | `AFTER_CLEAR` | After items are cleared | `(queue)` — queue instance (now empty) |
 | `ON_EVICT` | When an item is evicted to make room | `(queue, item)` — queue instance, evicted `ContextItem` |

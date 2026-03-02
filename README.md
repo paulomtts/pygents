@@ -57,6 +57,8 @@ Tools are async functions. Turns say which tool to run and with what args. Agent
 
 **Tool call arguments** — Invoking a tool with extra positional or keyword arguments does not raise; only the parameters accepted by the tool function are forwarded. Missing required parameters still raise `TypeError` when the underlying function is called. This allows callers (e.g. agents or external systems) to pass a superset of arguments without errors.
 
+**Tool schemas from type hints** — Every decorated tool automatically derives `metadata.input_schema` and `metadata.output_schema` from its type hints. Schemas are best-effort JSON-schema-like dicts for common Python typing constructs (primitives, optionals, lists, dictionaries, unions, async generators) and are intended for documentation, UI generation, and validation in higher-level systems. If your project uses Pydantic, any parameter or return type that is a Pydantic model class is detected via its `model_json_schema()` / `schema()` method and that model schema is used directly, without `pygents` depending on Pydantic itself.
+
 ## Docs
 
 Full documentation: `uv run mkdocs serve`. MkDocs is an optional dependency—install with `pip install -e ".[docs]"` (or use `uv run` as above) so the library itself does not depend on it.

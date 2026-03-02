@@ -27,7 +27,7 @@ def test_agent_run_with_hooks_and_memory():
         events.append("memory_before_append")
 
     @hook(ContextQueueHook.AFTER_APPEND)
-    async def memory_after(queue, incoming, current):
+    async def memory_after(incoming, current):
         events.append("memory_after_append")
 
     memory = ContextQueue(10)

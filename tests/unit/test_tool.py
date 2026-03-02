@@ -42,7 +42,7 @@ Subtools / doc_tree:
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, Coroutine, cast
+from typing import Any, AsyncIterator, Coroutine, cast
 
 import pytest
 
@@ -87,6 +87,8 @@ def test_metadata_dict_returns_asdict():
         "description": None,
         "start_time": None,
         "end_time": None,
+        "input_schema": None,
+        "output_schema": None,
     }
 
 
@@ -153,6 +155,107 @@ def test_tool_metadata_fields():
     assert metadata.description == "A tool."
     assert metadata.start_time is None
     assert metadata.end_time is None
+    assert metadata.input_schema is None
+    assert metadata.output_schema is None
+
+
+def test_tool_metadata_schemas_for_simple_tool():
+    @tool()
+    async def add(a: int, b: int) -> int:
+        return a + b
+
+    input_schema = add.metadata.input_schema
+    output_schema = add.metadata.output_schema
+
+    assert input_schema is not None
+    assert input_schema["type"] == "object"
+    assert input_schema["properties"]["a"] == {"type": "integer"}
+    assert input_schema["properties"]["b"] == {"type": "integer"}
+    assert set(input_schema.get("required", [])) == {"a", "b"}
+
+    assert output_schema == {"type": "integer"}
+
+
+def test_tool_metadata_schemas_with_optional_and_list_types():
+    @tool()
+    async def search(
+        query: str,
+        limit: int | None = None,
+        tags: list[str] | None = None,
+    ) -> list[str]:
+        return [query] * (limit or 1)
+
+    input_schema = search.metadata.input_schema
+    output_schema = search.metadata.output_schema
+
+    assert input_schema is not None
+    assert input_schema["type"] == "object"
+    assert input_schema["properties"]["query"] == {"type": "string"}
+    assert input_schema["properties"]["limit"] == {"type": "integer"}
+    assert input_schema["properties"]["tags"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+    # Only query is required; limit and tags are optional.
+    assert input_schema["required"] == ["query"]
+
+    assert output_schema == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+
+
+def test_async_gen_tool_metadata_output_schema_uses_yield_type():
+    @tool()
+    async def stream_numbers() -> AsyncIterator[int]:
+        yield 1
+        yield 2
+
+    assert stream_numbers.metadata.input_schema is None
+    assert stream_numbers.metadata.output_schema == {"type": "integer"}
+
+
+def test_tool_metadata_uses_pydantic_schema_when_available():
+    try:
+        from pydantic import BaseModel  # type: ignore[import-not-found]
+    except Exception:
+        pytest.skip("pydantic is not installed")
+
+    class UserIn(BaseModel):
+        name: str
+        age: int
+
+    class UserOut(BaseModel):
+        id: int
+        name: str
+
+    @tool()
+    async def create_user(user: UserIn) -> UserOut:
+        return UserOut(id=1, name=user.name)
+
+    input_schema = create_user.metadata.input_schema
+    output_schema = create_user.metadata.output_schema
+
+    assert isinstance(input_schema, dict)
+    assert isinstance(output_schema, dict)
+
+    # Input schema wraps parameters in an object; the `user` field uses the Pydantic model schema.
+    assert input_schema.get("type") == "object"
+    assert "properties" in input_schema and "user" in input_schema["properties"]
+    user_schema = input_schema["properties"]["user"]
+    assert user_schema.get("title") == "UserIn"
+    assert user_schema.get("type") == "object"
+    assert "properties" in user_schema
+    assert "name" in user_schema["properties"]
+    assert "age" in user_schema["properties"]
+    assert "user" in input_schema.get("required", [])
+
+    # Output schema is the Pydantic model schema directly.
+    assert output_schema.get("title") == "UserOut"
+    assert output_schema.get("type") == "object"
+    assert "properties" in output_schema
+    assert "id" in output_schema["properties"]
+    assert "name" in output_schema["properties"]
 
 
 def test_tool_fixed_kwargs_merged_into_invocation():

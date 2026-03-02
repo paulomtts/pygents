@@ -187,7 +187,7 @@ other = cq.branch(hooks=[other_hook]) # different hooks
 | Hook | When | Args |
 |------|------|------|
 | `BEFORE_APPEND` | Before new items are inserted | `(queue, incoming, current)` — queue instance, items being appended, snapshot before append |
-| `AFTER_APPEND` | After new items have been added | `(queue, appended_items, current)` — queue instance, items that were appended, snapshot after append |
+| `AFTER_APPEND` | After new items have been added | `(appended_items, current)` — items that were appended, snapshot after append |
 | `BEFORE_CLEAR` | Before items are cleared | `(queue, items)` — queue instance, snapshot before clear |
 | `AFTER_CLEAR` | After items are cleared | `(queue)` — queue instance (now empty) |
 | `ON_EVICT` | When an item is evicted to make room | `(queue, item)` — queue instance, evicted `ContextItem` |
@@ -202,7 +202,7 @@ async def log_before(queue, incoming, current):
     print(f"Current count: {len(current)}")
 
 @cq.after_append
-async def log_after(queue, appended_items, current):
+async def log_after(appended_items, current):
     print(f"New count: {len(current)}")
 
 await cq.append(ContextItem(content="a"), ContextItem(content="b"), ContextItem(content="c"))

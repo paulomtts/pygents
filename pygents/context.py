@@ -111,9 +111,9 @@ class ContextQueue[T]:
 
         Parameters
         ----------
-        fn : async (queue: ContextQueue, appended: list[ContextItem], current: list[ContextItem]) -> None
-            Receives the queue, items that were appended, and a snapshot of the
-            queue contents after insertion.
+        fn : async (appended: list[ContextItem], current: list[ContextItem]) -> None
+            Receives the items that were appended and a snapshot of the queue
+            contents after insertion.
         lock : bool, optional
             If True, concurrent calls are serialized with an asyncio.Lock.
         **fixed_kwargs
@@ -206,7 +206,7 @@ class ContextQueue[T]:
                 await self._run_hooks(ContextQueueHook.ON_EVICT, self, evicted)
             self._items.append(item)
         await self._run_hooks(
-            ContextQueueHook.AFTER_APPEND, self, list(items), list(self._items)
+            ContextQueueHook.AFTER_APPEND, list(items), list(self._items)
         )
 
     def history(self, last: int | None = None) -> str:

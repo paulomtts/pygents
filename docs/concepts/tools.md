@@ -243,19 +243,33 @@ definitions = ToolRegistry.definitions()  # doc_tree() for each root-level tool 
 !!! warning "UnregisteredToolError"
     `ToolRegistry.get(name)` raises `UnregisteredToolError` if no tool is registered with that name.
 
-## Metadata and timing
+## Metadata, schemas, and timing
 
-Each tool has a `metadata` attribute (`ToolMetadata`) with name, description, and execution timing:
+Each tool has a `metadata` attribute (`ToolMetadata`) with name, description, inferred input/output schemas, and execution timing:
 
 ```python
-fetch.metadata.name         # "fetch"
-fetch.metadata.description  # docstring
-fetch.metadata.start_time   # datetime — set on entry, None before first run
-fetch.metadata.end_time     # datetime — set in finally, None before first run
-fetch.metadata.dict()       # {"name": ..., "description": ..., "start_time": ..., "end_time": ...}
+fetch.metadata.name          # "fetch"
+fetch.metadata.description   # docstring
+
+# JSON-schema-like structures inferred from type hints
+fetch.metadata.input_schema   # schema for parameters (object with properties/required)
+fetch.metadata.output_schema  # schema for the logical return or yield item type
+
+fetch.metadata.start_time    # datetime — set on entry, None before first run
+fetch.metadata.end_time      # datetime — set in finally, None before first run
+
+fetch.metadata.dict()
+# {
+#   "name": ...,
+#   "description": ...,
+#   "start_time": ...,
+#   "end_time": ...,
+#   "input_schema": ...,
+#   "output_schema": ...,
+# }
 ```
 
-Timing fields are set each time the tool runs (on the same metadata instance). `dict()` serializes datetimes to ISO strings. For a stable tree of name and description (including subtools), use `tool.doc_tree()` — see [Subtools and doc_tree](#subtools-and-doc_tree).
+Timing fields are set each time the tool runs (on the same metadata instance). `dict()` serializes datetimes to ISO strings. Schemas are best-effort JSON-schema-like dicts built from normal Python typing (`int`, `str`, `list[str]`, `dict[...]`, unions, optionals, async generators, etc.). If your project uses Pydantic, any parameter or return type that is a Pydantic model class is detected via its `model_json_schema()` / `schema()` method and that model schema is used directly; `pygents` does this via duck-typing and does not depend on Pydantic at install time. For a stable tree of name and description (including subtools), use `tool.doc_tree()` — see [Subtools and doc_tree](#subtools-and-doc_tree).
 
 ## Protocol
 

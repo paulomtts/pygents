@@ -6,16 +6,23 @@ import inspect
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from types import UnionType
+from collections.abc import AsyncGenerator as ABCAsyncGenerator, AsyncIterator as ABCAsyncIterator
 from typing import (
     Any,
+    AsyncGenerator,
     AsyncIterator,
     Awaitable,
     Callable,
     Concatenate,
+    Coroutine,
     Generic,
     ParamSpec,
     TypeVar,
+    Union,
     cast,
+    get_args,
+    get_origin,
     overload,
 )
 
@@ -45,12 +52,14 @@ ErrorHookP = ParamSpec("ErrorHookP")  # extra params for on_error hooks
 
 @dataclass
 class ToolMetadata:
-    """Name, description, and run timing of a tool."""
+    """Name, description, schemas, and run timing of a tool."""
 
     name: str
     description: str | None
     start_time: datetime | None = None
     end_time: datetime | None = None
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
 
     def dict(self) -> dict[str, Any]:
         return {
@@ -58,7 +67,180 @@ class ToolMetadata:
             "description": self.description,
             "start_time": self.start_time.isoformat() if self.start_time else None,
             "end_time": self.end_time.isoformat() if self.end_time else None,
+            "input_schema": self.input_schema,
+            "output_schema": self.output_schema,
         }
+
+
+def _python_type_to_schema(tp: Any) -> dict[str, Any]:
+    """Best-effort JSON-schema-like mapping for common typing constructs."""
+
+    origin = get_origin(tp)
+    args = get_args(tp)
+
+    if tp is Any or tp is object:
+        return {}
+
+    if tp is str:
+        return {"type": "string"}
+    if tp is int:
+        return {"type": "integer"}
+    if tp is float:
+        return {"type": "number"}
+    if tp is bool:
+        return {"type": "boolean"}
+
+    if origin is list or origin is tuple:
+        item_type: Any = Any
+        if args:
+            # list[T] or tuple[T, ...] -> items use first arg
+            item_type = args[0]
+        return {"type": "array", "items": _python_type_to_schema(item_type)}
+
+    if origin is dict:
+        # Object with free-form properties; structure unknown.
+        return {"type": "object"}
+
+    if origin is Coroutine or origin is Awaitable:
+        # Coroutine[..., T] / Awaitable[T] -> unwrap T.
+        if args:
+            return _python_type_to_schema(args[-1])
+        return {}
+
+    if origin in (AsyncIterator, AsyncGenerator, ABCAsyncIterator, ABCAsyncGenerator):
+        # AsyncIterator[T] / AsyncGenerator[T, ...] -> unwrap T.
+        if args:
+            return _python_type_to_schema(args[0])
+        return {}
+
+    if origin is list or origin is tuple:
+        # Already handled above, but keep a defensive branch.
+        return {"type": "array"}
+
+    if origin in (Union, UnionType):
+        # Optional[T] / Union[T1, T2, ...] -> anyOf without explicit null.
+        sub_schemas = [_python_type_to_schema(a) for a in args]
+        return {"anyOf": sub_schemas}
+
+    # Pydantic-style models (duck-typed, no direct dependency).
+    # Supports both v2 (model_json_schema) and v1 (schema).
+    if isinstance(tp, type):
+        method = getattr(tp, "model_json_schema", None)
+        if callable(method):
+            try:
+                return method()
+            except Exception:
+                return {}
+        method = getattr(tp, "schema", None)
+        if callable(method):
+            try:
+                return method()
+            except Exception:
+                return {}
+
+    return {}
+
+
+def _strip_optional(tp: Any) -> tuple[Any, bool]:
+    """Return (inner_type, is_optional) for Optional[T] / Union[T, None]."""
+
+    origin = get_origin(tp)
+    args = get_args(tp)
+    if origin is None or not args:
+        return tp, False
+
+    if origin not in (Union, UnionType):
+        return tp, False
+
+    non_none = [a for a in args if a is not type(None)]  # noqa: E721
+    if len(non_none) == 1:
+        return non_none[0], True
+    return tp, any(a is type(None) for a in args)  # noqa: E721
+
+
+def _build_input_schema(fn: Callable[..., Any]) -> dict[str, Any] | None:
+    """Build an object schema describing the tool's parameters."""
+
+    try:
+        sig = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return None
+
+    try:
+        hints = inspect.get_annotations(fn, eval_str=True)
+    except Exception:
+        hints = {}
+
+    properties: dict[str, dict[str, Any]] = {}
+    required: list[str] = []
+
+    for name, param in sig.parameters.items():
+        if name in ("self", "cls"):
+            continue
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            continue
+
+        annotated = hints.get(name, Any)
+        inner_type, is_optional = _strip_optional(annotated)
+        schema = _python_type_to_schema(inner_type if is_optional else annotated)
+        properties[name] = schema
+
+        has_default = param.default is not inspect.Parameter.empty
+        if not has_default and not is_optional:
+            required.append(name)
+
+    if not properties:
+        return None
+
+    schema: dict[str, Any] = {"type": "object", "properties": properties}
+    if required:
+        schema["required"] = required
+    return schema
+
+
+def _unwrap_return_annotation(tp: Any, *, is_async_gen: bool) -> Any:
+    """Extract the logical return / yield item type from an annotation."""
+
+    origin = get_origin(tp)
+    args = get_args(tp)
+
+    if is_async_gen:
+        if origin in (AsyncIterator, AsyncGenerator, ABCAsyncIterator, ABCAsyncGenerator):
+            if args:
+                return args[0]
+            return Any
+        return tp
+
+    if origin is Coroutine:
+        if args:
+            return args[-1]
+        return Any
+
+    if origin is Awaitable:
+        if args:
+            return args[0]
+        return Any
+
+    return tp
+
+
+def _build_output_schema(fn: Callable[..., Any], *, is_async_gen: bool) -> dict[str, Any] | None:
+    """Build a schema for the tool's logical output value."""
+
+    try:
+        hints = inspect.get_annotations(fn, eval_str=True)
+    except Exception:
+        return None
+
+    ret = hints.get("return")
+    if ret is None:
+        return None
+
+    unwrapped = _unwrap_return_annotation(ret, is_async_gen=is_async_gen)
+    return _python_type_to_schema(unwrapped)
 
 
 class _BaseTool(Generic[P]):
@@ -513,6 +695,10 @@ class _ToolDecorator:
             ToolClass = AsyncGenTool
         instance = ToolClass(
             fn, lock=self._lock, fixed_kwargs=self._fixed_kwargs, tags=self._tags
+        )
+        instance.metadata.input_schema = _build_input_schema(fn)
+        instance.metadata.output_schema = _build_output_schema(
+            fn, is_async_gen=inspect.isasyncgenfunction(fn)
         )
         if self._register:
             ToolRegistry.register(instance)

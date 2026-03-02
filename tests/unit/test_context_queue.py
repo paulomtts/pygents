@@ -11,9 +11,9 @@ limit/items properties: maxlen; list(_items).
 
 append(*items):
   A1  Non-ContextItem -> TypeError
-  A2  BEFORE_APPEND hook -> await hook(list(self._items)), then append items (eviction by maxlen)
+  A2  BEFORE_APPEND hook -> await hook(self, incoming, current_snapshot), then append items (eviction by maxlen)
   A3  No BEFORE_APPEND -> append items (eviction by maxlen)
-  A4  AFTER_APPEND hook -> await hook(list(self._items))
+  A4  AFTER_APPEND hook -> await hook(incoming, current_snapshot_after)
 
 clear(): _items.clear().
 
@@ -181,7 +181,7 @@ def test_before_append_mutation_of_snapshot_does_not_affect_queue():
 def test_after_append_hook_called():
     seen = []
 
-    async def after_spy(queue, incoming, current):
+    async def after_spy(incoming, current):
         seen.append((list(incoming), list(current)))
 
     after_spy.type = ContextQueueHook.AFTER_APPEND  # type: ignore[attr-defined]
