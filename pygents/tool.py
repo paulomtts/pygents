@@ -243,7 +243,7 @@ def _build_output_schema(fn: Callable[..., Any], *, is_async_gen: bool) -> dict[
     return _python_type_to_schema(unwrapped)
 
 
-class _BaseTool(Generic[P]):
+class BaseTool(Generic[P]):
     """Shared base for Tool and AsyncGenTool."""
 
     fn: Callable[P, Any]
@@ -264,14 +264,14 @@ class _BaseTool(Generic[P]):
         self.metadata = ToolMetadata(fn.__name__, fn.__doc__)
         self.lock = asyncio.Lock() if lock else None
         self.hooks = []
-        self._subtools: list[_BaseTool[Any]] = []
+        self._subtools: list[BaseTool[Any]] = []
         self._fixed_kwargs = fixed_kwargs or {}
         self.tags: frozenset[str] = frozenset(tags or [])
         functools.update_wrapper(
             cast(Callable[P, Any], self), fn
         )  # ? REASON: make the instance inherit the function's name, docstring, etc.
 
-    def add_subtool(self, child: _BaseTool[Any]) -> None:
+    def add_subtool(self, child: BaseTool[Any]) -> None:
         self._subtools.append(child)
 
     def doc_tree(self) -> dict[str, Any]:
@@ -451,7 +451,7 @@ class _BaseTool(Generic[P]):
         return wrap
 
 
-class Tool(Generic[P, R], _BaseTool[P]):
+class Tool(Generic[P, R], BaseTool[P]):
     """Typed wrapper for a coroutine tool."""
 
     fn: Callable[P, Awaitable[R]]
@@ -534,7 +534,7 @@ class Tool(Generic[P, R], _BaseTool[P]):
         return result
 
 
-class AsyncGenTool(Generic[P, Y], _BaseTool[P]):
+class AsyncGenTool(Generic[P, Y], BaseTool[P]):
     """Typed wrapper for an async-generator tool."""
 
     fn: Callable[P, AsyncIterator[Y]]

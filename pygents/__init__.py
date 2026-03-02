@@ -19,7 +19,7 @@ from pygents.hooks import (
     hook,
 )
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
-from pygents.tool import AsyncGenTool, Tool, ToolMetadata, tool
+from pygents.tool import AsyncGenTool, Tool, ToolMetadata, tool, BaseTool
 from pygents.turn import StopReason, Turn
 
 __all__ = [
@@ -39,6 +39,7 @@ __all__ = [
     "SafeExecutionError",
     "StopReason",
     "Tool",
+    "BaseTool",
     "ToolMetadata",
     "ToolHook",
     "ToolRegistry",
