@@ -15,3 +15,5 @@ site/
 # Custom
 .context/
 .coverage
+.brd
+.claude/worktrees/
