@@ -330,6 +330,16 @@ class Turn[T]:
                     aggregated.append(item)
                     yield item
                 await producer
+            except (GeneratorExit, asyncio.CancelledError):
+                # Consumer closed us (aclose) or its task was cancelled: stop the
+                # tool and wait for its cleanup. Never yield here.
+                producer.cancel()
+                try:
+                    await producer
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self.metadata.stop_reason = StopReason.CANCELLED
+                raise
             except (asyncio.TimeoutError, TimeoutError) as exc:
                 if isinstance(exc, TurnTimeoutError):
                     raise

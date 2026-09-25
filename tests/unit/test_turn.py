@@ -27,6 +27,8 @@ yielding():
   Y3  Normal: BEFORE_RUN, queue, yield, COMPLETED, AFTER_RUN, output = aggregated
   Y4  Timeout -> ON_TIMEOUT, TurnTimeoutError, finally end_time
   Y5  Tool raises -> ERROR, ON_ERROR(e), finally end_time
+  Y6  Consumer closes early (aclose) -> producer cancelled and awaited, CANCELLED, no ON_ERROR/ON_TIMEOUT, GeneratorExit re-raised, finally end_time + ON_COMPLETE(CANCELLED)
+  Y7  Consuming task cancelled -> same as Y6, CancelledError re-raised to the awaiter
   Y8  After an early aclose() returns, _is_running is already False -> the turn can run again immediately
 
 to_dict/from_dict:
@@ -787,5 +789,196 @@ def test_yielding_after_cancel_turn_can_run_again(isolated_tool_registry):
         items = [x async for x in turn.yielding()]
         assert items == [1, 2]
         assert turn.metadata.stop_reason == StopReason.COMPLETED
+
+    asyncio.run(_body())
+
+
+def test_yielding_when_consumer_closes_early_sets_stop_reason_cancelled(
+    isolated_tool_registry,
+):
+    async def _body():
+        # No awaits in the tool: the producer has already finished (all items
+        # queued) by the time the first item is consumed, so this also covers
+        # "producer already finished when the consumer closes".
+        @tool()
+        async def turn_close_early_multi_gen():
+            yield 1
+            yield 2
+            yield 3
+
+        turn = Turn(turn_close_early_multi_gen)
+        gen = turn.yielding()
+        assert await gen.__anext__() == 1
+        await gen.aclose()
+        assert turn.metadata.stop_reason == StopReason.CANCELLED
+        assert turn.metadata.end_time is not None
+        assert turn._is_running is False
+
+    asyncio.run(_body())
+
+
+def test_yielding_when_consumer_closes_early_cancels_producer(isolated_tool_registry):
+    events = []
+
+    async def _body():
+        @tool()
+        async def turn_close_early_slow_gen():
+            try:
+                yield 1
+                await asyncio.sleep(10)
+                events.append("ran after close")
+                yield 2
+            finally:
+                events.append("tool closed")
+
+        turn = Turn(turn_close_early_slow_gen)
+        gen = turn.yielding()
+        assert await gen.__anext__() == 1
+        await gen.aclose()
+        assert events == ["tool closed"]
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+
+    asyncio.run(_body())
+    assert events == ["tool closed"]
+
+
+def test_yielding_when_consumer_closes_early_fires_on_complete_with_cancelled_not_on_error(
+    isolated_tool_registry,
+):
+    HookRegistry.clear()
+    events = []
+
+    @hook(TurnHook.ON_COMPLETE)
+    async def record_yielding_close_complete(turn, stop_reason):
+        events.append(("on_complete", stop_reason))
+
+    @hook(TurnHook.ON_ERROR)
+    async def record_yielding_close_error(turn, exc):
+        events.append(("on_error", type(exc).__name__))
+
+    @hook(TurnHook.ON_TIMEOUT)
+    async def record_yielding_close_timeout(turn):
+        events.append(("on_timeout",))
+
+    async def _body():
+        @tool()
+        async def turn_close_early_hooks_gen():
+            yield 1
+            await asyncio.sleep(10)
+            yield 2
+
+        turn = Turn(turn_close_early_hooks_gen)
+        gen = turn.yielding()
+        assert await gen.__anext__() == 1
+        await gen.aclose()
+
+    asyncio.run(_body())
+    assert events == [("on_complete", StopReason.CANCELLED)]
+
+
+def test_yielding_when_consuming_task_cancelled_sets_stop_reason_cancelled_and_propagates(
+    isolated_tool_registry,
+):
+    async def _body():
+        @tool()
+        async def turn_cancel_consumer_slow_gen():
+            yield 1
+            await asyncio.sleep(10)
+            yield 2
+
+        turn = Turn(turn_cancel_consumer_slow_gen)
+        first_item = asyncio.Event()
+
+        async def consume():
+            async for _ in turn.yielding():
+                first_item.set()
+
+        task = asyncio.create_task(consume())
+        # When this wakes, the consumer has already re-entered yielding() and
+        # is blocked waiting for item 2.
+        await first_item.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert turn.metadata.stop_reason == StopReason.CANCELLED
+        assert turn.metadata.end_time is not None
+        assert turn._is_running is False
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+
+    asyncio.run(_body())
+
+
+def test_yielding_when_consumer_closes_early_waits_for_slow_tool_cleanup(
+    isolated_tool_registry,
+):
+    cleaned = []
+
+    async def _body():
+        @tool()
+        async def turn_close_slow_cleanup_gen():
+            try:
+                yield 1
+                await asyncio.sleep(10)
+                yield 2
+            finally:
+                await asyncio.sleep(0.02)
+                cleaned.append("cleanup finished")
+
+        turn = Turn(turn_close_slow_cleanup_gen)
+        gen = turn.yielding()
+        assert await gen.__anext__() == 1
+        await gen.aclose()
+        assert cleaned == ["cleanup finished"]
+        assert turn.metadata.stop_reason == StopReason.CANCELLED
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+
+    asyncio.run(_body())
+
+
+def test_yielding_when_consumer_closes_after_tool_failed_reports_cancelled_not_error(
+    isolated_tool_registry,
+):
+    HookRegistry.clear()
+    events = []
+
+    @hook(TurnHook.ON_ERROR)
+    async def record_yielding_failed_close_error(turn, exc):
+        events.append(("on_error", type(exc).__name__))
+
+    async def _body():
+        # The producer yields 1, then raises and finishes before the consumer
+        # resumes; aclose() must not surface that ValueError.
+        @tool()
+        async def turn_close_after_fail_gen():
+            yield 1
+            raise ValueError("boom after first item")
+
+        turn = Turn(turn_close_after_fail_gen)
+        gen = turn.yielding()
+        assert await gen.__anext__() == 1
+        await gen.aclose()
+        assert turn.metadata.stop_reason == StopReason.CANCELLED
+        assert turn._is_running is False
+        assert asyncio.all_tasks() == {asyncio.current_task()}
+
+    asyncio.run(_body())
+    assert events == []
+
+
+def test_yielding_closed_before_first_item_never_starts_the_turn(
+    isolated_tool_registry,
+):
+    async def _body():
+        @tool()
+        async def turn_close_before_start_gen():
+            yield 1
+
+        turn = Turn(turn_close_before_start_gen)
+        gen = turn.yielding()
+        await gen.aclose()
+        assert turn.metadata.start_time is None
+        assert turn.metadata.stop_reason is None
+        assert turn._is_running is False
+        assert asyncio.all_tasks() == {asyncio.current_task()}
 
     asyncio.run(_body())
