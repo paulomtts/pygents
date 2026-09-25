@@ -138,8 +138,11 @@ class Turn[T]:
 
     async def _run_hooks(self, hook_type: TurnHook, *args: Any) -> None:
         await HookRegistry.fire(
-            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), self, *args,
-            _source_tags=self.tags
+            hook_type,
+            HookRegistry.get_by_type(hook_type, self.hooks),
+            self,
+            *args,
+            _source_tags=self.tags,
         )
 
     def before_run(
@@ -266,6 +269,9 @@ class Turn[T]:
             self.metadata.stop_reason = StopReason.TIMEOUT
             await self._run_hooks(TurnHook.ON_TIMEOUT)
             raise TurnTimeoutError(f"Turn timed out after {self.timeout}s") from None
+        except asyncio.CancelledError:
+            self.metadata.stop_reason = StopReason.CANCELLED
+            raise
         except Exception as e:
             self.metadata.stop_reason = StopReason.ERROR
             await self._run_hooks(TurnHook.ON_ERROR, e)
@@ -327,6 +333,16 @@ class Turn[T]:
                     aggregated.append(item)
                     yield item
                 await producer
+            except (GeneratorExit, asyncio.CancelledError):
+                # Consumer closed us (aclose) or its task was cancelled: stop the
+                # tool and wait for its cleanup. Never yield here.
+                producer.cancel()
+                try:
+                    await producer
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self.metadata.stop_reason = StopReason.CANCELLED
+                raise
             except (asyncio.TimeoutError, TimeoutError) as exc:
                 if isinstance(exc, TurnTimeoutError):
                     raise

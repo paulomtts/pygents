@@ -7,6 +7,7 @@ safe_execution(func):
   SE1  getattr(self, "_is_running", False) is False -> call func(self, *args, **kwargs), return result
   SE2  _is_running is True -> SafeExecutionError with func.__name__ and "running"
   SE3  self has no _is_running -> getattr returns False -> same as SE1
+  SE4  async-gen func: closing the wrapper early closes the wrapped generator before aclose() returns
 
 eval_args(args): each item callable (_function_type) -> call and use return value; else pass through.
 eval_kwargs(kwargs): same per value, keys unchanged.
@@ -115,6 +116,29 @@ def test_safe_execution_asyncgen_raises_when_running():
 
     with pytest.raises(SafeExecutionError):
         asyncio.run(_())
+
+
+def test_safe_execution_asyncgen_closes_inner_generator_when_closed_early():
+    closed = []
+
+    @safe_execution
+    async def gen_fn(self):
+        try:
+            yield 1
+            yield 2
+        finally:
+            closed.append("inner closed")
+
+    class Obj:
+        _is_running = False
+
+    async def _():
+        agen = gen_fn(Obj())
+        assert await agen.__anext__() == 1
+        await agen.aclose()
+        assert closed == ["inner closed"]
+
+    asyncio.run(_())
 
 
 def test_safe_execution_uses_getattr_so_missing_is_false():

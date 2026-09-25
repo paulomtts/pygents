@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from contextvars import ContextVar, Token
 from typing import Any, AsyncIterator, Sequence
 
 from pygents.context import (
@@ -29,6 +30,15 @@ def _tool_registry_keys(tool: Tool[Any, Any] | AsyncGenTool[Any, Any]) -> set[st
     for st in getattr(tool, "_subtools", []):
         keys.update(_tool_registry_keys(st))
     return keys
+
+
+def _reset_context_var(var: ContextVar[Any], token: Token[Any], previous: Any) -> None:
+    """Reset *var* with *token*; if the token was made in another Context
+    (cleanup running in the loop's asyncgen-finalizer task), set *previous*."""
+    try:
+        var.reset(token)
+    except ValueError:
+        var.set(previous)
 
 
 class Agent:
@@ -467,9 +477,11 @@ class Agent:
                 pool_token = _current_context_pool.set(self.context_pool)
                 original_hooks = turn.hooks[:]
                 turn.hooks.extend(self.turn_hooks)
+                turn_gen = None
                 try:
                     if inspect.isasyncgenfunction(turn.tool.fn):
-                        async for value in turn.yielding():
+                        turn_gen = turn.yielding()
+                        async for value in turn_gen:
                             await self._route_value(value)
                             await self._run_hooks(
                                 AgentHook.ON_TURN_VALUE, self, turn, value
@@ -484,14 +496,38 @@ class Agent:
                         )
                         if not isinstance(output, (ContextItem, Turn)):
                             yield (turn, output)
+                except BaseException:
+                    # Leaving early (aclose()/break -> GeneratorExit, task cancel
+                    # -> CancelledError) or an error from our own routing/hooks can
+                    # leave turn_gen paused at a yield with turn._is_running True.
+                    # Close it now, while the agent's turn hooks are still attached,
+                    # so the turn records CANCELLED and fires ON_COMPLETE before the
+                    # cleanup below reassigns turn.hooks. No-op if turn_gen already
+                    # finished (e.g. the tool raised). The coroutine path needs no
+                    # close: a cancelled returning() already reports CANCELLED.
+                    if turn_gen is not None:
+                        await turn_gen.aclose()
+                    raise
                 finally:
-                    turn.hooks = original_hooks
+                    # Three independent steps: a failure in one must not skip the
+                    # others. The first failure is re-raised once all have run.
+                    cleanup_error: Exception | None = None
                     try:
-                        _current_context_queue.reset(queue_token)
-                        _current_context_pool.reset(pool_token)
-                    except ValueError:
-                        _current_context_queue.set(prev_queue)
-                        _current_context_pool.set(prev_pool)
+                        turn.hooks = original_hooks
+                    except Exception as exc:
+                        cleanup_error = exc
+                    try:
+                        _reset_context_var(
+                            _current_context_queue, queue_token, prev_queue
+                        )
+                    except Exception as exc:
+                        cleanup_error = cleanup_error or exc
+                    try:
+                        _reset_context_var(_current_context_pool, pool_token, prev_pool)
+                    except Exception as exc:
+                        cleanup_error = cleanup_error or exc
+                    if cleanup_error is not None:
+                        raise cleanup_error
                 await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
                 self._current_turn = None
         finally:
