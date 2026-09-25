@@ -266,6 +266,9 @@ class Turn[T]:
             self.metadata.stop_reason = StopReason.TIMEOUT
             await self._run_hooks(TurnHook.ON_TIMEOUT)
             raise TurnTimeoutError(f"Turn timed out after {self.timeout}s") from None
+        except asyncio.CancelledError:
+            self.metadata.stop_reason = StopReason.CANCELLED
+            raise
         except Exception as e:
             self.metadata.stop_reason = StopReason.ERROR
             await self._run_hooks(TurnHook.ON_ERROR, e)

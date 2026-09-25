@@ -19,6 +19,7 @@ returning():
   R3  Normal: start_time, BEFORE_RUN, eval_args/kwargs, wait_for(tool), COMPLETED, AFTER_RUN, return output
   R4  Timeout -> TIMEOUT, ON_TIMEOUT, TurnTimeoutError, finally end_time
   R5  Tool raises -> ERROR, ON_ERROR(e), re-raise, finally end_time
+  R6  Awaiting task cancelled -> CANCELLED, no ON_ERROR, CancelledError re-raised, finally end_time + ON_COMPLETE(CANCELLED)
 
 yielding():
   Y1  Already running -> SafeExecutionError
@@ -38,7 +39,7 @@ import pytest
 
 from pygents.errors import SafeExecutionError, TurnTimeoutError, WrongRunMethodError
 from pygents.hooks import TurnHook, hook
-from pygents.registry import HookRegistry
+from pygents.registry import HookRegistry, ToolRegistry
 from pygents.tool import tool
 from pygents.turn import StopReason, Turn, TurnMetadata
 
@@ -691,3 +692,80 @@ def test_turn_tags_survive_serialization_roundtrip():
     assert set(data["tags"]) == {"fast", "critical"}
     restored = Turn.from_dict(data)
     assert restored.tags == frozenset({"fast", "critical"})
+
+
+# ---------------------------------------------------------------------------
+# Cancellation (R6, Y6-Y8) - tools are defined per test in an isolated registry
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def isolated_tool_registry():
+    """Clear ToolRegistry for one test, then restore it.
+
+    A bare ToolRegistry.clear() would drop the module-level tools above (and
+    other test modules' tools), which are registered once at import time.
+    """
+    saved = dict(ToolRegistry._registry)
+    ToolRegistry.clear()
+    yield
+    ToolRegistry._registry = saved
+
+
+def test_returning_when_task_cancelled_sets_stop_reason_cancelled_and_propagates(
+    isolated_tool_registry,
+):
+    async def _body():
+        started = asyncio.Event()
+
+        @tool()
+        async def turn_cancel_returning_slow() -> int:
+            started.set()
+            await asyncio.sleep(10)
+            return 1
+
+        turn = Turn(turn_cancel_returning_slow)
+        task = asyncio.create_task(turn.returning())
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert turn.metadata.stop_reason == StopReason.CANCELLED
+        assert turn.metadata.end_time is not None
+        assert turn._is_running is False
+
+    asyncio.run(_body())
+
+
+def test_returning_when_task_cancelled_fires_on_complete_with_cancelled_not_on_error(
+    isolated_tool_registry,
+):
+    HookRegistry.clear()
+    events = []
+
+    @hook(TurnHook.ON_COMPLETE)
+    async def record_returning_cancel_complete(turn, stop_reason):
+        events.append(("on_complete", stop_reason))
+
+    @hook(TurnHook.ON_ERROR)
+    async def record_returning_cancel_error(turn, exc):
+        events.append(("on_error", type(exc).__name__))
+
+    async def _body():
+        started = asyncio.Event()
+
+        @tool()
+        async def turn_cancel_returning_hooks_slow() -> int:
+            started.set()
+            await asyncio.sleep(10)
+            return 1
+
+        turn = Turn(turn_cancel_returning_hooks_slow)
+        task = asyncio.create_task(turn.returning())
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_body())
+    assert events == [("on_complete", StopReason.CANCELLED)]
