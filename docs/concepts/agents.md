@@ -183,6 +183,59 @@ assert restored.is_paused        # still paused after round-trip
 restored.resume()                # now it will run
 ```
 
+## Stopping `run()` early
+
+You can leave `run()` before the queue is empty: `break` out of the loop, call `aclose()` on the generator, or cancel the task that is iterating it. When you `break`, wrap the generator in `contextlib.aclosing` so the cleanup below has finished before your code continues:
+
+```python
+import contextlib
+
+from pygents import Agent, Turn, tool
+
+@tool()
+async def stream_rows(n: int):
+    for i in range(n):
+        yield i
+
+@tool()
+async def work(x: int) -> int:
+    return x * 2
+
+agent = Agent("worker", "Streams rows", [stream_rows, work])
+await agent.put(Turn("stream_rows", kwargs={"n": 100}))
+await agent.put(Turn("work", kwargs={"x": 1}))
+
+async with contextlib.aclosing(agent.run()) as stream:
+    async for turn, value in stream:
+        if value == 3:
+            interrupted = turn
+            break  # stream_rows is still running, so it is cancelled
+```
+
+What happens to the turn that was running:
+
+- **Async generator tools.** `run()` closes the turn's generator before it restores anything else. The tool's producer task is cancelled and awaited, so the tool's own `finally` blocks run. The turn's `metadata.stop_reason` becomes `StopReason.CANCELLED`, and `ON_COMPLETE` fires with `StopReason.CANCELLED`. The agent's turn-scoped hooks (`@agent.on_complete`, etc.) are still attached at that moment, so they see it too.
+- **Coroutine tools.** Cancelling the task while the tool is still being awaited inside `returning()` has the same result: `stop_reason` is `StopReason.CANCELLED` and `ON_COMPLETE` fires with it. A coroutine tool's value is yielded only after the tool has finished, so if you `break` after receiving it, that turn has already completed and keeps `StopReason.COMPLETED`.
+- In every case, `AFTER_TURN` does not fire for the interrupted turn.
+
+The same close happens if one of the agent's own hooks (for example `ON_TURN_VALUE`) raises while an async generator turn is paused at a value. The turn ends as `CANCELLED`, and the hook's exception reaches you.
+
+**The interrupted turn is dropped, not re-queued.** The next `run()` starts at the head of the queue, which here is `work`. To retry the interrupted work, `put()` a new turn for it:
+
+```python
+await agent.put(
+    Turn(interrupted.tool, args=interrupted.args, kwargs=interrupted.kwargs, timeout=interrupted.timeout)
+)
+
+async for turn, value in agent.run():
+    ...  # runs work(x=1), then stream_rows(n=100) from the start
+```
+
+Leaving early does not raise: `break` and `aclose()` return normally, and nothing is reported to the event loop's exception handler. Cancelling a task works as usual in asyncio, so awaiting the cancelled task raises `CancelledError`. Once the exit has returned, the agent is idle and can be used right away. `run()` always clears its running state and its current turn on the way out, so `put()` and `run()` work immediately without `SafeExecutionError`.
+
+!!! note "A bare `break`"
+    Without `contextlib.aclosing`, `break` only drops the generator, because Python does not close an async generator when you leave `async for`. asyncio's async-generator finalizer closes it on a later loop iteration with the same result (turn `CANCELLED`, agent idle, no error). Until then the agent still counts as running, and calling `run()` again raises `SafeExecutionError`. Use `aclosing`, or call `aclose()` yourself, when you want to reuse the agent immediately.
+
 ## Hooks
 
 Agent hooks fire at specific points during the run loop. Hooks are stored as a list and selected by type at run time. Exceptions in hooks propagate.
@@ -190,12 +243,22 @@ Agent hooks fire at specific points during the run loop. Hooks are stored as a l
 | Hook | When | Args |
 |------|------|------|
 | `BEFORE_TURN` | Before consuming next turn from queue | `(agent)` |
-| `AFTER_TURN` | After turn fully processed | `(agent, turn)` |
+| `AFTER_TURN` | After turn fully processed; the agent's `_current_turn` is already `None` | `(agent, turn)` |
 | `ON_TURN_VALUE` | After routing (value already stored in `context_queue`/`context_pool`), before yielding to the caller | `(agent, turn, value)` |
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
 | `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
 | `ON_PAUSE` | When the run loop hits a paused gate | `(agent)` |
 | `ON_RESUME` | After the gate is released and before the next turn | `(agent)` |
+
+`BEFORE_TURN` and `AFTER_TURN` are consistent checkpoints. In `BEFORE_TURN` the next turn has not started yet. In `AFTER_TURN` the finished turn has already been cleared: the agent's `_current_turn` is `None` (there is no public `current_turn` attribute). An `agent.to_dict()` snapshot taken in either hook therefore describes exactly the work still to do, and restoring it with `Agent.from_dict()` never runs a finished turn again.
+
+```python
+snapshots = []
+
+@agent.after_turn
+async def checkpoint(agent, turn):
+    snapshots.append(agent.to_dict())  # snapshots[-1]["current_turn"] is None
+```
 
 Attach hooks after construction via method decorators or `agent.hooks.append(h)`:
 
@@ -219,10 +282,10 @@ async def log_all(agent, turn):
     print(f"[{agent.name}] {turn.tool.metadata.name} → {turn.metadata.stop_reason}")
 ```
 
-Hooks are registered in `HookRegistry` at decoration time. Use named functions so they serialize by name.
+Hooks are registered in `HookRegistry` at decoration time. Define them as module-level functions with unique names so the agent can be saved; see [Hooks — Closures and reused names](hooks.md#closures-and-reused-names).
 
 !!! warning "ValueError"
-    Registering a *different* hook with a name already in use in `HookRegistry` raises `ValueError`. Re-registering the same hook under the same name is allowed.
+    A global `@hook(...)` whose name is already taken by a *different* hook raises `ValueError`. Re-registering the same hook under the same name is allowed. Method decorators such as `@agent.after_turn` never raise on a name clash.
 
 ## Registry
 
@@ -232,11 +295,17 @@ Agents **auto-register** with `AgentRegistry` on construction. `send` and `from_
 from pygents import AgentRegistry
 
 agent = AgentRegistry.get("worker")  # lookup by name
+AgentRegistry.unregister("worker")   # remove one agent; the name can be reused
 AgentRegistry.clear()                # empty the registry (useful in tests)
 ```
 
 !!! warning "ValueError"
     `AgentRegistry.register()` raises `ValueError` if an agent with the same name is already registered.
+
+`unregister(name)` only affects lookup by name. `send()` can no longer find the agent, and a new `Agent` (including one rebuilt with `Agent.from_dict()`) may take the name. The agent object itself keeps working. `ToolRegistry.unregister(name)` works the same way for tools: agents that already hold the tool keep using it.
+
+!!! warning "UnregisteredAgentError / UnregisteredToolError"
+    `AgentRegistry.unregister(name)` raises `UnregisteredAgentError` for an unknown name. `ToolRegistry.unregister(name)` raises `UnregisteredToolError`.
 
 ## Serialization
 
@@ -245,17 +314,22 @@ data = agent.to_dict()       # name, description, tool_names, queue, current_tur
 agent = Agent.from_dict(data)  # rebuilds from registries, repopulates queue, pool, context_queue, and pause state
 ```
 
-The serialized form includes the queued turns, the `current_turn` if a turn was in-flight at serialize time (so it will be replayed on resume), and the full context pool and queue. Hooks (agent-level, context pool, and context queue) are serialized by name and resolved from `HookRegistry` on deserialization. The `is_paused` field is also preserved — a paused agent reconstructed via `from_dict()` stays paused until `resume()` is called.
+The serialized form includes the queued turns, the `current_turn` if a turn was in-flight at serialize time (so it will be replayed on resume; a turn interrupted by leaving `run()` early is dropped instead, see [Stopping `run()` early](#stopping-run-early)), and the full context pool and queue. Hooks (agent-level, context pool, and context queue) are serialized by name and resolved from `HookRegistry` on deserialization. The `is_paused` field is also preserved — a paused agent reconstructed via `from_dict()` stays paused until `resume()` is called.
 
 !!! warning "UnregisteredHookError"
     `Agent.from_dict()` raises `UnregisteredHookError` if a hook name is not found in `HookRegistry`.
+
+!!! warning "UnserializableHookError"
+    `agent.to_dict()` raises `UnserializableHookError` if the agent's hooks, its turn hooks, its context pool or its context queue hold a hook that is not the one registered under its name (a closure or a duplicate). See [Hooks — Closures and reused names](hooks.md#closures-and-reused-names).
 
 ## Errors
 
 | Exception | When |
 |-----------|------|
-| `ValueError` | Tool instance mismatch, duplicate agent name, tool not in agent's set, or duplicate hook name |
-| `SafeExecutionError` | Changing attributes or calling `run()` while already running or paused |
-| `UnregisteredAgentError` | `send` target not found in `AgentRegistry` |
+| `ValueError` | Tool instance mismatch, duplicate agent name, tool not in agent's set, or a global `@hook` whose name is taken by a different hook |
+| `SafeExecutionError` | Changing attributes or calling `run()` while already running or paused (including after a bare `break`, until the loop closes the generator) |
+| `UnregisteredAgentError` | `send` target, or `AgentRegistry.unregister()` name, not found in `AgentRegistry` |
+| `UnregisteredToolError` | `ToolRegistry.unregister()` name not found in `ToolRegistry` |
 | `UnregisteredHookError` | Hook name not found in `HookRegistry` during `from_dict()` |
+| `UnserializableHookError` | `to_dict()` while the agent holds a hook that is not the one registered under its name |
 | `TurnTimeoutError` | A turn exceeds its timeout (propagated from the turn) |
