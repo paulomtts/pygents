@@ -26,3 +26,8 @@ class UnregisteredAgentError(KeyError):
 
 class UnregisteredHookError(KeyError):
     """Raised when a hook name is not found in HookRegistry."""
+
+
+class UnserializableHookError(ValueError):
+    """Raised when saving an owner that holds a hook which is not the one
+    registered under its name (a closure or a duplicate)."""

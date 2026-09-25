@@ -44,6 +44,19 @@ class BaseRegistry(ABC, Generic[T]):
             raise cls._not_found_error(f"{name!r} not found")
         return item
 
+    @classmethod
+    def unregister(cls, name: str) -> None:
+        """Remove *name* so it can no longer be looked up and can be reused.
+
+        Only lookup by name is affected: objects that already hold the item
+        (e.g. an agent holding a tool) keep working.
+
+        Raises ``cls._not_found_error`` if *name* is not registered.
+        """
+        if name not in cls._registry:
+            raise cls._not_found_error(f"{name!r} not found")
+        del cls._registry[name]
+
 
 class ToolRegistry(BaseRegistry):
     """Registry for Tools. Not meant to be instantiated or used directly."""
@@ -84,6 +97,18 @@ class HookRegistry(BaseRegistry):
     def clear(cls) -> None:
         super().clear()
         cls._global_hooks = []
+
+    @classmethod
+    def unregister(cls, name: str) -> None:
+        """Remove *name* and stop that same hook object from firing globally.
+
+        Resolves the hook first, so an unknown name raises
+        ``UnregisteredHookError`` without changing ``_global_hooks``.
+        Instance hook lists (``obj.hooks``) are not touched.
+        """
+        hook = cls.get(name)
+        super().unregister(name)
+        cls._global_hooks = [h for h in cls._global_hooks if h is not hook]
 
     @classmethod
     def register_global(cls, hook: "Hook") -> None:
@@ -137,12 +162,16 @@ class HookRegistry(BaseRegistry):
         lock: bool = False,
         **fixed_kwargs: Any,
     ) -> "Hook" | Callable[..., Any]:
-        """Wrap *fn* as a registered Hook, or return the existing wrapper.
+        """Wrap *fn* as a Hook for instance use, or return the existing wrapper.
 
         - If *fn* is already a Hook (has ``.metadata``), re-register and return it.
-        - If a Hook wrapping the same underlying function was previously registered
-          under the same ``__name__``, return that existing wrapper.
-        - Otherwise, create a new Hook, register it (instance-scope only), and return it.
+        - If the Hook registered under ``fn.__name__`` wraps this same *fn*,
+          return that existing wrapper.
+        - If the name is free, create a new Hook, register it (instance-scope
+          only), and return it.
+        - If the name is held by something else (e.g. a second closure from the
+          same factory), return a new Hook WITHOUT registering it. It fires
+          normally, but saving its owner raises ``UnserializableHookError``.
 
         Supports multi-type via a list, lock serialization, and fixed_kwargs injection.
         """
@@ -151,13 +180,9 @@ class HookRegistry(BaseRegistry):
             return fn
 
         name = getattr(fn, "__name__", None)
-        if name:
-            try:
-                existing = cls.get(name)
-                if getattr(existing, "fn", None) is fn:
-                    return existing
-            except UnregisteredHookError:
-                pass
+        existing = cls._registry.get(name) if name else None
+        if existing is not None and getattr(existing, "fn", None) is fn:
+            return existing
 
         from pygents.hooks import Hook
 
@@ -165,7 +190,8 @@ class HookRegistry(BaseRegistry):
         stored_type = types[0] if len(types) == 1 else tuple(types)
         asyncio_lock = asyncio.Lock() if lock else None
         wrapper = Hook(fn, stored_type, asyncio_lock, fixed_kwargs)
-        cls.register(wrapper)
+        if existing is None:
+            cls.register(wrapper)
         return wrapper
 
     @classmethod

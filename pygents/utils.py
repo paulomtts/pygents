@@ -1,8 +1,9 @@
+import contextlib
 import inspect
 import logging
 from typing import Any, Callable, Iterable, TypeVar, get_args, get_type_hints
 
-from pygents.errors import SafeExecutionError
+from pygents.errors import SafeExecutionError, UnserializableHookError
 from pygents.registry import HookRegistry
 
 R = TypeVar("R")
@@ -31,8 +32,12 @@ def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
                 raise SafeExecutionError(
                     f"Skipped <{func.__name__}> call because {self} is running."
                 )
-            async for item in func(self, *args, **kwargs):
-                yield item
+            # Close the wrapped generator ourselves: otherwise an early aclose()
+            # of this wrapper leaves it to the loop's asyncgen finalizer, which
+            # runs its cleanup on a later loop iteration.
+            async with contextlib.aclosing(func(self, *args, **kwargs)) as agen:
+                async for item in agen:
+                    yield item
 
         return asyncgen_wrapper  # type: ignore[return-value]
 
@@ -124,9 +129,7 @@ def filter_args_to_signature(
     except (ValueError, TypeError):
         return args, kwargs
     params = list(sig.parameters.values())
-    has_var_positional = any(
-        p.kind == inspect.Parameter.VAR_POSITIONAL for p in params
-    )
+    has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
     has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
     n_positional = 0
     for p in params:
@@ -198,14 +201,30 @@ def rebuild_hooks_from_serialization(hooks_data: dict[str, list[str]]) -> list[A
 
 
 def serialize_hooks_by_type(hooks: Iterable[Any]) -> dict[str, list[str]]:
-    """Serialize hooks by type."""
+    """Serialize hooks by type.
+
+    A hook can be saved only if it is the object registered in ``HookRegistry``
+    under its name; otherwise restoring by name would give back a different hook.
+    Hooks with no ``type`` are skipped.
+
+    Raises
+    ------
+    UnserializableHookError
+        If a hook is not the one registered under its name (a closure or a
+        duplicate, or nothing is registered under that name).
+    """
     hooks_dict: dict[str, list[str]] = {}
     for h in hooks:
         t = getattr(h, "type", None)
         if t is None:
             continue
-        types_to_add = t if isinstance(t, (tuple, frozenset)) else (t,)
         hook_name = getattr(h, "__name__", "hook")
+        if HookRegistry._registry.get(hook_name) is not h:
+            raise UnserializableHookError(
+                f"hook {hook_name!r} is not the one registered under that name "
+                "(a closure or a duplicate); define it at module level to save its owner"
+            )
+        types_to_add = t if isinstance(t, (tuple, frozenset)) else (t,)
         for single_type in types_to_add:
             key = (
                 single_type.value if hasattr(single_type, "value") else str(single_type)

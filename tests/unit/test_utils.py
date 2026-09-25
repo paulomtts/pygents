@@ -7,6 +7,7 @@ safe_execution(func):
   SE1  getattr(self, "_is_running", False) is False -> call func(self, *args, **kwargs), return result
   SE2  _is_running is True -> SafeExecutionError with func.__name__ and "running"
   SE3  self has no _is_running -> getattr returns False -> same as SE1
+  SE4  async-gen func: closing the wrapper early closes the wrapped generator before aclose() returns
 
 eval_args(args): each item callable (_function_type) -> call and use return value; else pass through.
 eval_kwargs(kwargs): same per value, keys unchanged.
@@ -17,19 +18,24 @@ merge_kwargs(fixed_kwargs, call_kwargs, label):
   MK3  return {**evaluated, **call_kwargs} (call overrides)
 
 serialize_hooks_by_type(hooks):
-  HT1  hook has no hook_type or None -> skipped
+  HT1  hook has no hook_type or None -> skipped (before the registry check)
   HT2  hook_type has .value (enum) -> key = hook_type.value
   HT3  hook_type no .value -> key = str(hook_type)
   HT4  name = getattr(h, "__name__", "hook"); by_type[key].append(name)
+  HT5  HookRegistry._registry.get(name) is not h -> UnserializableHookError
+       (nothing registered under the name, or a closure/duplicate is)
 """
 
 import asyncio
 import logging
+import re
 
 import pytest
 
-from pygents.errors import SafeExecutionError
+import pygents
+from pygents.errors import SafeExecutionError, UnserializableHookError
 from pygents.hooks import TurnHook
+from pygents.registry import HookRegistry
 from pygents.utils import (
     eval_args,
     eval_kwargs,
@@ -117,6 +123,29 @@ def test_safe_execution_asyncgen_raises_when_running():
         asyncio.run(_())
 
 
+def test_safe_execution_asyncgen_closes_inner_generator_when_closed_early():
+    closed = []
+
+    @safe_execution
+    async def gen_fn(self):
+        try:
+            yield 1
+            yield 2
+        finally:
+            closed.append("inner closed")
+
+    class Obj:
+        _is_running = False
+
+    async def _():
+        agen = gen_fn(Obj())
+        assert await agen.__anext__() == 1
+        await agen.aclose()
+        assert closed == ["inner closed"]
+
+    asyncio.run(_())
+
+
 def test_safe_execution_uses_getattr_so_missing_is_false():
     class NoFlag:
         @safe_execution
@@ -180,9 +209,14 @@ def test_serialize_hooks_by_type_empty():
 
 
 def test_serialize_hooks_by_type_uses_enum_value_and_name():
+    HookRegistry.clear()
     hook1 = type("H", (), {"type": TurnHook.BEFORE_RUN, "__name__": "my_hook"})()
-    result = serialize_hooks_by_type([hook1])
-    assert result == {"before_run": ["my_hook"]}
+    HookRegistry.register(hook1)
+    try:
+        result = serialize_hooks_by_type([hook1])
+        assert result == {"before_run": ["my_hook"]}
+    finally:
+        HookRegistry.clear()
 
 
 def test_serialize_hooks_by_type_skips_hook_without_type():
@@ -191,12 +225,48 @@ def test_serialize_hooks_by_type_skips_hook_without_type():
 
 
 def test_serialize_hooks_by_type_name_fallback():
+    HookRegistry.clear()
+
     class E:
         value = "ev"
 
     hook_no_name = type("H", (), {"type": E()})()
-    result = serialize_hooks_by_type([hook_no_name])
-    assert result == {"ev": ["hook"]}
+    with pytest.raises(UnserializableHookError, match="'hook'"):
+        serialize_hooks_by_type([hook_no_name])
+
+
+def test_serialize_hooks_by_type_raises_for_unregistered_hook_with_exact_message():
+    HookRegistry.clear()
+    unregistered = type(
+        "H", (), {"type": TurnHook.BEFORE_RUN, "__name__": "stray_hook"}
+    )()
+    expected = (
+        "hook 'stray_hook' is not the one registered under that name "
+        "(a closure or a duplicate); define it at module level to save its owner"
+    )
+    with pytest.raises(UnserializableHookError, match=f"^{re.escape(expected)}$"):
+        serialize_hooks_by_type([unregistered])
+
+
+def test_serialize_hooks_by_type_raises_when_a_different_hook_holds_the_name():
+    HookRegistry.clear()
+
+    async def same_name_hook(turn):
+        pass
+
+    registered = HookRegistry.wrap(same_name_hook, TurnHook.BEFORE_RUN)
+    impostor = type(
+        "H", (), {"type": TurnHook.BEFORE_RUN, "__name__": "same_name_hook"}
+    )()
+    assert serialize_hooks_by_type([registered]) == {"before_run": ["same_name_hook"]}
+    with pytest.raises(UnserializableHookError, match="'same_name_hook'"):
+        serialize_hooks_by_type([registered, impostor])
+
+
+def test_unserializable_hook_error_is_a_value_error_exported_from_pygents():
+    assert issubclass(UnserializableHookError, ValueError)
+    assert pygents.UnserializableHookError is UnserializableHookError
+    assert "UnserializableHookError" in pygents.__all__
 
 
 # --- rebuild_hooks_from_serialization --------------------------------------------------

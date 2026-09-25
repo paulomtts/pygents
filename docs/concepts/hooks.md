@@ -40,7 +40,7 @@ async def on_error(turn, exception):
 Hooks are registered in `HookRegistry` at decoration time. The function name is the hook's identifier for lookup and serialization.
 
 !!! warning "ValueError"
-    Registering a *different* hook with a name already in use raises `ValueError`. Re-registering the same hook under the same name is allowed.
+    A global `@hook(...)` whose function name is already registered to a *different* hook raises `ValueError`. Re-registering the same hook under the same name is allowed. Instance method decorators (`@obj.before_invoke`, etc.) never raise on a name clash; see [Closures and reused names](#closures-and-reused-names).
 
 ## Hook types
 
@@ -52,14 +52,14 @@ Hooks are registered in `HookRegistry` at decoration time. The function name is 
 | `AFTER_RUN` | After successful completion | `(turn, output)` |
 | `ON_TIMEOUT` | Turn timed out | `(turn)` |
 | `ON_ERROR` | Tool or hook raised (non-timeout) | `(turn, exception)` |
-| `ON_COMPLETE` | Always fires in finally block (clean, error, or timeout) | `(turn, stop_reason)` |
+| `ON_COMPLETE` | Always fires in finally block (clean, error, timeout, or cancelled) | `(turn, stop_reason)` |
 
 **Agent** — during the agent run loop (see [Agents](agents.md#hooks)):
 
 | Hook | When | Args |
 |------|------|------|
 | `BEFORE_TURN` | Before consuming next turn from queue | `(agent)` |
-| `AFTER_TURN` | After turn fully processed | `(agent, turn)` |
+| `AFTER_TURN` | After turn fully processed; the agent's `_current_turn` is already `None` | `(agent, turn)` |
 | `ON_TURN_VALUE` | After routing, before yielding each result | `(agent, turn, value)` |
 | `BEFORE_PUT` | Before enqueueing a turn | `(agent, turn)` |
 | `AFTER_PUT` | After enqueueing a turn | `(agent, turn)` |
@@ -170,6 +170,61 @@ async def instance_before(**kwargs):
 # When my_tool is invoked, both hooks fire:
 # 1. instance_before  (instance list)
 # 2. global_before    (global list, not a duplicate)
+```
+
+### Closures and reused names
+
+Instance method decorators accept any async function, including closures built by a factory and functions whose name is already registered. Attaching them never raises:
+
+```python
+from pygents import Agent
+
+def make_logger(prefix: str):
+    async def log_turn(agent, turn):
+        print(f"{prefix} {turn.tool.metadata.name}")
+    return log_turn
+
+a = Agent("a", "desc", [my_tool])
+b = Agent("b", "desc", [my_tool])
+
+a.after_turn(make_logger("[a]"))  # name 'log_turn' is free: registered
+b.after_turn(make_logger("[b]"))  # name taken by a different function: attached, not registered
+```
+
+Both hooks fire for their own agent. What happens to the name depends on who holds it:
+
+| Name `fn.__name__` in `HookRegistry` | Result |
+|---|---|
+| Free | The hook is registered under that name |
+| Held by a hook wrapping this same function | The existing hook is reused |
+| Held by something else (a second closure, or another function with the same name) | The hook is attached to its owner only and is **not** registered |
+
+Global `@hook(...)` is stricter: a name clash with a different hook raises `ValueError`.
+
+**Saving an owner that holds an unregistered hook.** Hooks are saved by name and restored with `HookRegistry.get(name)`, so only the hook registered under a name can be saved. An owner (agent, turn, context queue, or context pool) that holds any other hook cannot be saved: `to_dict()` raises `UnserializableHookError`. It lives in `pygents.errors`, is exported from `pygents`, and subclasses `ValueError`. The message names the hook:
+
+```text
+hook 'log_turn' is not the one registered under that name (a closure or a duplicate); define it at module level to save its owner
+```
+
+```python
+from pygents import UnserializableHookError
+
+a.to_dict()  # fine: a holds the 'log_turn' that is registered
+try:
+    b.to_dict()
+except UnserializableHookError as exc:
+    print(exc)
+```
+
+To make the hook saveable, define it at module level with a unique name, and read per-owner values from the arguments instead of closing over them:
+
+```python
+async def log_turn(agent, turn):
+    print(f"[{agent.name}] {turn.tool.metadata.name}")
+
+a.after_turn(log_turn)
+b.after_turn(log_turn)  # same function: both agents hold the one registered hook
 ```
 
 ### Where hooks attach
@@ -406,11 +461,14 @@ Hooks register globally when decorated. Look up by name when deserializing or wh
 from pygents import HookRegistry
 
 my_hook = HookRegistry.get("log_start")
+HookRegistry.unregister("log_start")  # remove one hook; it also stops firing globally
 HookRegistry.clear()  # empty the registry (useful in tests)
 ```
 
+`unregister(name)` removes the hook from the registry and from the global hooks, so a global `@hook` stops firing everywhere and the name is free again. Objects that hold the hook in their own `.hooks` list keep it and keep firing it. Because nothing is registered under that name any more, such an owner can no longer be saved: `to_dict()` raises `UnserializableHookError`.
+
 !!! warning "UnregisteredHookError"
-    `HookRegistry.get(name)` raises `UnregisteredHookError` if no hook is registered with that name.
+    `HookRegistry.get(name)` and `HookRegistry.unregister(name)` raise `UnregisteredHookError` if no hook is registered with that name.
 
 `get_by_type` is used internally: given a list of hooks (e.g. `turn.hooks`), it returns all hooks whose type matches, in the order they appear in the list. All matching hooks are called sequentially. You typically don't call it directly; you attach hooks to turns, agents, tools, or memory and the framework invokes them at each event.
 
@@ -432,5 +490,6 @@ class Hook:
 | Exception | When |
 |-----------|------|
 | `TypeError` | Decorating a sync function, or fixed kwargs not in signature |
-| `ValueError` | Empty type list, or duplicate hook name in `HookRegistry` |
-| `UnregisteredHookError` | `HookRegistry.get()` with unknown name |
+| `ValueError` | Empty type list, or a global `@hook` whose name is taken by a different hook |
+| `UnregisteredHookError` | `HookRegistry.get()` or `HookRegistry.unregister()` with unknown name |
+| `UnserializableHookError` | Saving (`to_dict()`) an owner that holds a hook which is not the one registered under its name |
