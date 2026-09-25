@@ -9,6 +9,8 @@ ToolRegistry:
   TR3  get(name): not in _registry -> UnregisteredToolError
   TR4  get(name): in _registry -> return tool
   TR5  all() -> list(_registry.values())
+  TR6  unregister(name): in _registry -> del _registry[name]; get(name) then raises, re-register succeeds
+  TR7  unregister(name): not in _registry -> UnregisteredToolError
 
 AgentRegistry:
   AR1  clear() -> _registry = {}
@@ -16,6 +18,8 @@ AgentRegistry:
   AR3  register(agent): else -> _registry[agent.name] = agent
   AR4  get(name): not in _registry -> UnregisteredAgentError
   AR5  get(name): in _registry -> return agent
+  AR6  unregister(name): in _registry -> del _registry[name]; get(name) then raises, re-register succeeds
+  AR7  unregister(name): not in _registry -> UnregisteredAgentError
 
 HookRegistry:
   HR1  clear() -> _registry = {}; _global_hooks = []
@@ -26,7 +30,11 @@ HookRegistry:
   HR6  get(name): not in _registry -> UnregisteredHookError
   HR7  get(name): in _registry -> return hook
   HR8  get_by_type(hook_type, hooks) -> list of all hooks in hooks matching hook_type, in order
+  HR9  unregister(name): in _registry -> del _registry[name]; remove that hook object (by identity) from _global_hooks; instance hook lists untouched
+  HR10 unregister(name): not in _registry -> UnregisteredHookError; _global_hooks unchanged
 """
+
+import asyncio
 
 import pytest
 
@@ -36,8 +44,10 @@ from pygents.errors import (
     UnregisteredHookError,
     UnregisteredToolError,
 )
+from pygents.hooks import TurnHook, hook
 from pygents.registry import AgentRegistry, HookRegistry, ToolRegistry
 from pygents.tool import tool
+from pygents.turn import Turn
 
 
 def test_get_returns_registered_tool():
@@ -125,7 +135,6 @@ def test_hook_registry_register_and_get():
     HookRegistry.register(my_hook)
     retrieved = HookRegistry.get("my_hook")
     assert retrieved is my_hook
-
 
 
 def test_hook_registry_get_missing_raises_unregistered_hook_error():
@@ -243,9 +252,7 @@ def test_hook_registry_get_by_type_returns_all_matches():
     first_hook.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
     second_hook.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
 
-    matches = HookRegistry.get_by_type(
-        TurnHook.BEFORE_RUN, [first_hook, second_hook]
-    )
+    matches = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [first_hook, second_hook])
     assert matches == [first_hook, second_hook]
 
 
@@ -309,3 +316,194 @@ def test_wrap_previously_registered_fn_reuses_wrapper():
     first = HookRegistry.wrap(reusable_hook, TurnHook.BEFORE_RUN)
     second = HookRegistry.wrap(reusable_hook, TurnHook.BEFORE_RUN)
     assert first is second
+
+
+# ---------------------------------------------------------------------------
+# unregister (TR6/TR7, AR6/AR7, HR10)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def restore_tool_registry():
+    """Snapshot ToolRegistry and restore it after the test.
+
+    Module-level tools across the suite are registered once at import time,
+    so a bare ToolRegistry.clear() would break every test module that runs
+    later (same hazard as isolated_tool_registry in tests/unit/test_turn.py).
+    """
+    saved = dict(ToolRegistry._registry)
+    yield
+    ToolRegistry._registry = saved
+
+
+def _make_agent_named(name: str) -> Agent:
+    return Agent(name, "For unregister tests", [_registry_test_tool])
+
+
+def _make_tool_named(name: str):
+    async def fn() -> None:
+        return None
+
+    fn.__name__ = name
+    return tool(fn)
+
+
+def _make_hook_named(name: str):
+    async def fn(*args, **kwargs) -> None:
+        return None
+
+    fn.__name__ = name
+    HookRegistry.register(fn)
+    return fn
+
+
+@pytest.mark.parametrize(
+    ("registry", "make", "not_found"),
+    [
+        (AgentRegistry, _make_agent_named, UnregisteredAgentError),
+        (ToolRegistry, _make_tool_named, UnregisteredToolError),
+        (HookRegistry, _make_hook_named, UnregisteredHookError),
+    ],
+    ids=["agent", "tool", "hook"],
+)
+def test_unregister_frees_the_name(restore_tool_registry, registry, make, not_found):
+    AgentRegistry.clear()
+    HookRegistry.clear()
+
+    first = make("unregister_me")
+    assert registry.get("unregister_me") is first
+
+    assert registry.unregister("unregister_me") is None
+
+    with pytest.raises(not_found, match=r"'unregister_me' not found"):
+        registry.get("unregister_me")
+
+    # The name is free again: a *different* object can take it without ValueError.
+    second = make("unregister_me")
+    assert second is not first
+    assert registry.get("unregister_me") is second
+
+    # Unknown name -> the registry's own not-found error.
+    with pytest.raises(not_found, match=r"'nope' not found"):
+        registry.unregister("nope")
+
+    # Unregistering twice: the second call is an unknown name (Review Focus 4).
+    registry.unregister("unregister_me")
+    with pytest.raises(not_found, match=r"'unregister_me' not found"):
+        registry.unregister("unregister_me")
+
+
+def test_unregistering_a_tool_leaves_live_agents_working(restore_tool_registry):
+    AgentRegistry.clear()
+
+    @tool()
+    async def unregister_live_tool(x: int) -> int:
+        return x * 2
+
+    agent = Agent("unregister_live_agent", "Holds the tool", [unregister_live_tool])
+
+    async def _body():
+        # Turn.__init__ resolves the tool through ToolRegistry.get, so the turn
+        # must be built and queued while the name is still registered.
+        await agent.put(Turn("unregister_live_tool", kwargs={"x": 21}))
+        ToolRegistry.unregister("unregister_live_tool")
+        return [value async for _, value in agent.run()]
+
+    assert asyncio.run(_body()) == [42]
+    assert agent.tools == [unregister_live_tool]
+
+    with pytest.raises(
+        UnregisteredToolError, match=r"'unregister_live_tool' not found"
+    ):
+        ToolRegistry.get("unregister_live_tool")
+    with pytest.raises(
+        UnregisteredToolError, match=r"'unregister_live_tool' not found"
+    ):
+        Turn("unregister_live_tool")
+
+
+# ---------------------------------------------------------------------------
+# HookRegistry.unregister and global hooks (HR9, HR10)
+# ---------------------------------------------------------------------------
+
+
+def test_an_unregistered_global_hook_no_longer_fires():
+    HookRegistry.clear()
+    calls = []
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def unregister_global_hook(turn):
+        calls.append(turn)
+
+    assert unregister_global_hook in HookRegistry._global_hooks
+    asyncio.run(HookRegistry.fire(TurnHook.BEFORE_RUN, [], "first"))
+    assert calls == ["first"]
+
+    HookRegistry.unregister("unregister_global_hook")
+
+    assert unregister_global_hook not in HookRegistry._global_hooks
+    assert HookRegistry.get_global_by_type(TurnHook.BEFORE_RUN) == []
+    asyncio.run(HookRegistry.fire(TurnHook.BEFORE_RUN, [], "second"))
+    assert calls == ["first"]
+
+
+def test_unregister_removes_only_that_hook_from_global_hooks():
+    HookRegistry.clear()
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def removed_global_hook(turn):
+        pass
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def kept_global_hook(turn):
+        pass
+
+    async def name_only_hook(turn):
+        pass
+
+    HookRegistry.register(name_only_hook)
+
+    HookRegistry.unregister("removed_global_hook")
+    assert HookRegistry._global_hooks == [kept_global_hook]
+    assert HookRegistry.get("kept_global_hook") is kept_global_hook
+
+    # A hook known only by name is not in _global_hooks; unregistering it
+    # just frees the name and leaves the global list alone.
+    HookRegistry.unregister("name_only_hook")
+    assert HookRegistry._global_hooks == [kept_global_hook]
+    with pytest.raises(UnregisteredHookError, match=r"'name_only_hook' not found"):
+        HookRegistry.get("name_only_hook")
+
+
+def test_unregister_unknown_hook_leaves_global_hooks_unchanged():
+    HookRegistry.clear()
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def still_global_hook(turn):
+        pass
+
+    before = list(HookRegistry._global_hooks)
+    with pytest.raises(UnregisteredHookError, match=r"'nope' not found"):
+        HookRegistry.unregister("nope")
+
+    assert HookRegistry._global_hooks == before
+    assert HookRegistry.get("still_global_hook") is still_global_hook
+
+
+def test_unregister_does_not_touch_instance_hook_lists():
+    HookRegistry.clear()
+    calls = []
+
+    @hook(TurnHook.BEFORE_RUN)
+    async def shared_hook(turn):
+        calls.append(turn)
+
+    turn = Turn("_registry_test_tool", kwargs={"x": 1})
+    turn.hooks.append(shared_hook)
+
+    HookRegistry.unregister("shared_hook")
+
+    assert turn.hooks == [shared_hook]
+    assert asyncio.run(turn.returning()) == 1
+    # Fires exactly once: from the turn's own list, no longer from the global list.
+    assert calls == [turn]

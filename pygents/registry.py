@@ -44,6 +44,19 @@ class BaseRegistry(ABC, Generic[T]):
             raise cls._not_found_error(f"{name!r} not found")
         return item
 
+    @classmethod
+    def unregister(cls, name: str) -> None:
+        """Remove *name* so it can no longer be looked up and can be reused.
+
+        Only lookup by name is affected: objects that already hold the item
+        (e.g. an agent holding a tool) keep working.
+
+        Raises ``cls._not_found_error`` if *name* is not registered.
+        """
+        if name not in cls._registry:
+            raise cls._not_found_error(f"{name!r} not found")
+        del cls._registry[name]
+
 
 class ToolRegistry(BaseRegistry):
     """Registry for Tools. Not meant to be instantiated or used directly."""
@@ -84,6 +97,18 @@ class HookRegistry(BaseRegistry):
     def clear(cls) -> None:
         super().clear()
         cls._global_hooks = []
+
+    @classmethod
+    def unregister(cls, name: str) -> None:
+        """Remove *name* and stop that same hook object from firing globally.
+
+        Resolves the hook first, so an unknown name raises
+        ``UnregisteredHookError`` without changing ``_global_hooks``.
+        Instance hook lists (``obj.hooks``) are not touched.
+        """
+        hook = cls.get(name)
+        super().unregister(name)
+        cls._global_hooks = [h for h in cls._global_hooks if h is not hook]
 
     @classmethod
     def register_global(cls, hook: "Hook") -> None:
