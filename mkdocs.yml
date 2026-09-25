@@ -3,6 +3,9 @@ site_description: A lightweight async framework for structuring and running AI a
 repo_url: https://github.com/paulomtts/pygents
 repo_name: paulomtts/pygents
 
+# Internal design specs and plans live under docs/superpowers/; never publish them.
+exclude_docs: superpowers/
+
 theme:
   name: material
   palette:
