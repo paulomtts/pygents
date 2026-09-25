@@ -14,7 +14,7 @@
 
 ## Global Constraints
 
-- Verification for every task: `uv run pytest tests/` green, `uv run ruff format .` leaves no diff, `uv run ruff check .` passes (CI runs exactly these).
+- Verification for every task: `uv run --extra dev pytest tests/` green and `uv run --extra dev ruff check .` passes (pytest and ruff live in the `dev` extra). Run `uv run --extra dev ruff format <the files you changed>` on your own files only: 16 files on `main` are already unformatted, and reformatting them is out of scope.
 - **Test style:** this repo has no async tests and no pytest-asyncio. Every test is a plain `def test_...()` that runs its body with `asyncio.run(...)` (the existing convention, see `tests/conftest.py`'s `collect_async`). The snippets below show `async def test_...` for brevity: implement each as `def test_...(): asyncio.run(_body())` with the snippet as `_body`. Do not add pytest-asyncio.
 - Tests live in `tests/unit/` next to the module's existing tests; `tests/conftest.py` clears `HookRegistry._global_hooks` only, so tests that register agents/tools/hooks by name clear `AgentRegistry` / `ToolRegistry` / `HookRegistry` themselves (existing pattern).
 - No new dependencies. No public API removed. Version stays 0.6.8 in every task (the release is a human step after merge, spec L6).
