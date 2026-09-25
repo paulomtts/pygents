@@ -138,8 +138,11 @@ class Turn[T]:
 
     async def _run_hooks(self, hook_type: TurnHook, *args: Any) -> None:
         await HookRegistry.fire(
-            hook_type, HookRegistry.get_by_type(hook_type, self.hooks), self, *args,
-            _source_tags=self.tags
+            hook_type,
+            HookRegistry.get_by_type(hook_type, self.hooks),
+            self,
+            *args,
+            _source_tags=self.tags,
         )
 
     def before_run(

@@ -129,9 +129,7 @@ def filter_args_to_signature(
     except (ValueError, TypeError):
         return args, kwargs
     params = list(sig.parameters.values())
-    has_var_positional = any(
-        p.kind == inspect.Parameter.VAR_POSITIONAL for p in params
-    )
+    has_var_positional = any(p.kind == inspect.Parameter.VAR_POSITIONAL for p in params)
     has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params)
     n_positional = 0
     for p in params:
