@@ -6,6 +6,7 @@ from pygents.errors import (
     UnregisteredAgentError,
     UnregisteredHookError,
     UnregisteredToolError,
+    UnserializableHookError,
     WrongRunMethodError,
 )
 from pygents.hooks import (
@@ -49,6 +50,7 @@ __all__ = [
     "UnregisteredAgentError",
     "UnregisteredHookError",
     "UnregisteredToolError",
+    "UnserializableHookError",
     "WrongRunMethodError",
     "tool",
 ]

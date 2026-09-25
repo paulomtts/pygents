@@ -24,6 +24,7 @@ import pytest
 
 from pygents.agent import Agent
 from pygents.context import ContextItem, ContextPool, ContextQueue
+from pygents.errors import UnserializableHookError
 from pygents.hooks import (
     AgentHook,
     ContextPoolHook,
@@ -1361,3 +1362,202 @@ def test_cp_decorator_reuses_existing_hook():
     result = pool.before_add(existing)
     assert result is existing
     assert existing in pool.hooks
+
+
+# ---------------------------------------------------------------------------
+# Closure hooks: instance hooks attach freely; unsaveable ones refuse to save
+# ---------------------------------------------------------------------------
+
+
+async def module_level_after_turn_hook(agent, turn):
+    pass
+
+
+def _make_factory_agent(name, fired=None):
+    agent = Agent(name, "d", [tool_for_hook_test])
+
+    @agent.after_turn
+    async def log_turn(agent, turn):
+        if fired is not None:
+            fired.append((name, agent.name))
+
+    return agent
+
+
+def test_two_agents_from_one_factory_both_construct_and_the_second_refuses_to_save():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+
+    def make(name):
+        agent = Agent(name, "d", [tool_for_hook_test])
+
+        @agent.after_turn
+        async def log_turn(agent, turn):
+            pass
+
+        return agent
+
+    one, two = make("one"), make("two")  # no ValueError
+    one.to_dict()  # the registered hook: saves
+    with pytest.raises(UnserializableHookError, match="log_turn"):
+        two.to_dict()
+
+
+def test_both_factory_agents_fire_their_own_hook():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    fired = []
+    one = _make_factory_agent("one", fired)
+    two = _make_factory_agent("two", fired)
+
+    async def run(agent):
+        await agent.put(Turn("tool_for_hook_test", kwargs={"x": 1}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(run(one))
+    assert fired == [("one", "one")]
+    asyncio.run(run(two))
+    assert fired == [("one", "one"), ("two", "two")]
+
+
+def test_a_module_level_instance_hook_still_round_trips():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    agent = Agent("module_hook_agent", "d", [tool_for_hook_test])
+    attached = agent.after_turn(module_level_after_turn_hook)
+    assert HookRegistry.get("module_level_after_turn_hook") is attached
+
+    data = agent.to_dict()
+    assert data["hooks"] == {"after_turn": ["module_level_after_turn_hook"]}
+
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+    assert len(restored.hooks) == 1
+    assert restored.hooks[0] is attached
+
+
+def test_one_module_level_hook_on_two_agents_saves_twice():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    first = Agent("first_sharer", "d", [tool_for_hook_test])
+    second = Agent("second_sharer", "d", [tool_for_hook_test])
+    on_first = first.after_turn(module_level_after_turn_hook)
+    on_second = second.after_turn(module_level_after_turn_hook)
+    assert on_first is on_second
+
+    expected = {"after_turn": ["module_level_after_turn_hook"]}
+    assert first.to_dict()["hooks"] == expected
+    assert second.to_dict()["hooks"] == expected
+
+
+def test_two_global_hooks_with_one_name_still_raise():
+    HookRegistry.clear()
+
+    def make_global():
+        @hook(AgentHook.AFTER_TURN)
+        async def shared_global_name(agent, turn):
+            pass
+
+        return shared_global_name
+
+    first = make_global()
+    with pytest.raises(
+        ValueError, match=r"'shared_global_name' already registered"
+    ) as exc_info:
+        make_global()
+    assert type(exc_info.value) is ValueError
+    assert HookRegistry.get("shared_global_name") is first
+    assert HookRegistry._global_hooks == [first]
+
+
+def test_an_unsaveable_owner_is_caught_by_except_value_error():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    _make_factory_agent("one")
+    two = _make_factory_agent("two")
+    with pytest.raises(ValueError, match="log_turn"):
+        two.to_dict()
+
+
+def test_the_registry_keeps_the_first_factory_hook():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+    fired = []
+    one = _make_factory_agent("one", fired)
+    two = _make_factory_agent("two", fired)
+    assert HookRegistry.get("log_turn") is one.hooks[0]
+    assert two.hooks[0] is not one.hooks[0]
+
+    data = one.to_dict()
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+    assert restored.hooks == [one.hooks[0]]
+
+    async def run():
+        await restored.put(Turn("tool_for_hook_test", kwargs={"x": 1}))
+        async for _ in restored.run():
+            pass
+
+    asyncio.run(run())
+    assert fired == [("one", "one")]
+
+
+def test_an_instance_closure_named_like_a_global_hook_attaches_and_refuses_to_save():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+
+    @hook(AgentHook.AFTER_TURN)
+    async def audit_turn_global(agent, turn):
+        pass
+
+    async def local_audit(agent, turn):
+        pass
+
+    local_audit.__name__ = "audit_turn_global"
+
+    agent = Agent("shadowing_agent", "d", [tool_for_hook_test])
+    attached = agent.after_turn(local_audit)  # no ValueError
+    assert attached is not audit_turn_global
+    assert attached.fn is local_audit
+    assert HookRegistry.get("audit_turn_global") is audit_turn_global
+    assert HookRegistry._global_hooks == [audit_turn_global]
+    with pytest.raises(UnserializableHookError, match="audit_turn_global"):
+        agent.to_dict()
+
+
+def test_two_turns_from_one_factory_the_second_refuses_to_save():
+    HookRegistry.clear()
+
+    def make_turn():
+        turn = Turn("tool_for_hook_test", kwargs={"x": 1})
+
+        @turn.before_run
+        async def note_start(turn):
+            pass
+
+        return turn
+
+    first, second = make_turn(), make_turn()  # no ValueError
+    assert first.to_dict()["hooks"] == {"before_run": ["note_start"]}
+    with pytest.raises(UnserializableHookError, match="note_start"):
+        second.to_dict()
+
+
+def test_an_agent_turn_hook_closure_refuses_to_save():
+    HookRegistry.clear()
+    AgentRegistry.clear()
+
+    def make(name):
+        agent = Agent(name, "d", [tool_for_hook_test])
+
+        @agent.on_complete
+        async def log_complete(turn, stop_reason):
+            pass
+
+        return agent
+
+    one, two = make("tc_one"), make("tc_two")  # no ValueError
+    assert one.to_dict()["turn_hooks"] == {"on_complete": ["log_complete"]}
+    with pytest.raises(UnserializableHookError, match="log_complete"):
+        two.to_dict()
