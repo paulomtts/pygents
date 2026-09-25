@@ -99,6 +99,18 @@ class HookRegistry(BaseRegistry):
         cls._global_hooks = []
 
     @classmethod
+    def unregister(cls, name: str) -> None:
+        """Remove *name* and stop that same hook object from firing globally.
+
+        Resolves the hook first, so an unknown name raises
+        ``UnregisteredHookError`` without changing ``_global_hooks``.
+        Instance hook lists (``obj.hooks``) are not touched.
+        """
+        hook = cls.get(name)
+        super().unregister(name)
+        cls._global_hooks = [h for h in cls._global_hooks if h is not hook]
+
+    @classmethod
     def register_global(cls, hook: "Hook") -> None:
         """Register a hook both in the name registry and in the global hook list."""
         cls.register(hook)
