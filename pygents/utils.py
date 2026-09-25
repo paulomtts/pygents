@@ -1,3 +1,4 @@
+import contextlib
 import inspect
 import logging
 from typing import Any, Callable, Iterable, TypeVar, get_args, get_type_hints
@@ -31,8 +32,12 @@ def safe_execution(func: Callable[..., R]) -> Callable[..., R]:
                 raise SafeExecutionError(
                     f"Skipped <{func.__name__}> call because {self} is running."
                 )
-            async for item in func(self, *args, **kwargs):
-                yield item
+            # Close the wrapped generator ourselves: otherwise an early aclose()
+            # of this wrapper leaves it to the loop's asyncgen finalizer, which
+            # runs its cleanup on a later loop iteration.
+            async with contextlib.aclosing(func(self, *args, **kwargs)) as agen:
+                async for item in agen:
+                    yield item
 
         return asyncgen_wrapper  # type: ignore[return-value]
 

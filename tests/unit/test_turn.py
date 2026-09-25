@@ -27,6 +27,7 @@ yielding():
   Y3  Normal: BEFORE_RUN, queue, yield, COMPLETED, AFTER_RUN, output = aggregated
   Y4  Timeout -> ON_TIMEOUT, TurnTimeoutError, finally end_time
   Y5  Tool raises -> ERROR, ON_ERROR(e), finally end_time
+  Y8  After an early aclose() returns, _is_running is already False -> the turn can run again immediately
 
 to_dict/from_dict:
   D1  to_dict: tool_name, args/kwargs evaluated, metadata.to_dict (start_time, end_time, stop_reason), timeout, output, hooks
@@ -769,3 +770,22 @@ def test_returning_when_task_cancelled_fires_on_complete_with_cancelled_not_on_e
 
     asyncio.run(_body())
     assert events == [("on_complete", StopReason.CANCELLED)]
+
+
+def test_yielding_after_cancel_turn_can_run_again(isolated_tool_registry):
+    async def _body():
+        @tool()
+        async def turn_rerun_after_close_gen():
+            yield 1
+            yield 2
+
+        turn = Turn(turn_rerun_after_close_gen)
+        gen = turn.yielding()
+        assert await gen.__anext__() == 1
+        await gen.aclose()
+        assert turn._is_running is False
+        items = [x async for x in turn.yielding()]
+        assert items == [1, 2]
+        assert turn.metadata.stop_reason == StopReason.COMPLETED
+
+    asyncio.run(_body())
