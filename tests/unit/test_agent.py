@@ -770,8 +770,17 @@ def test_run_early_break_coroutine_does_not_raise():
     assert agent._is_running is False
 
 
-@pytest.mark.parametrize("exit_by", ["break", "aclose", "cancel"])
-@pytest.mark.parametrize("kind", ["coro", "stream"])
+# Coroutine tools yield once, at the end, so there is no point after the first
+# value to exit at: only task cancellation applies to them.
+@pytest.mark.parametrize(
+    ("kind", "exit_by"),
+    [
+        ("stream", "break"),
+        ("stream", "aclose"),
+        ("stream", "cancel"),
+        ("coro", "cancel"),
+    ],
+)
 def test_early_exit_leaves_the_agent_clean(kind, exit_by):
     """R10. Leaving run() early leaves the agent idle, the turn CANCELLED and
     all per-turn state restored, checked right after the exit returns (no
@@ -786,11 +795,6 @@ def test_early_exit_leaves_the_agent_clean(kind, exit_by):
     closes the generator in the consumer's own task. A bare break is covered by
     test_early_exit_by_plain_break_is_cleaned_up_by_the_loop.
     """
-    if kind == "coro" and exit_by in ("break", "aclose"):
-        pytest.skip(
-            "coroutine tools yield once, at the end: "
-            "there is no point after the first value to exit at"
-        )
     AgentRegistry.clear()
     HookRegistry.clear()
     if kind == "stream":
