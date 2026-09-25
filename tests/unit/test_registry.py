@@ -137,7 +137,6 @@ def test_hook_registry_register_and_get():
     assert retrieved is my_hook
 
 
-
 def test_hook_registry_get_missing_raises_unregistered_hook_error():
     HookRegistry.clear()
     with pytest.raises(UnregisteredHookError, match=r"'nonexistent' not found"):
@@ -253,9 +252,7 @@ def test_hook_registry_get_by_type_returns_all_matches():
     first_hook.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
     second_hook.type = TurnHook.BEFORE_RUN  # type: ignore[attr-defined]
 
-    matches = HookRegistry.get_by_type(
-        TurnHook.BEFORE_RUN, [first_hook, second_hook]
-    )
+    matches = HookRegistry.get_by_type(TurnHook.BEFORE_RUN, [first_hook, second_hook])
     assert matches == [first_hook, second_hook]
 
 
@@ -415,9 +412,13 @@ def test_unregistering_a_tool_leaves_live_agents_working(restore_tool_registry):
     assert asyncio.run(_body()) == [42]
     assert agent.tools == [unregister_live_tool]
 
-    with pytest.raises(UnregisteredToolError, match=r"'unregister_live_tool' not found"):
+    with pytest.raises(
+        UnregisteredToolError, match=r"'unregister_live_tool' not found"
+    ):
         ToolRegistry.get("unregister_live_tool")
-    with pytest.raises(UnregisteredToolError, match=r"'unregister_live_tool' not found"):
+    with pytest.raises(
+        UnregisteredToolError, match=r"'unregister_live_tool' not found"
+    ):
         Turn("unregister_live_tool")
 
 
