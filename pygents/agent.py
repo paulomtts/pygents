@@ -157,8 +157,11 @@ class Agent:
 
     async def _run_hooks(self, name: AgentHook, *args: Any, **kwargs: Any) -> None:
         await HookRegistry.fire(
-            name, HookRegistry.get_by_type(name, self.hooks), *args,
-            _source_tags=self.tags, **kwargs
+            name,
+            HookRegistry.get_by_type(name, self.hooks),
+            *args,
+            _source_tags=self.tags,
+            **kwargs,
         )
 
     async def _route_value(self, value: Any) -> None:
@@ -528,8 +531,8 @@ class Agent:
                         cleanup_error = cleanup_error or exc
                     if cleanup_error is not None:
                         raise cleanup_error
-                await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
                 self._current_turn = None
+                await self._run_hooks(AgentHook.AFTER_TURN, self, turn)
         finally:
             self._is_running = False
             self._current_turn = None

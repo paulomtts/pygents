@@ -30,7 +30,7 @@ run():
   R4  Coroutine tool -> returning(), ON_TURN_VALUE, yield (turn, output) only if not ContextItem/Turn, _route_value(turn.output)
   R5  TurnTimeoutError -> TurnHook.ON_TIMEOUT (via turn), re-raise
   R6  Other exception -> TurnHook.ON_ERROR (via turn), re-raise
-  R7  After: AFTER_TURN; clear _current_turn
+  R7  After: clear _current_turn; then AFTER_TURN(agent, finished turn) - snapshots in the hook see current_turn None, next turn at queue head
   R8  finally: _is_running False, _current_turn None
   R9  Early break (coroutine tool, bare break) -> no ValueError; _is_running False
   R10 Early exit (stream: break inside aclosing / aclose() / task cancel; coro: task cancel)
@@ -754,6 +754,152 @@ def test_run_on_turn_value_hook_raises_propagates_and_cleans_up():
         asyncio.run(run_it())
 
     assert agent._is_running is False  # finally ran
+
+
+def test_after_turn_snapshot_has_no_current_turn():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    snapshots = []
+    hook_turns = []
+
+    @hook(AgentHook.AFTER_TURN)
+    async def snapshot_after_turn(agent, turn):
+        snapshots.append(agent.to_dict())
+        hook_turns.append(turn)
+
+    agent = Agent("a", "desc", [add_agent])
+    first = Turn("add_agent", kwargs={"a": 1, "b": 2})
+    second = Turn("add_agent", kwargs={"a": 10, "b": 20})
+
+    async def _body():
+        await agent.put(first)
+        await agent.put(second)
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(_body())
+
+    assert len(snapshots) == 2
+    first_snapshot = snapshots[0]
+    assert first_snapshot["current_turn"] is None
+    assert len(first_snapshot["queue"]) == 1
+    assert first_snapshot["queue"][0]["tool_name"] == "add_agent"
+    assert first_snapshot["queue"][0]["kwargs"] == {"a": 10, "b": 20}
+    assert hook_turns[0] is first
+    assert hook_turns[0].output == 3
+    assert snapshots[1]["current_turn"] is None
+    assert snapshots[1]["queue"] == []
+    assert hook_turns[1] is second
+
+
+def test_after_turn_hook_receives_finished_turn_and_current_turn_cleared():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    seen = []
+
+    @hook(AgentHook.AFTER_TURN)
+    async def record_after_turn(agent, turn):
+        seen.append((agent._current_turn, agent._is_running, turn))
+
+    agent = Agent("a", "desc", [add_agent])
+    only = Turn("add_agent", kwargs={"a": 4, "b": 5})
+
+    async def _body():
+        await agent.put(only)
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(_body())
+
+    assert len(seen) == 1
+    current_during_hook, running_during_hook, hook_turn = seen[0]
+    assert current_during_hook is None
+    assert running_during_hook is True
+    assert hook_turn is only
+    assert hook_turn.output == 9
+    assert agent._is_running is False
+    assert agent._current_turn is None
+
+
+def test_after_turn_hook_enqueue_is_still_processed():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    enqueued = []
+
+    @hook(AgentHook.AFTER_TURN)
+    async def enqueue_once(agent, turn):
+        if not enqueued:
+            follow_up = Turn("add_agent", kwargs={"a": 100, "b": 1})
+            enqueued.append(follow_up)
+            await agent.put(follow_up)
+
+    agent = Agent("a", "desc", [add_agent])
+
+    async def _body():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 1}))
+        return [value async for _, value in agent.run()]
+
+    values = asyncio.run(_body())
+
+    assert values == [2, 101]
+    assert agent._queue.empty()
+    assert agent._current_turn is None
+
+
+def test_after_turn_hook_raises_propagates_and_agent_is_idle():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    seen_current = []
+
+    @hook(AgentHook.AFTER_TURN)
+    async def exploding_after_turn(agent, turn):
+        seen_current.append(agent._current_turn)
+        raise RuntimeError("after turn failed")
+
+    agent = Agent("a", "desc", [add_agent])
+
+    async def _body():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        async for _ in agent.run():
+            pass
+
+    with pytest.raises(RuntimeError, match="after turn failed"):
+        asyncio.run(_body())
+
+    assert seen_current == [None]
+    assert agent._is_running is False
+    assert agent._current_turn is None
+
+
+def test_after_turn_snapshot_restores_without_rerunning_finished_turn():
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    snapshots = []
+
+    agent = Agent("a", "desc", [add_agent])
+
+    @agent.after_turn
+    async def snapshot_first_turn(agent, turn):
+        if not snapshots:
+            snapshots.append(agent.to_dict())
+
+    async def _body():
+        await agent.put(Turn("add_agent", kwargs={"a": 1, "b": 2}))
+        await agent.put(Turn("add_agent", kwargs={"a": 10, "b": 20}))
+        async for _ in agent.run():
+            pass
+
+    asyncio.run(_body())
+
+    data = snapshots[0]
+    data["hooks"] = {}
+    AgentRegistry.clear()
+    restored = Agent.from_dict(data)
+
+    async def _resume():
+        return [value async for _, value in restored.run()]
+
+    assert asyncio.run(_resume()) == [30]
 
 
 def test_run_early_break_coroutine_does_not_raise():
