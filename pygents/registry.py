@@ -44,6 +44,19 @@ class BaseRegistry(ABC, Generic[T]):
             raise cls._not_found_error(f"{name!r} not found")
         return item
 
+    @classmethod
+    def unregister(cls, name: str) -> None:
+        """Remove *name* so it can no longer be looked up and can be reused.
+
+        Only lookup by name is affected: objects that already hold the item
+        (e.g. an agent holding a tool) keep working.
+
+        Raises ``cls._not_found_error`` if *name* is not registered.
+        """
+        if name not in cls._registry:
+            raise cls._not_found_error(f"{name!r} not found")
+        del cls._registry[name]
+
 
 class ToolRegistry(BaseRegistry):
     """Registry for Tools. Not meant to be instantiated or used directly."""
