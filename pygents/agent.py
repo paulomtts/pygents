@@ -467,9 +467,11 @@ class Agent:
                 pool_token = _current_context_pool.set(self.context_pool)
                 original_hooks = turn.hooks[:]
                 turn.hooks.extend(self.turn_hooks)
+                turn_gen = None
                 try:
                     if inspect.isasyncgenfunction(turn.tool.fn):
-                        async for value in turn.yielding():
+                        turn_gen = turn.yielding()
+                        async for value in turn_gen:
                             await self._route_value(value)
                             await self._run_hooks(
                                 AgentHook.ON_TURN_VALUE, self, turn, value
@@ -484,6 +486,18 @@ class Agent:
                         )
                         if not isinstance(output, (ContextItem, Turn)):
                             yield (turn, output)
+                except BaseException:
+                    # Leaving early (aclose()/break -> GeneratorExit, task cancel
+                    # -> CancelledError) or an error from our own routing/hooks can
+                    # leave turn_gen paused at a yield with turn._is_running True.
+                    # Close it now, while the agent's turn hooks are still attached,
+                    # so the turn records CANCELLED and fires ON_COMPLETE before the
+                    # cleanup below reassigns turn.hooks. No-op if turn_gen already
+                    # finished (e.g. the tool raised). The coroutine path needs no
+                    # close: a cancelled returning() already reports CANCELLED.
+                    if turn_gen is not None:
+                        await turn_gen.aclose()
+                    raise
                 finally:
                     turn.hooks = original_hooks
                     try:

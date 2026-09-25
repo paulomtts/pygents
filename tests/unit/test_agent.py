@@ -32,8 +32,18 @@ run():
   R6  Other exception -> TurnHook.ON_ERROR (via turn), re-raise
   R7  After: AFTER_TURN; clear _current_turn
   R8  finally: _is_running False, _current_turn None
-  R9  Early break (coroutine tool) -> no ValueError; _is_running False
-  R10 Early break (streaming tool) -> no ValueError; _is_running False
+  R9  Early break (coroutine tool, bare break) -> no ValueError; _is_running False
+  R10 Early exit (stream: break inside aclosing / aclose() / task cancel; coro: task cancel)
+      -> turn generator closed before cleanup; right after the exit returns: agent idle,
+         turn CANCELLED (ON_COMPLETE sees it with the agent's turn hooks attached),
+         turn.hooks and both context vars restored, nothing reaches the loop's exception handler
+  R11 Bare break (no aclosing) -> cleaned up once the loop runs its asyncgen finalizer;
+      agent idle, turn CANCELLED, turn.hooks restored, no loop errors
+  R12 Agent's ON_TURN_VALUE hook raises while a streaming turn is paused -> the hook's
+      error propagates (not SafeExecutionError); turn closed as CANCELLED; state restored
+  R13 run() again right after an early exit -> works at once; interrupted turn not re-queued
+  R14 Hook-restore step raises -> both context vars still reset; _is_running False,
+      _current_turn None; the restore failure propagates to the caller
 
 _route_value(value):
   RV1  value is ContextItem with id None -> context_queue.append
@@ -59,12 +69,18 @@ _queue_snapshot: non-destructive peek. to_dict/from_dict: queue, current_turn, h
 """
 
 import asyncio
+import contextlib
+import gc
 from typing import cast
 
 import pytest
 
 from pygents.agent import Agent
-from pygents.context import ContextQueue
+from pygents.context import (
+    ContextQueue,
+    _current_context_pool,
+    _current_context_queue,
+)
 from pygents.errors import (
     SafeExecutionError,
     TurnTimeoutError,
@@ -754,16 +770,240 @@ def test_run_early_break_coroutine_does_not_raise():
     assert agent._is_running is False
 
 
-def test_run_early_break_streaming_does_not_raise():
+@pytest.mark.parametrize("exit_by", ["break", "aclose", "cancel"])
+@pytest.mark.parametrize("kind", ["coro", "stream"])
+def test_early_exit_leaves_the_agent_clean(kind, exit_by):
+    """R10. Leaving run() early leaves the agent idle, the turn CANCELLED and
+    all per-turn state restored, checked right after the exit returns (no
+    gc.collect() and no asyncio.sleep(0) in between).
+
+    The ("stream", "aclose") case is the diagnosis regression for the issue's
+    aclose() repro: run()'s inner turn.yielding() generator was left paused at
+    a yield, so turn._is_running stayed True, restoring turn.hooks raised
+    SafeExecutionError and the context-var resets were skipped.
+
+    "break" means break inside contextlib.aclosing(agent.run()), the form that
+    closes the generator in the consumer's own task. A bare break is covered by
+    test_early_exit_by_plain_break_is_cleaned_up_by_the_loop.
+    """
+    if kind == "coro" and exit_by in ("break", "aclose"):
+        pytest.skip(
+            "coroutine tools yield once, at the end: "
+            "there is no point after the first value to exit at"
+        )
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    if kind == "stream":
+        agent = Agent("a", "desc", [stream_agent])
+        turn = Turn("stream_agent")
+    else:
+        agent = Agent("a", "desc", [slow_tool_agent])
+        turn = Turn("slow_tool_agent", kwargs={"duration": 3600}, timeout=7200)
+    completed = []
+    started = asyncio.Event()
+
+    @turn.on_complete
+    async def early_exit_turn_complete(t, stop_reason):
+        completed.append(("turn", stop_reason))
+
+    @agent.on_complete
+    async def early_exit_agent_complete(t, stop_reason):
+        completed.append(("agent", stop_reason))
+
+    if exit_by == "cancel" and kind == "stream":
+        # Park run() inside its own hook while turn.yielding() is paused at a
+        # yield, so the cancel lands in run()'s body, not inside the tool.
+        @agent.on_turn_value
+        async def early_exit_park_on_value(a, t, value):
+            started.set()
+            await asyncio.sleep(3600)
+
+    if exit_by == "cancel" and kind == "coro":
+
+        @turn.before_run
+        async def early_exit_tool_started(t):
+            started.set()
+
+    hooks_before = list(turn.hooks)
+    loop_errors = []
+    observed = {}
+
+    def snapshot():
+        observed["is_running"] = agent._is_running
+        observed["current_turn"] = agent._current_turn
+        observed["queue"] = _current_context_queue.get()
+        observed["pool"] = _current_context_pool.get()
+        observed["hooks"] = list(turn.hooks)
+        observed["stop_reason"] = turn.metadata.stop_reason
+
+    async def exit_early():
+        observed["queue_before"] = _current_context_queue.get()
+        observed["pool_before"] = _current_context_pool.get()
+        if exit_by == "break":
+            async with contextlib.aclosing(agent.run()) as run_gen:
+                async for _ in run_gen:
+                    break
+            snapshot()
+        elif exit_by == "aclose":
+            run_gen = agent.run()
+            assert await run_gen.__anext__() == (turn, 1)
+            await run_gen.aclose()
+            snapshot()
+        else:
+            try:
+                async for _ in agent.run():
+                    pass
+            except asyncio.CancelledError:
+                snapshot()
+                raise
+
+    async def _body():
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: loop_errors.append(context)
+        )
+        await agent.put(turn)
+        if exit_by == "cancel":
+            task = asyncio.create_task(exit_early())
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await exit_early()
+
+    asyncio.run(_body())
+    gc.collect()  # flush any "Task exception was never retrieved" reports
+
+    assert observed["is_running"] is False
+    assert observed["current_turn"] is None
+    assert observed["queue"] is observed["queue_before"]
+    assert observed["pool"] is observed["pool_before"]
+    assert observed["hooks"] == hooks_before
+    assert observed["stop_reason"] is StopReason.CANCELLED
+    assert sorted(completed) == [
+        ("agent", StopReason.CANCELLED),
+        ("turn", StopReason.CANCELLED),
+    ]
+    assert loop_errors == []
+
+
+def test_early_exit_by_plain_break_is_cleaned_up_by_the_loop():
+    """R11. A bare break (no aclosing) only drops the generator; asyncio's
+    asyncgen finalizer closes it in a separate task on a later loop iteration.
+    Once that has run, the agent is idle, the turn is CANCELLED with its hooks
+    restored, and nothing reached the loop's exception handler.
+
+    The consumer task's own context vars are not asserted: the finalizer runs
+    in a copied Context, so run() cannot reset them for a bare break.
+    Replaces test_run_early_break_streaming_does_not_raise.
+    """
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    agent = Agent("a", "desc", [stream_agent])
+    turn = Turn("stream_agent")
+    completed = []
+    loop_errors = []
+
+    @agent.on_complete
+    async def plain_break_agent_complete(t, stop_reason):
+        completed.append(stop_reason)
+
+    async def _body():
+        asyncio.get_running_loop().set_exception_handler(
+            lambda _loop, context: loop_errors.append(context)
+        )
+        await agent.put(turn)
+        async for _ in agent.run():
+            break
+        # Bounded wait for the finalizer task; _is_running goes False last.
+        for _ in range(1000):
+            if not agent._is_running:
+                break
+            await asyncio.sleep(0)
+
+    asyncio.run(_body())
+    gc.collect()  # flush any "Task exception was never retrieved" reports
+
+    assert agent._is_running is False
+    assert agent._current_turn is None
+    assert turn.hooks == []
+    assert turn.metadata.stop_reason is StopReason.CANCELLED
+    assert completed == [StopReason.CANCELLED]
+    assert loop_errors == []
+
+
+def test_stream_on_turn_value_error_propagates_and_closes_the_turn():
+    """R12. An error from the agent's own ON_TURN_VALUE hook, raised while the
+    streaming turn is paused at a yield, reaches the caller as itself (not as
+    SafeExecutionError from restoring turn.hooks on a still-running turn)."""
+    AgentRegistry.clear()
+    HookRegistry.clear()
+    agent = Agent("a", "desc", [stream_agent])
+    turn = Turn("stream_agent")
+    completed = []
+    observed = {}
+
+    @agent.on_complete
+    async def value_error_agent_complete(t, stop_reason):
+        completed.append(stop_reason)
+
+    @agent.on_turn_value
+    async def value_error_exploding_on_turn_value(a, t, value):
+        raise RuntimeError("value hook failed")
+
+    async def _body():
+        queue_before = _current_context_queue.get()
+        pool_before = _current_context_pool.get()
+        await agent.put(turn)
+        with pytest.raises(RuntimeError, match="value hook failed"):
+            async for _ in agent.run():
+                pass
+        observed["queue_restored"] = _current_context_queue.get() is queue_before
+        observed["pool_restored"] = _current_context_pool.get() is pool_before
+
+    asyncio.run(_body())
+
+    assert observed == {"queue_restored": True, "pool_restored": True}
+    assert agent._is_running is False
+    assert agent._current_turn is None
+    assert turn.hooks == []
+    assert turn.metadata.stop_reason is StopReason.CANCELLED
+    assert completed == [StopReason.CANCELLED]
+
+
+def test_run_again_right_after_an_early_exit():
+    """R13. After breaking out after the first value, run() works again at
+    once (no GC, no loop ticks); it starts at the queue head and the
+    interrupted turn is not re-run (L2)."""
     AgentRegistry.clear()
     agent = Agent("a", "desc", [stream_agent])
+    interrupted = Turn("stream_agent")
+    queued = Turn("stream_agent")
+    added_after = Turn("stream_agent")
 
-    async def run_with_break():
-        await agent.put(Turn("stream_agent", kwargs={}))
-        async for _, _ in agent.run():
-            break
+    async def _body():
+        await agent.put(interrupted)
+        await agent.put(queued)
+        async with contextlib.aclosing(agent.run()) as run_gen:
+            async for first in run_gen:
+                break
+        assert first == (interrupted, 1)
+        await agent.put(added_after)
+        return [item async for item in agent.run()]
 
-    asyncio.run(run_with_break())
+    items = asyncio.run(_body())
+
+    assert items == [
+        (queued, 1),
+        (queued, 2),
+        (queued, 3),
+        (added_after, 1),
+        (added_after, 2),
+        (added_after, 3),
+    ]
+    assert interrupted.metadata.stop_reason is StopReason.CANCELLED
+    assert queued.metadata.stop_reason is StopReason.COMPLETED
+    assert added_after.metadata.stop_reason is StopReason.COMPLETED
     assert agent._is_running is False
 
 
