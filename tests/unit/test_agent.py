@@ -1007,6 +1007,44 @@ def test_run_again_right_after_an_early_exit():
     assert agent._is_running is False
 
 
+class _HookRestoreFailsTurn(Turn):
+    """A Turn whose `hooks` attribute rejects reassignment once armed, used to
+    force run()'s hook-restore cleanup step to fail."""
+
+    def __setattr__(self, name, value):
+        if name == "hooks" and getattr(self, "_reject_hooks", False):
+            raise RuntimeError("hook restore failed")
+        super().__setattr__(name, value)
+
+
+def test_early_exit_cleanup_steps_are_independent():
+    """R14. When restoring turn.hooks fails during an early exit, the two
+    context-var resets still run and the agent still ends idle."""
+    AgentRegistry.clear()
+    agent = Agent("a", "desc", [stream_agent])
+    turn = _HookRestoreFailsTurn("stream_agent")
+    turn._reject_hooks = True
+    observed = {}
+
+    async def _body():
+        queue_before = _current_context_queue.get()
+        pool_before = _current_context_pool.get()
+        await agent.put(turn)
+        run_gen = agent.run()
+        assert await run_gen.__anext__() == (turn, 1)
+        with pytest.raises(RuntimeError, match="hook restore failed"):
+            await run_gen.aclose()
+        observed["queue_restored"] = _current_context_queue.get() is queue_before
+        observed["pool_restored"] = _current_context_pool.get() is pool_before
+
+    asyncio.run(_body())
+
+    assert observed == {"queue_restored": True, "pool_restored": True}
+    assert agent._is_running is False
+    assert agent._current_turn is None
+    assert turn.metadata.stop_reason is StopReason.CANCELLED
+
+
 def test_run_on_turn_timeout_hook_called():
     AgentRegistry.clear()
     HookRegistry.clear()
